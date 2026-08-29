@@ -1,0 +1,23 @@
+name: hermes-control-mock
+
+services:
+  mock-hermes:
+    build:
+      context: ../../apps/mock-hermes
+      dockerfile: Dockerfile
+    image: hermes-control/mock-hermes:local
+    restart: unless-stopped
+    environment:
+      MOCK_HERMES_DASHBOARD_TOKEN: mock-dashboard-token
+      MOCK_HERMES_API_KEY: mock-api-server-key-change-me
+    ports:
+      # These are mock-only ports and remain reachable from this host only.
+      - 127.0.0.1:19119:19119
+      - 127.0.0.1:18642:18642
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

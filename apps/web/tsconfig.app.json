@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@hermes-control/shared-types": ["../../packages/shared-types/src/index.ts"],
+      "@hermes-control/ui": ["../../packages/ui/src/index.tsx"],
+      "@hermes-control/ui/styles.css": ["../../packages/ui/src/styles.css"]
+    },
+    "types": ["vitest/globals", "vite/client", "vite-plugin-pwa/client"]
+  },
+  "include": ["src", "../../packages/ui/src", "../../packages/shared-types/src"]
+}

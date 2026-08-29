@@ -1,0 +1,16 @@
+.git
+.env
+.venv
+**/.venv
+node_modules
+**/node_modules
+**/dist
+**/.pytest_cache
+**/__pycache__
+**/*.pyc
+apps/web/design-qa
+design/prototypes/mobile-option-2/*.png
+design/prototypes/mobile-option-2/*.jpg
+*.db
+*.sqlite
+*.sqlite3

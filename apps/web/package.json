@@ -1,0 +1,53 @@
+{
+  "name": "@hermes-control/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --config vite.config.ts",
+    "build": "npm run typecheck && vite --config vite.config.ts build",
+    "preview": "vite --config vite.config.ts preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test --config ../../playwright.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json --pretty false && tsc --noEmit -p tsconfig.node.json --pretty false"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "^3.10.0",
+    "@hermes-control/shared-types": "0.1.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "@tanstack/react-query": "^5.66.9",
+    "@tanstack/react-router": "^1.120.5",
+    "@tanstack/react-virtual": "^3.13.2",
+    "dexie": "^4.0.11",
+    "i18next": "^24.2.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-hook-form": "^7.54.2",
+    "react-i18next": "^15.4.1",
+    "react-markdown": "^9.0.3",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.0",
+    "zod": "^3.24.2",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "@types/node": "^22.13.4",
+    "@vitejs/plugin-react": "^4.4.1",
+    "axe-core": "^4.10.2",
+    "autoprefixer": "^10.4.21",
+    "fake-indexeddb": "^6.0.0",
+    "jsdom": "^26.0.0",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vite-plugin-pwa": "^0.21.1",
+    "vitest": "^3.0.7"
+  }
+}

@@ -1,0 +1,32 @@
+[Unit]
+Description=Hermes isolated control-dev gateway and API server
+Documentation=file:/opt/hermes-control/current/docs/operations/deployment.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+WorkingDirectory=/home/hermes/.hermes/hermes-agent
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/hermes/.hermes/control-services/control-dev-api.env
+ExecStart=/home/hermes/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main -p control-dev gateway run --replace --external-supervisor
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=45s
+UMask=0077
+
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

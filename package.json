@@ -1,0 +1,28 @@
+{
+  "name": "hermes-control",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/web",
+    "packages/ui",
+    "packages/shared-types"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @hermes-control/web",
+    "build": "npm run build --workspace @hermes-control/web",
+    "test": "npm run test --workspace @hermes-control/web",
+    "test:e2e": "playwright test",
+    "test:e2e:chromium": "playwright test --project=chromium-mobile --project=chromium-tablet --project=chromium-desktop",
+    "test:e2e:install": "playwright install chromium firefox webkit",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "prototype:dev": "npm --prefix design/prototypes/mobile-option-2 run dev",
+    "prototype:check": "npm --prefix design/prototypes/mobile-option-2 run check:runtime",
+    "prototype:build": "npm --prefix design/prototypes/mobile-option-2 run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  }
+}

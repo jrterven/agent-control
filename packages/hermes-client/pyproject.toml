@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hermes-control-client"
+version = "0.1.0"
+description = "Typed, defensive Hermes gateway client used by Hermes Control"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "croniter>=6,<7",
+  "httpx>=0.28,<1",
+  "websockets>=14,<17",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["hermes_client"]
