@@ -36,9 +36,13 @@ test("expone un manifiesto instalable, registra el service worker y no cachea AP
     scope: "/",
   });
   expect(manifest.icons).toEqual(expect.arrayContaining([
-    expect.objectContaining({ src: "/icon-192.png", sizes: "192x192" }),
-    expect.objectContaining({ src: "/icon-512.png", sizes: "512x512" }),
+    expect.objectContaining({ src: "/icon-192.png", sizes: "192x192", purpose: "any" }),
+    expect.objectContaining({ src: "/icon-512.png", sizes: "512x512", purpose: "any" }),
+    expect.objectContaining({ src: "/icon-maskable-512.png", sizes: "512x512", purpose: "maskable" }),
   ]));
+
+  await expect(page.locator('link[rel="icon"][href="/favicon.svg"]')).toHaveCount(1);
+  await expect(page.locator('link[rel="apple-touch-icon"][href="/apple-touch-icon.png"]')).toHaveCount(1);
 
   await page.waitForFunction(async () => Boolean((await navigator.serviceWorker.ready).active));
   const registrations = await page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).map((registration) => registration.scope));
