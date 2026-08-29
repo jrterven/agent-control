@@ -1,5 +1,5 @@
 import axe from "axe-core";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "../i18n";
@@ -8,9 +8,28 @@ import { automations, gateways, initialMessages, profiles, sessions, workspaces 
 import { api } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 
-const chatScribeMock = vi.hoisted(() => ({
-  connect: vi.fn(() => ({ on: vi.fn(), close: vi.fn(), mute: vi.fn(), commit: vi.fn() })),
-}));
+const chatScribeMock = vi.hoisted(() => {
+  const handlers = new Map<string, (event: Record<string, unknown>) => void>();
+  const connection = {
+    on: vi.fn((event: string, handler: (payload: Record<string, unknown>) => void) => { handlers.set(event, handler); }),
+    close: vi.fn(),
+    mute: vi.fn(),
+    commit: vi.fn(),
+  };
+  const connect = vi.fn(() => connection);
+  return {
+    connect,
+    emit(event: string, payload: Record<string, unknown> = {}) { handlers.get(event)?.(payload); },
+    reset() {
+      handlers.clear();
+      connect.mockClear();
+      connection.on.mockClear();
+      connection.close.mockClear();
+      connection.mute.mockClear();
+      connection.commit.mockClear();
+    },
+  };
+});
 
 vi.mock("../lib/elevenlabsScribeClient", () => ({
   Scribe: { connect: chatScribeMock.connect },
@@ -39,6 +58,7 @@ function enableBrowserAudio() {
 
 describe("mobile-first chat", () => {
   beforeEach(() => {
+    chatScribeMock.reset();
     useAppStore.setState({
       authState: "authenticated",
       csrfToken: "csrf-memory-only",
@@ -143,6 +163,44 @@ describe("mobile-first chat", () => {
     await user.click(screen.getByRole("button", { name: "Aceptar y activar micrófono" }));
     await waitFor(() => expect(token).toHaveBeenCalledWith({ sessionId: "session-papers" }, "csrf-memory-only"));
     await waitFor(() => expect(chatScribeMock.connect).toHaveBeenCalledTimes(1));
+  });
+
+  it("previews provisional dictation inside the growing composer and only keeps confirmed text", async () => {
+    enableBrowserAudio();
+    const dictationSession = { ...sessions[0], id: "session-dictation-preview" };
+    useAppStore.setState({
+      selectedSessionId: dictationSession.id,
+      sessions: [...sessions, dictationSession],
+      messages: [],
+      features: {
+        dictation: { available: true, provider: "elevenlabs", modelId: "scribe_v2_realtime" },
+      },
+    });
+    vi.spyOn(api, "createTranscriptionToken").mockResolvedValue({
+      token: "single-use-token",
+      expiresAt: "2026-08-29T12:15:00Z",
+      modelId: "scribe_v2_realtime",
+    });
+    const user = userEvent.setup();
+    render(<ChatView />);
+    const composer = screen.getByRole("textbox", { name: "Mensaje a Newton…" }) as HTMLTextAreaElement;
+
+    await user.type(composer, "Antes después");
+    composer.setSelectionRange(5, 5);
+    await user.click(screen.getByRole("button", { name: "Dictar por voz" }));
+    await user.click(screen.getByRole("button", { name: "Aceptar y activar micrófono" }));
+    await waitFor(() => expect(chatScribeMock.connect).toHaveBeenCalledTimes(1));
+
+    act(() => chatScribeMock.emit("partial_transcript", { text: "texto provisional de varias palabras" }));
+    expect(composer).toHaveValue("Antes texto provisional de varias palabras después");
+    expect(composer).toHaveAttribute("readonly");
+    expect(screen.getByText(/^Transcripción provisional:/)).toHaveClass("dictation-state__announcement");
+
+    act(() => chatScribeMock.emit("partial_transcript", { text: "hipótesis corregida" }));
+    expect(composer).toHaveValue("Antes hipótesis corregida después");
+
+    act(() => chatScribeMock.emit("committed_transcript", { text: "texto confirmado" }));
+    await waitFor(() => expect(composer).toHaveValue("Antes texto confirmado después"));
   });
 
   it("streams a demo response and offers an explicit stop action", async () => {

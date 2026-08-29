@@ -351,15 +351,23 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
   const dictationConfigured = useAppStore((state) => state.features?.dictation.available === true);
   const draft = useSessionDraft(sessionId);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dictationSelectionRef = useRef<{ start: number; end: number } | null>(null);
   const insertCommitted = (transcript: string) => {
     setValue((current) => {
       const textarea = textareaRef.current;
+      const selection = dictationSelectionRef.current ?? {
+        start: textarea?.selectionStart ?? current.length,
+        end: textarea?.selectionEnd ?? current.length,
+      };
       const result = insertTranscriptAtSelection(
         current,
         transcript,
-        textarea?.selectionStart ?? current.length,
-        textarea?.selectionEnd ?? current.length,
+        selection.start,
+        selection.end,
       );
+      // Keep subsequent confirmed VAD segments flowing from the same point.
+      // Provisional hypotheses never update this anchor or the saved draft.
+      dictationSelectionRef.current = { start: result.caret, end: result.caret };
       draft.save(result.value);
       window.requestAnimationFrame(() => {
         const activeTextarea = textareaRef.current;
@@ -382,7 +390,16 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
     mediaQuery: "(min-width: 0px)",
   });
 
+  const captureDictationSelection = () => {
+    const textarea = textareaRef.current;
+    dictationSelectionRef.current = {
+      start: textarea?.selectionStart ?? value.length,
+      end: textarea?.selectionEnd ?? value.length,
+    };
+  };
+
   const beginDictation = () => {
+    captureDictationSelection();
     if (!dictationConsent) {
       setConsentOpen(true);
       return;
@@ -409,10 +426,22 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
 
   useEffect(() => {
     let active = true;
+    dictationSelectionRef.current = null;
     setValue("");
     void draft.load().then((loaded) => { if (active) setValue(loaded); });
     return () => { active = false; };
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const previewSelection = dictationSelectionRef.current ?? { start: value.length, end: value.length };
+  const displayedValue = dictation.partial
+    ? insertTranscriptAtSelection(
+      value,
+      dictation.partial,
+      previewSelection.start,
+      previewSelection.end,
+    ).value
+    : value;
+
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -427,7 +456,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
-  }, [value]);
+  }, [displayedValue]);
 
   const onSubmit = async () => {
     const next = value.trim();
@@ -443,7 +472,8 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
         <textarea
           ref={textareaRef}
           rows={1}
-          value={value}
+          value={displayedValue}
+          readOnly={dictation.active}
           aria-label={t("chat.messagePlaceholder", { agent: agentName })}
           placeholder={t("chat.messagePlaceholder", { agent: agentName })}
           onChange={(event) => { setValue(event.target.value); draft.save(event.target.value); }}
@@ -453,7 +483,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
         />
         {dictation.active || dictation.issue ? <div className={`dictation-state${dictation.issue ? " dictation-state--error" : ""}`} role={dictation.issue ? "alert" : "status"} aria-live={dictation.issue ? "assertive" : "polite"}>
           <span>{dictation.issue ? t(`dictation.${dictation.issue}`) : dictation.phase === "connecting" ? t("dictation.connecting") : dictation.phase === "stopping" ? t("dictation.stopping") : t("dictation.listening")}</span>
-          {dictation.partial ? <em>{t("dictation.provisional", { text: dictation.partial })}</em> : null}
+          {dictation.partial ? <em className="dictation-state__announcement">{t("dictation.provisional", { text: dictation.partial })}</em> : null}
           {!dictation.issue ? <small>{t("dictation.disclosure")}</small> : null}
         </div> : null}
         <div className="composer__actions">
