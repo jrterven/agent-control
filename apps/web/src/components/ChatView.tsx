@@ -1,5 +1,6 @@
 import { CaretDown, Check, Checks, PaperPlaneTilt, Plus, Question, ShieldWarning, Stop, WarningCircle, Wrench } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
@@ -7,37 +8,43 @@ import remarkGfm from "remark-gfm";
 import { Badge, Button, IconButton } from "@hermes-control/ui";
 import { createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
 import { useAppStore } from "../store/appStore";
-import type { ApprovalChoice, ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest } from "../types";
+import type { ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest } from "../types";
 import { BrandMark } from "./BrandMark";
 
 const emptyApprovals: ApprovalRequest[] = [];
 const emptyClarifications: ClarificationRequest[] = [];
-const approvalLabels: Record<ApprovalChoice, string> = {
-  once: "Permitir una vez",
-  session: "Durante esta sesión",
-  always: "Permitir siempre",
-  deny: "Rechazar",
+const interactionErrorKeys: Record<string, "deliveryUnknown" | "noLongerPending" | "generic"> = {
+  "El resultado no está confirmado. Los controles permanecerán bloqueados hasta que Hermes reconcilie la solicitud.": "deliveryUnknown",
+  "Hermes no confirmó que la solicitud siga pendiente.": "noLongerPending",
+  "No se pudo confirmar la respuesta. Revisa la conexión e inténtalo de nuevo.": "generic",
 };
 
+function localizedInteractionError(error: string, namespace: "approvals" | "clarifications", t: TFunction) {
+  const key = interactionErrorKeys[error];
+  return key ? t(`${namespace}.errors.${key}`) : error;
+}
 function DeliveryIcon({ delivery }: { delivery?: ChatMessage["delivery"] }) {
-  if (delivery === "ambiguous" || delivery === "failed") return <WarningCircle aria-label="Entrega sin confirmar" />;
-  if (delivery === "sent") return <Checks aria-label="Entregado" />;
-  return <Check aria-label="Enviando" />;
+  const { t } = useTranslation();
+  if (delivery === "ambiguous" || delivery === "failed") return <WarningCircle aria-label={t("chat.delivery.unconfirmed")} />;
+  if (delivery === "sent") return <Checks aria-label={t("chat.delivery.delivered")} />;
+  return <Check aria-label={t("chat.delivery.sending")} />;
 }
 
 function ToolCards({ tools }: { tools: NonNullable<ChatMessage["tools"]> }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   return (
     <div className="tool-cards">
       <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span><Wrench size={17} /> Herramientas · {tools.length}</span><CaretDown size={17} className={open ? "is-open" : ""} />
+        <span><Wrench size={17} /> {t("chat.toolsCount", { count: tools.length })}</span><CaretDown size={17} className={open ? "is-open" : ""} />
       </button>
-      {open ? <div className="tool-cards__list">{tools.map((tool) => <div key={tool.id}><span className={`tool-state tool-state--${tool.status}`} /><span><strong>{tool.label}</strong><small>{tool.summary}{tool.durationMs ? ` · ${(tool.durationMs / 1000).toFixed(1)} s` : ""}</small></span><Badge tone={tool.status === "completed" ? "positive" : tool.status === "failed" ? "warning" : "info"}>{tool.status === "completed" ? "Listo" : tool.status === "failed" ? "Error" : "En curso"}</Badge></div>)}</div> : null}
+      {open ? <div className="tool-cards__list">{tools.map((tool) => <div key={tool.id}><span className={`tool-state tool-state--${tool.status}`} /><span><strong>{tool.label}</strong><small>{tool.summary}{tool.durationMs ? ` · ${(tool.durationMs / 1000).toFixed(1)} s` : ""}</small></span><Badge tone={tool.status === "completed" ? "positive" : tool.status === "failed" ? "warning" : "info"}>{t(tool.status === "completed" ? "chat.toolStatus.completed" : tool.status === "failed" ? "chat.toolStatus.failed" : "chat.toolStatus.running")}</Badge></div>)}</div> : null}
     </div>
   );
 }
 
 function ApprovalCard({ request, offline, canRespond }: { request: ApprovalRequest; offline: boolean; canRespond: boolean }) {
+  const { t } = useTranslation();
   const headingId = useId();
   const busy = request.state === "submitting";
   const ambiguous = request.state === "ambiguous";
@@ -47,15 +54,15 @@ function ApprovalCard({ request, offline, canRespond }: { request: ApprovalReque
       <header>
         <span className="interaction-card__icon"><ShieldWarning size={22} weight="fill" /></span>
         <span>
-          <span className="eyebrow">Acción detenida</span>
-          <h2 id={headingId}>Aprobación requerida</h2>
+          <span className="eyebrow">{t("approvals.actionPaused")}</span>
+          <h2 id={headingId}>{t("approvals.required")}</h2>
         </span>
-        <Badge tone="warning">{ambiguous ? "Sin confirmar" : "Esperando"}</Badge>
+        <Badge tone="warning">{t(ambiguous ? "approvals.unconfirmed" : "approvals.waiting")}</Badge>
       </header>
       {request.description ? <p className="interaction-card__description">{request.description}</p> : null}
       {request.command ? <pre className="interaction-card__command"><code>{request.command}</code></pre> : null}
-      {request.smartDenied ? <p className="interaction-card__notice">La revisión de seguridad bloqueó esta acción. Solo puedes permitirla una vez o rechazarla.</p> : null}
-      <div className="interaction-card__actions" aria-label="Opciones de aprobación">
+      {request.smartDenied ? <p className="interaction-card__notice">{t("approvals.smartDenied")}</p> : null}
+      <div className="interaction-card__actions" aria-label={t("approvals.options")}>
         {request.choices.map((choice) => (
           <Button
             key={choice}
@@ -64,25 +71,25 @@ function ApprovalCard({ request, offline, canRespond }: { request: ApprovalReque
             aria-busy={busy || undefined}
             onClick={() => void respondToApproval(request.sessionId, request.requestId, choice).catch(() => undefined)}
           >
-            {busy ? "Confirmando…" : approvalLabels[choice]}
+            {busy ? t("approvals.confirming") : t(`approvals.choices.${choice}`)}
           </Button>
         ))}
       </div>
-      {offline ? <p className="interaction-card__notice">Recupera la conexión para responder de forma segura.</p> : null}
-      {!offline && !canRespond ? <p className="interaction-card__notice">La respuesta requiere un perfil habilitado por el backend y la capacidad approval.respond verificada.</p> : null}
-      {request.error ? <p className="interaction-card__error" role="alert">{request.error}</p> : null}
+      {offline ? <p className="interaction-card__notice">{t("approvals.reconnect")}</p> : null}
+      {!offline && !canRespond ? <p className="interaction-card__notice">{t("approvals.unavailable")}</p> : null}
+      {request.error ? <p className="interaction-card__error" role="alert">{localizedInteractionError(request.error, "approvals", t)}</p> : null}
     </section>
   );
 }
 
-function readableAnswer(answer: string) {
+function readableAnswer(answer: string, omittedLabel: string) {
   try {
     const parsed = JSON.parse(answer) as unknown;
     if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) return parsed.join(", ");
   } catch {
     // Plain text is the canonical single-answer representation.
   }
-  return answer || "Omitida";
+  return answer || omittedLabel;
 }
 
 function ClarificationQuestionForm({
@@ -98,6 +105,7 @@ function ClarificationQuestionForm({
   offline: boolean;
   canRespond: boolean;
 }) {
+  const { t } = useTranslation();
   const headingId = useId();
   const [text, setText] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
@@ -149,15 +157,15 @@ function ClarificationQuestionForm({
       <div className="clarification-question__heading">
         <span>{request.batch ? index + 1 : <Question size={18} weight="bold" />}</span>
         <h3 id={headingId}>{question.question}</h3>
-        {answered ? <Badge tone="positive">Respondida</Badge> : null}
+        {answered ? <Badge tone="positive">{t("clarifications.answered")}</Badge> : null}
       </div>
-      {answered ? <p className="clarification-question__answer"><Check weight="bold" /> {readableAnswer(request.answers[answerKey])}</p> : (
+      {answered ? <p className="clarification-question__answer"><Check weight="bold" /> {readableAnswer(request.answers[answerKey], t("clarifications.omitted"))}</p> : (
         <>
           {question.choices.length ? (
             <div
               className="clarification-choices"
               role={question.multiSelect ? "group" : "radiogroup"}
-              aria-label={question.multiSelect ? "Selecciona una o más opciones" : "Selecciona una opción"}
+              aria-label={t(question.multiSelect ? "clarifications.selectMultiple" : "clarifications.selectOne")}
             >
               {question.choices.map((choice) => {
                 const active = selected.includes(choice);
@@ -187,7 +195,7 @@ function ClarificationQuestionForm({
                 onClick={toggleCustomAnswer}
               >
                 <span className="clarification-choice__mark">{customAnswer ? <Check weight="bold" /> : null}</span>
-                <span>Otra respuesta</span>
+                <span>{t("clarifications.otherAnswer")}</span>
               </button>
             </div>
           ) : (
@@ -196,8 +204,8 @@ function ClarificationQuestionForm({
               rows={3}
               value={text}
               disabled={blocked}
-              aria-label={`Respuesta: ${question.question}`}
-              placeholder="Escribe una respuesta"
+              aria-label={t("clarifications.answerAria", { question: question.question })}
+              placeholder={t("clarifications.writeAnswer")}
               onChange={(event) => setText(event.target.value)}
             />
           )}
@@ -207,14 +215,14 @@ function ClarificationQuestionForm({
               rows={3}
               value={text}
               disabled={blocked}
-              aria-label={`Otra respuesta: ${question.question}`}
-              placeholder={question.multiSelect ? "Añade otra opción" : "Escribe otra respuesta"}
+              aria-label={t("clarifications.otherAnswerAria", { question: question.question })}
+              placeholder={t(question.multiSelect ? "clarifications.addOtherOption" : "clarifications.writeOtherAnswer")}
               onChange={(event) => setText(event.target.value)}
             />
           ) : null}
           <div className="clarification-question__actions">
             <Button variant="primary" disabled={blocked || !hasAnswer} aria-busy={busy || undefined} onClick={() => submit(answer)}>
-              {busy ? "Enviando…" : request.batch ? "Confirmar respuesta" : "Responder"}
+              {busy ? t("clarifications.sending") : request.batch ? t("clarifications.confirmAnswer") : t("clarifications.respond")}
             </Button>
           </div>
         </>
@@ -224,16 +232,17 @@ function ClarificationQuestionForm({
 }
 
 function ClarificationCard({ request, offline, canRespond }: { request: ClarificationRequest; offline: boolean; canRespond: boolean }) {
+  const { t } = useTranslation();
   const headingId = useId();
   return (
     <section className="interaction-card interaction-card--clarification" aria-labelledby={headingId}>
       <header>
         <span className="interaction-card__icon"><Question size={22} weight="fill" /></span>
         <span>
-          <span className="eyebrow">Hermes necesita contexto</span>
-          <h2 id={headingId}>{request.batch ? `${request.questions.length} preguntas` : "Una pregunta antes de continuar"}</h2>
+          <span className="eyebrow">{t("clarifications.needsContext")}</span>
+          <h2 id={headingId}>{request.batch ? t("clarifications.questions", { count: request.questions.length }) : t("clarifications.oneQuestion")}</h2>
         </span>
-        <Badge tone={request.state === "ambiguous" ? "warning" : "info"}>{request.state === "ambiguous" ? "Sin confirmar" : "Esperando"}</Badge>
+        <Badge tone={request.state === "ambiguous" ? "warning" : "info"}>{t(request.state === "ambiguous" ? "clarifications.unconfirmed" : "clarifications.waiting")}</Badge>
       </header>
       <div className="clarification-list">
         {request.questions.map((question, index) => (
@@ -247,9 +256,9 @@ function ClarificationCard({ request, offline, canRespond }: { request: Clarific
           />
         ))}
       </div>
-      {offline ? <p className="interaction-card__notice">Recupera la conexión para responder.</p> : null}
-      {!offline && !canRespond ? <p className="interaction-card__notice">La respuesta requiere un perfil habilitado por el backend y la capacidad clarify.respond verificada.</p> : null}
-      {request.error ? <p className="interaction-card__error" role="alert">{request.error}</p> : null}
+      {offline ? <p className="interaction-card__notice">{t("clarifications.reconnect")}</p> : null}
+      {!offline && !canRespond ? <p className="interaction-card__notice">{t("clarifications.unavailable")}</p> : null}
+      {request.error ? <p className="interaction-card__error" role="alert">{localizedInteractionError(request.error, "clarifications", t)}</p> : null}
     </section>
   );
 }
@@ -261,9 +270,10 @@ function InteractionCards({ approvals, clarifications, offline, canApprove, canC
   canApprove: boolean;
   canClarify: boolean;
 }) {
+  const { t } = useTranslation();
   if (!approvals.length && !clarifications.length) return null;
   return (
-    <div className="interaction-stack" aria-live="polite" aria-label="Hermes espera tu respuesta">
+    <div className="interaction-stack" aria-live="polite" aria-label={t("approvals.waitingAria")}>
       {approvals.map((request) => <ApprovalCard key={request.requestId} request={request} offline={offline} canRespond={canApprove} />)}
       {clarifications.map((request) => <ClarificationCard key={request.requestId} request={request} offline={offline} canRespond={canClarify} />)}
     </div>
@@ -271,19 +281,20 @@ function InteractionCards({ approvals, clarifications, offline, canApprove, canC
 }
 
 function Message({ message, agentName }: { message: ChatMessage; agentName: string }) {
+  const { t } = useTranslation();
   if (message.role === "user") {
     return (
-      <article className="message message--user" aria-label="Tu mensaje">
+      <article className="message message--user" aria-label={t("chat.userMessage")}>
         <div className="user-bubble"><span className="message-time">{message.createdAt} <DeliveryIcon delivery={message.delivery} /></span><p>{message.content}</p></div>
-        {message.delivery === "ambiguous" ? <p className="delivery-warning"><WarningCircle /> No se confirmó la entrega; no se reenviará automáticamente.</p> : null}
+        {message.delivery === "ambiguous" ? <p className="delivery-warning"><WarningCircle /> {t("chat.deliveryWarning")}</p> : null}
       </article>
     );
   }
   return (
-    <article className="message message--assistant" aria-label={`Respuesta de ${agentName}`}>
+    <article className="message message--assistant" aria-label={t("chat.assistantResponse", { agent: agentName })}>
       <div className="assistant-avatar"><BrandMark size="sm" /></div>
       <div className="assistant-content">
-        <header><strong>{agentName}</strong><time>{message.createdAt}</time>{message.streaming ? <Badge tone="info">En curso</Badge> : null}</header>
+        <header><strong>{agentName}</strong><time>{message.createdAt}</time>{message.streaming ? <Badge tone="info">{t("chat.streaming")}</Badge> : null}</header>
         <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{message.content || " "}</ReactMarkdown>{message.streaming ? <span className="stream-caret" aria-hidden="true" /> : null}</div>
         {message.tools?.length ? <ToolCards tools={message.tools} /> : null}
       </div>
@@ -326,8 +337,8 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
           ref={textareaRef}
           rows={1}
           value={value}
-          aria-label={t("messagePlaceholder", { agent: agentName })}
-          placeholder={t("messagePlaceholder", { agent: agentName })}
+          aria-label={t("chat.messagePlaceholder", { agent: agentName })}
+          placeholder={t("chat.messagePlaceholder", { agent: agentName })}
           onChange={(event) => { setValue(event.target.value); draft.save(event.target.value); }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void onSubmit(); }
@@ -335,15 +346,16 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
         />
         <div className="composer__actions">
           <span />
-          {offline ? <Badge tone="warning">Borrador offline</Badge> : streamingMessageId ? (canInterrupt ? <Button variant="danger" size="sm" leadingIcon={<Stop weight="fill" />} onClick={() => void stopPrompt()}>Detener</Button> : <Badge tone="info">En ejecución</Badge>) : <IconButton className="send-button" label="Enviar mensaje" disabled={!value.trim()} icon={<PaperPlaneTilt size={22} weight="fill" />} onClick={() => void onSubmit()} />}
+          {offline ? <Badge tone="warning">{t("chat.offlineDraft")}</Badge> : streamingMessageId ? (canInterrupt ? <Button variant="danger" size="sm" leadingIcon={<Stop weight="fill" />} onClick={() => void stopPrompt()}>{t("chat.stop")}</Button> : <Badge tone="info">{t("chat.running")}</Badge>) : <IconButton className="send-button" label={t("chat.sendMessage")} disabled={!value.trim()} icon={<PaperPlaneTilt size={22} weight="fill" />} onClick={() => void onSubmit()} />}
         </div>
       </div>
-      <p className="composer-note">{offline ? "El borrador queda en este dispositivo y no se enviará al recuperar la conexión." : "Hermes puede cometer errores. Verifica información importante."}</p>
+      <p className="composer-note">{t(offline ? "chat.offlineDraftNote" : "chat.disclaimer")}</p>
     </div>
   );
 }
 
 export function ChatView() {
+  const { t } = useTranslation();
   const sessionId = useAppStore((state) => state.selectedSessionId);
   const profileId = useAppStore((state) => state.selectedProfileId);
   const streamingMessageId = useAppStore((state) => state.streamingBySession[sessionId]);
@@ -400,19 +412,19 @@ export function ChatView() {
 
   return (
     <section className="conversation" aria-labelledby="conversation-title">
-      <div className="conversation__title"><div><span className="eyebrow">Conversación</span><h1 id="conversation-title">{session?.title ?? "Nueva conversación"}</h1></div>{session ? <Badge>{session.storedSessionId}</Badge> : null}</div>
+      <div className="conversation__title"><div><span className="eyebrow">{t("chat.conversation")}</span><h1 id="conversation-title">{session?.title ?? t("chat.newConversation")}</h1></div>{session ? <Badge>{session.storedSessionId}</Badge> : null}</div>
       <div className="message-scroll" ref={scrollRef}>
-        <div className="date-divider"><span>28 de agosto de 2026</span></div>
+        <div className="date-divider"><span>{t("chat.fixedDate")}</span></div>
         <div className="message-list">
-          {visibleMessages.length ? visibleMessages.map((message) => <Message key={message.id} message={message} agentName={profile?.displayName ?? "Agente"} />) : <div className="empty-chat"><BrandMark size="lg" label="Agent Control" /><h2>{session ? `Inicia una conversación con ${profile?.displayName ?? "tu agente"}` : profile?.mutable ? `Crea un chat con ${profile.displayName}` : `${profile?.displayName ?? "Este agente"} está en modo solo lectura`}</h2><p>{session ? "El contexto de esta sesión permanecerá aislado del resto de agentes." : profile?.mutable ? "Inicia una conversación dentro de este workspace." : "La protección actual no permite crear conversaciones ni enviar mensajes. Selecciona el entorno de pruebas para escribir."}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{creatingSession ? "Creando…" : "Nuevo chat"}</Button> : null}</div>}
+          {visibleMessages.length ? visibleMessages.map((message) => <Message key={message.id} message={message} agentName={profile?.displayName ?? t("chat.agent")} />) : <div className="empty-chat"><BrandMark size="lg" label="Agent Control" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
           <InteractionCards approvals={approvals} clarifications={clarifications} offline={offline} canApprove={canApprove} canClarify={canClarify} />
           {streamingMessageId ? waitingForResponse
-            ? <p className="typing-state typing-state--waiting" role="status"><WarningCircle /><span>{profile?.displayName ?? "Hermes"} espera tu respuesta</span></p>
-            : <p className="typing-state" role="status"><span>{profile?.displayName ?? "Hermes"} está escribiendo</span><i /><i /><i /></p>
+            ? <p className="typing-state typing-state--waiting" role="status"><WarningCircle /><span>{t("chat.waitingForResponse", { agent: profile?.displayName ?? "Hermes" })}</span></p>
+            : <p className="typing-state" role="status"><span>{t("chat.typing", { agent: profile?.displayName ?? "Hermes" })}</span><i /><i /><i /></p>
             : null}
         </div>
       </div>
-      {session && (canPrompt || offline) ? <Composer agentName={profile?.displayName ?? "Hermes"} sessionId={sessionId} canInterrupt={canInterrupt} offline={offline} /> : session ? <div className="composer-unavailable"><ShieldNotice /> {profile?.mutable ? "Este perfil no anunció envío de mensajes." : "Este perfil está protegido en modo solo lectura."}</div> : profile && !profile.mutable ? <div className="composer-unavailable"><ShieldNotice /> Para escribir, selecciona el entorno de pruebas.</div> : null}
+      {session && (canPrompt || offline) ? <Composer agentName={profile?.displayName ?? "Hermes"} sessionId={sessionId} canInterrupt={canInterrupt} offline={offline} /> : session ? <div className="composer-unavailable"><ShieldNotice /> {t(profile?.mutable ? "chat.promptUnavailable" : "chat.profileReadOnly")}</div> : profile && !profile.mutable ? <div className="composer-unavailable"><ShieldNotice /> {t("chat.chooseTestEnvironment")}</div> : null}
     </section>
   );
 }

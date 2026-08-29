@@ -1,17 +1,20 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { Archive, CaretDown, CheckCircle, Clock, DownloadSimple, Gauge, Pulse, Robot, Trash, WarningCircle, Wrench, X } from "@phosphor-icons/react";
 import { Badge, Button, IconButton, StatusDot, Switch, cx } from "@hermes-control/ui";
 import { api } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
 
-const usageNumber = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 3 });
-
-function formatUsageNumber(value: number) {
-  return usageNumber.format(value);
-}
-
 export function ActivityPanel() {
+  const { t, i18n } = useTranslation();
+  const language = (i18n.resolvedLanguage ?? i18n.language).split("-")[0];
+  const numberLocale = { es: "es-MX", en: "en-US", fr: "fr-FR", de: "de-DE", pt: "pt-BR" }[language] ?? language;
+  const usageNumber = useMemo(
+    () => new Intl.NumberFormat(numberLocale, { maximumFractionDigits: 3 }),
+    [numberLocale],
+  );
+  const formatUsageNumber = (value: number) => usageNumber.format(value);
   const open = useAppStore((state) => state.activityOpen);
   const close = useAppStore((state) => state.setActivityOpen);
   const advancedMode = useAppStore((state) => state.advancedMode);
@@ -93,9 +96,9 @@ export function ActivityPanel() {
       await api.archiveSession(target.id, csrfToken);
       removeSession(target.id);
       await refreshBootstrap();
-      setAnnouncement(`“${target.title}” se archivó solo en Agent Control. La conversación sigue en Hermes.`);
+      setAnnouncement(t("activity.archivedAnnouncement", { title: target.title }));
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "No se pudo archivar la sesión.");
+      setActionError(error instanceof Error ? error.message : t("activity.archiveError"));
     } finally {
       setArchiveBusy(false);
     }
@@ -114,9 +117,9 @@ export function ActivityPanel() {
       link.download = filename ?? `hermes-session-${session.id}.json`;
       link.click();
       URL.revokeObjectURL(url);
-      setAnnouncement(`Se exportó “${session.title}” desde el historial autoritativo de Hermes.`);
+      setAnnouncement(t("activity.exportedAnnouncement", { title: session.title }));
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "No se pudo exportar la sesión.");
+      setActionError(error instanceof Error ? error.message : t("activity.exportError"));
     } finally {
       setExportBusy(false);
     }
@@ -143,9 +146,9 @@ export function ActivityPanel() {
       await refreshBootstrap();
       setDeleteTarget(null);
       setDeleteConfirmation("");
-      setAnnouncement(`“${target.title}” se eliminó de Hermes y de Agent Control.`);
+      setAnnouncement(t("activity.deletedAnnouncement", { title: target.title }));
     } catch (error) {
-      setDeleteError(error instanceof Error ? error.message : "No se pudo eliminar la sesión de Hermes.");
+      setDeleteError(error instanceof Error ? error.message : t("activity.deleteError"));
     } finally {
       setDeleteBusy(false);
     }
@@ -153,12 +156,12 @@ export function ActivityPanel() {
 
   return (
     <>
-      <button className={cx("scrim scrim--activity", open && "is-visible")} aria-label="Cerrar actividad" onClick={() => close(false)} />
+      <button className={cx("scrim scrim--activity", open && "is-visible")} aria-label={t("activity.close")} onClick={() => close(false)} />
       <aside
         id="activity-panel"
         ref={drawer.containerRef}
         className={cx("activity-panel", open && "is-open")}
-        aria-label="Actividad y contexto"
+        aria-label={t("activity.panelAria")}
         aria-hidden={deleteTarget || (drawer.isOverlay && !open) ? true : undefined}
         aria-modal={drawer.active ? true : undefined}
         role={drawer.isOverlay ? "dialog" : undefined}
@@ -166,86 +169,86 @@ export function ActivityPanel() {
         tabIndex={drawer.active ? -1 : undefined}
       >
         <header>
-          <div><span className="eyebrow">Contexto activo</span><h2>Detalles de sesión</h2></div>
-          <IconButton className="activity-close" label="Cerrar actividad" icon={<X size={20} />} onClick={() => close(false)} />
+          <div><span className="eyebrow">{t("activity.activeContext")}</span><h2>{t("activity.sessionDetails")}</h2></div>
+          <IconButton className="activity-close" label={t("activity.close")} icon={<X size={20} />} onClick={() => close(false)} />
         </header>
 
         <section className="context-card">
-          <div className="context-card__agent"><span className="agent-initial">{profile?.displayName[0] ?? "?"}</span><span><strong>{profile?.displayName ?? "Sin agente"}</strong><small>{profile?.model ?? "sin detectar"}</small></span><Badge tone={profile?.status === "ready" ? "positive" : "warning"}>{profile?.status === "ready" ? "Listo" : "No disponible"}</Badge></div>
+          <div className="context-card__agent"><span className="agent-initial">{profile?.displayName[0] ?? "?"}</span><span><strong>{profile?.displayName ?? t("activity.noAgent")}</strong><small>{profile?.model ?? t("activity.undetected")}</small></span><Badge tone={profile?.status === "ready" ? "positive" : "warning"}>{t(profile?.status === "ready" ? "activity.ready" : "activity.unavailable")}</Badge></div>
           <dl>
-            <div><dt>Workspace</dt><dd>{workspace?.name ?? "Sin workspace"}</dd></div>
-            <div><dt>Gateway</dt><dd><StatusDot tone={gateway?.status === "connected" ? "positive" : "warning"} /> {gateway?.name ?? "Sin gateway"}</dd></div>
-            <div><dt>Sesión</dt><dd>{session?.storedSessionId ?? "sin sesión"}</dd></div>
+            <div><dt>{t("activity.workspace")}</dt><dd>{workspace?.name ?? t("activity.noWorkspace")}</dd></div>
+            <div><dt>{t("activity.gateway")}</dt><dd><StatusDot tone={gateway?.status === "connected" ? "positive" : "warning"} /> {gateway?.name ?? t("activity.noGateway")}</dd></div>
+            <div><dt>{t("activity.session")}</dt><dd>{session?.storedSessionId ?? t("activity.noSession")}</dd></div>
           </dl>
         </section>
 
-        {demoMode ? <section className="metric-section"><div className="section-title"><span><Gauge size={18} /> Uso de contexto</span><strong>42%</strong></div><div className="meter" role="progressbar" aria-label="Uso de contexto · demo" aria-valuemin={0} aria-valuemax={100} aria-valuenow={42}><span style={{ width: "42%" }} /></div><div className="metric-grid"><span><strong>53k</strong><small>tokens usados · demo</small></span><span><strong>128k</strong><small>ventana · demo</small></span></div></section> : usage ? <section className="metric-section">
-          <div className="section-title"><span><Gauge size={18} /> Uso de contexto</span><strong>{roundedContextPercent === undefined ? "—" : `${roundedContextPercent}%`}</strong></div>
+        {demoMode ? <section className="metric-section"><div className="section-title"><span><Gauge size={18} /> {t("activity.usage.title")}</span><strong>42%</strong></div><div className="meter" role="progressbar" aria-label={t("activity.usage.demoAria")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={42}><span style={{ width: "42%" }} /></div><div className="metric-grid"><span><strong>53k</strong><small>{t("activity.usage.tokensUsedDemo")}</small></span><span><strong>128k</strong><small>{t("activity.usage.contextWindowDemo")}</small></span></div></section> : usage ? <section className="metric-section">
+          <div className="section-title"><span><Gauge size={18} /> {t("activity.usage.title")}</span><strong>{roundedContextPercent === undefined ? "—" : `${roundedContextPercent}%`}</strong></div>
           {contextPercent !== undefined ? <div
             className="meter"
             role="progressbar"
-            aria-label="Uso de contexto"
+            aria-label={t("activity.usage.title")}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={roundedContextPercent}
-            aria-valuetext={`${formatUsageNumber(contextPercent)} por ciento`}
-          ><span style={{ width: `${contextPercent}%` }} /></div> : <p className="muted-copy">Hermes reportó contadores, pero no la ocupación actual del contexto.</p>}
+            aria-valuetext={t("activity.usage.percentValue", { value: formatUsageNumber(contextPercent) })}
+          ><span style={{ width: `${contextPercent}%` }} /></div> : <p className="muted-copy">{t("activity.usage.countersWithoutOccupancy")}</p>}
           <div className="metric-grid">
-            {usage.totalTokens !== undefined ? <span><strong>{formatUsageNumber(usage.totalTokens)}</strong><small>tokens acumulados</small></span> : null}
-            {inputTokens !== undefined ? <span><strong>{formatUsageNumber(inputTokens)}</strong><small>tokens de entrada</small></span> : null}
-            {outputTokens !== undefined ? <span><strong>{formatUsageNumber(outputTokens)}</strong><small>tokens de salida</small></span> : null}
-            {usage.contextUsed !== undefined ? <span><strong>{formatUsageNumber(usage.contextUsed)}</strong><small>contexto actual</small></span> : null}
-            {usage.contextMax !== undefined ? <span><strong>{formatUsageNumber(usage.contextMax)}</strong><small>ventana de contexto</small></span> : null}
-            {usage.apiCalls !== undefined ? <span><strong>{formatUsageNumber(usage.apiCalls)}</strong><small>llamadas</small></span> : null}
+            {usage.totalTokens !== undefined ? <span><strong>{formatUsageNumber(usage.totalTokens)}</strong><small>{t("activity.usage.totalTokens")}</small></span> : null}
+            {inputTokens !== undefined ? <span><strong>{formatUsageNumber(inputTokens)}</strong><small>{t("activity.usage.inputTokens")}</small></span> : null}
+            {outputTokens !== undefined ? <span><strong>{formatUsageNumber(outputTokens)}</strong><small>{t("activity.usage.outputTokens")}</small></span> : null}
+            {usage.contextUsed !== undefined ? <span><strong>{formatUsageNumber(usage.contextUsed)}</strong><small>{t("activity.usage.currentContext")}</small></span> : null}
+            {usage.contextMax !== undefined ? <span><strong>{formatUsageNumber(usage.contextMax)}</strong><small>{t("activity.usage.contextWindow")}</small></span> : null}
+            {usage.apiCalls !== undefined ? <span><strong>{formatUsageNumber(usage.apiCalls)}</strong><small>{t("activity.usage.calls")}</small></span> : null}
           </div>
-        </section> : <section className="metric-section"><div className="section-title"><span><Gauge size={18} /> Uso de contexto</span><strong>—</strong></div><p className="muted-copy">Hermes no anunció telemetría de uso para esta sesión.</p></section>}
+        </section> : <section className="metric-section"><div className="section-title"><span><Gauge size={18} /> {t("activity.usage.title")}</span><strong>—</strong></div><p className="muted-copy">{t("activity.usage.noTelemetry")}</p></section>}
 
         <details className="activity-details" open>
-          <summary><span><Wrench size={18} /> Herramientas</span><span><Badge tone="info">{latestTools.length}</Badge><CaretDown size={15} /></span></summary>
+          <summary><span><Wrench size={18} /> {t("activity.tools")}</span><span><Badge tone="info">{latestTools.length}</Badge><CaretDown size={15} /></span></summary>
           <div className="activity-timeline">
-            {latestTools.length ? latestTools.map((tool) => <div key={tool.id}><CheckCircle weight="fill" /><span><strong>{tool.label}</strong><small>{tool.summary}</small></span></div>) : <div><Wrench /><span><strong>Sin actividad</strong><small>Las herramientas aparecerán cuando Hermes las reporte.</small></span></div>}
+            {latestTools.length ? latestTools.map((tool) => <div key={tool.id}><CheckCircle weight="fill" /><span><strong>{tool.label}</strong><small>{tool.summary}</small></span></div>) : <div><Wrench /><span><strong>{t("activity.noActivity")}</strong><small>{t("activity.toolsWhenReported")}</small></span></div>}
           </div>
         </details>
 
         {demoMode ? <details className="activity-details">
-          <summary><span><Robot size={18} /> Subagentes</span><span><Badge>1</Badge><CaretDown size={15} /></span></summary>
-          <div className="activity-timeline"><div><Pulse /><span><strong>Investigador</strong><small>Trabajo finalizado · demo</small></span></div></div>
+          <summary><span><Robot size={18} /> {t("activity.subagents")}</span><span><Badge>1</Badge><CaretDown size={15} /></span></summary>
+          <div className="activity-timeline"><div><Pulse /><span><strong>{t("activity.researcher")}</strong><small>{t("activity.workFinishedDemo")}</small></span></div></div>
         </details> : null}
 
         <section className="recent-activity">
-          <div className="section-title"><span><Clock size={18} /> Actividad reciente</span></div>
+          <div className="section-title"><span><Clock size={18} /> {t("activity.recentActivity")}</span></div>
           <ol>
-            <li><i /><span><strong>Transporte {connection}</strong><small>Estado observado por Agent Control</small></span></li>
-            <li><i /><span><strong>{session?.runtimeSessionId ? "Runtime enlazado" : "Runtime pendiente"}</strong><small>{session?.runtimeSessionId ? "Identidad confirmada" : "Se reanudará antes del próximo comando"}</small></span></li>
+            <li><i /><span><strong>{t("activity.transport", { status: t(`activity.connection.${connection}`) })}</strong><small>{t("activity.stateObserved")}</small></span></li>
+            <li><i /><span><strong>{t(session?.runtimeSessionId ? "activity.runtimeLinked" : "activity.runtimePending")}</strong><small>{t(session?.runtimeSessionId ? "activity.identityConfirmed" : "activity.resumesBeforeCommand")}</small></span></li>
           </ol>
         </section>
 
         {session ? <section className="session-actions" aria-labelledby="session-actions-title">
-          <div className="section-title"><span id="session-actions-title"><Archive size={18} /> Acciones de sesión</span></div>
+          <div className="section-title"><span id="session-actions-title"><Archive size={18} /> {t("activity.sessionActions")}</span></div>
           <div className="session-actions__item">
-            <span><strong>Exportar conversación</strong><small>Descarga una copia saneada del historial que conserva Hermes.</small></span>
-            <Button size="sm" disabled={exportBusy || exportDisabled} leadingIcon={<DownloadSimple />} onClick={() => void exportSession()}>{exportBusy ? "Exportando…" : "Exportar"}</Button>
+            <span><strong>{t("activity.exportConversation")}</strong><small>{t("activity.exportDescription")}</small></span>
+            <Button size="sm" disabled={exportBusy || exportDisabled} leadingIcon={<DownloadSimple />} onClick={() => void exportSession()}>{t(exportBusy ? "activity.exporting" : "activity.export")}</Button>
           </div>
           <div className="session-actions__item">
-            <span><strong>Archivar en Control</strong><small>Oculta esta referencia local. La conversación permanece intacta en Hermes.</small></span>
-            <Button size="sm" disabled={archiveBusy || mutationsDisabled} leadingIcon={<Archive />} onClick={() => void archiveSession()}>{archiveBusy ? "Archivando…" : "Archivar"}</Button>
+            <span><strong>{t("activity.archiveInControl")}</strong><small>{t("activity.archiveDescription")}</small></span>
+            <Button size="sm" disabled={archiveBusy || mutationsDisabled} leadingIcon={<Archive />} onClick={() => void archiveSession()}>{t(archiveBusy ? "activity.archiving" : "activity.archive")}</Button>
           </div>
           {canDeleteFromHermes ? <div className="session-actions__item session-actions__item--danger">
-            <span><strong>Eliminar de Hermes</strong><small>Borra la conversación en la infraestructura Hermes existente. Requiere escribir su ID exacto.</small></span>
-            <Button size="sm" variant="danger" disabled={deleteBusy || mutationsDisabled} leadingIcon={<Trash />} onClick={openDeleteDialog}>Eliminar…</Button>
+            <span><strong>{t("activity.deleteFromHermes")}</strong><small>{t("activity.deleteDescription")}</small></span>
+            <Button size="sm" variant="danger" disabled={deleteBusy || mutationsDisabled} leadingIcon={<Trash />} onClick={openDeleteDialog}>{t("activity.deleteEllipsis")}</Button>
           </div> : null}
-          {mutationsDisabled ? <p className="session-actions__hint">Estas acciones requieren una sesión online de Agent Control.</p> : null}
+          {mutationsDisabled ? <p className="session-actions__hint">{t("activity.actionsRequireOnline")}</p> : null}
           {actionError ? <p className="form-error" role="alert"><WarningCircle /> {actionError}</p> : null}
         </section> : null}
 
         <div className="activity-panel__footer">
-          <Switch checked={advancedMode} onChange={setAdvancedMode} label="Modo avanzado" description="IDs técnicos y diagnósticos" />
-          {advancedMode ? <code>runtime {session?.runtimeSessionId ?? "sin asignar"}</code> : null}
+          <Switch checked={advancedMode} onChange={setAdvancedMode} label={t("activity.advancedMode")} description={t("activity.technicalIds")} />
+          {advancedMode ? <code>runtime {session?.runtimeSessionId ?? t("activity.unassigned")}</code> : null}
         </div>
       </aside>
       <p className="session-action-announcement" role="status" aria-live="polite">{announcement}</p>
       {deleteTarget ? <div className="modal-layer" role="presentation">
-        <button className="modal-scrim" aria-label="Cancelar eliminación de sesión" onClick={closeDeleteDialog} />
+        <button className="modal-scrim" aria-label={t("activity.cancelDeleteAria")} onClick={closeDeleteDialog} />
         <div
           ref={deleteDialog.containerRef}
           tabIndex={-1}
@@ -255,12 +258,12 @@ export function ActivityPanel() {
           aria-labelledby="session-delete-title"
           aria-describedby="session-delete-description"
         >
-          <span className="eyebrow">Acción irreversible en Hermes</span>
-          <h2 id="session-delete-title">Eliminar “{deleteTarget.title}”</h2>
-          <p id="session-delete-description">Esto borra la conversación de Hermes, no solo su referencia en Control. Escribe el ID persistente exacto para continuar.</p>
+          <span className="eyebrow">{t("activity.irreversible")}</span>
+          <h2 id="session-delete-title">{t("activity.deleteTitle", { title: deleteTarget.title })}</h2>
+          <p id="session-delete-description">{t("activity.deleteDialogDescription")}</p>
           <form onSubmit={(event) => void deleteSession(event)}>
             <label className="hc-field" htmlFor="session-delete-confirmation">
-              <span className="hc-field__label">ID persistente: <code>{deleteTarget.storedSessionId}</code></span>
+              <span className="hc-field__label">{t("activity.persistentId")} <code>{deleteTarget.storedSessionId}</code></span>
               <input
                 id="session-delete-confirmation"
                 className="hc-input"
@@ -273,8 +276,8 @@ export function ActivityPanel() {
             </label>
             {deleteError ? <p className="form-error" role="alert"><WarningCircle /> {deleteError}</p> : null}
             <div>
-              <Button type="button" variant="ghost" disabled={deleteBusy} onClick={closeDeleteDialog}>Cancelar</Button>
-              <Button type="submit" variant="danger" disabled={deleteBusy || deleteConfirmation !== deleteTarget.storedSessionId} leadingIcon={<Trash />}>{deleteBusy ? "Eliminando…" : "Eliminar de Hermes"}</Button>
+              <Button type="button" variant="ghost" disabled={deleteBusy} onClick={closeDeleteDialog}>{t("activity.cancel")}</Button>
+              <Button type="submit" variant="danger" disabled={deleteBusy || deleteConfirmation !== deleteTarget.storedSessionId} leadingIcon={<Trash />}>{t(deleteBusy ? "activity.deleting" : "activity.deleteFromHermes")}</Button>
             </div>
           </form>
         </div>

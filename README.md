@@ -14,6 +14,7 @@ The current implementation includes:
 - REST/JSON-RPC Hermes clients with heartbeat, replay, epoch handling and a deterministic fallback provider; the mock also exercises Hermes SSE surfaces.
 - Workspaces, sessions, gateways, administration surfaces, cron references, diagnostics and audit metadata.
 - A responsive PWA based on the selected dark, conversation-first design.
+- A localized interface in English, Spanish, French, German and Portuguese, with browser-language detection and a device-only preference in IndexedDB.
 - A standalone mobile fidelity prototype and its passing visual QA evidence.
 - A deterministic mock covering both `9119` dashboard/WS and `8642` API-server behavior.
 - SSH tunnel supervision, Docker, systemd, Tailscale Serve and backup/restore documentation.

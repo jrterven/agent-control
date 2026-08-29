@@ -15,6 +15,7 @@ import {
   savePreference,
 } from "./lib/db";
 import { useAppStore } from "./store/appStore";
+import i18n, { getCurrentLanguage } from "./i18n";
 import type {
   ApprovalChoice,
   ApprovalRequest,
@@ -798,7 +799,6 @@ export function useRealtimeConnection() {
   }, [authState, csrfToken, demoMode, setConnection]);
 }
 
-const demoResponse = "Puedo continuar con el análisis dentro de esta sesión sin mezclar el contexto de otros perfiles. Como siguiente paso, contrastaré los resultados con las capacidades detectadas y dejaré una recomendación verificable.";
 const activeDemoControllers = new Map<string, AbortController>();
 
 async function reconcileAmbiguousPrompt(sessionId: string, operationId: string, assistantId: string) {
@@ -814,7 +814,7 @@ async function reconcileAmbiguousPrompt(sessionId: string, operationId: string, 
       const current = useAppStore.getState();
       current.updateMessage(assistantId, {
         streaming: false,
-        ...(operation.status === "failed" ? { content: "Hermes confirmó que la operación terminó con error." } : {}),
+        ...(operation.status === "failed" ? { content: i18n.t("runtimeMessages.operationFailed") } : {}),
       });
       current.setStreamingMessageId(sessionId, undefined);
       current.clearOperation(operationId);
@@ -832,7 +832,7 @@ export async function submitPrompt(content: string) {
   const now = new Date();
   const userMessage: ChatMessage = {
     id: crypto.randomUUID(), sessionId: state.selectedSessionId, role: "user", content: content.trim(),
-    createdAt: now.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }), delivery: "sending",
+    createdAt: now.toLocaleTimeString(getCurrentLanguage(), { hour: "2-digit", minute: "2-digit" }), delivery: "sending",
   };
   const assistantId = crypto.randomUUID();
   state.appendMessage(userMessage);
@@ -859,9 +859,9 @@ export async function submitPrompt(content: string) {
           streaming: false,
           ...(
             receipt.status === "failed" && !current?.content
-              ? { content: "El agente aceptó el mensaje, pero la ejecución terminó con error. Revisa la configuración del perfil e inténtalo de nuevo." }
+              ? { content: i18n.t("runtimeMessages.acceptedFailed") }
               : receipt.status === "interrupted" && !current?.content
-                ? { content: "La ejecución fue interrumpida." }
+                ? { content: i18n.t("runtimeMessages.interrupted") }
                 : {}
           ),
         });
@@ -876,7 +876,7 @@ export async function submitPrompt(content: string) {
         && /unknown|desconoc|delivery/i.test(`${error.code ?? ""} ${error.message}`);
       const ambiguous = !clientError || unknownConflict;
       state.updateMessage(userMessage.id, { delivery: ambiguous ? "ambiguous" : "failed" });
-      state.updateMessage(assistantId, { content: ambiguous ? "La conexión se interrumpió antes de confirmar la operación. No reenviaré el mensaje automáticamente." : "Agent Control rechazó el envío antes de aceptarlo. Puedes revisar la conexión e intentarlo de nuevo manualmente.", streaming: false });
+      state.updateMessage(assistantId, { content: ambiguous ? i18n.t("runtimeMessages.ambiguousPrompt") : i18n.t("runtimeMessages.rejectedPrompt"), streaming: false });
       state.setStreamingMessageId(state.selectedSessionId, undefined);
       if (ambiguous) void reconcileAmbiguousPrompt(state.selectedSessionId, idempotencyKey, assistantId);
       else state.clearOperation(idempotencyKey);
@@ -888,7 +888,7 @@ export async function submitPrompt(content: string) {
   state.updateMessage(userMessage.id, { delivery: "sent" });
   const demoController = new AbortController();
   activeDemoControllers.set(state.selectedSessionId, demoController);
-  const words = demoResponse.split(" ");
+  const words = i18n.t("runtimeMessages.demoResponse").split(" ");
   let rendered = "";
   for (const word of words) {
     if (demoController.signal.aborted) break;
@@ -903,15 +903,15 @@ export async function submitPrompt(content: string) {
 
 function interactionErrorMessage(error: unknown) {
   if (error instanceof ApiError && error.code === "MUTATION_DELIVERY_UNKNOWN") {
-    return "El resultado no está confirmado. Los controles permanecerán bloqueados hasta que Hermes reconcilie la solicitud.";
+    return i18n.t("runtimeMessages.deliveryUnknown");
   }
   if (error instanceof ApiError && error.status === 409) {
-    return "Hermes ya no considera pendiente esta solicitud.";
+    return i18n.t("runtimeMessages.noLongerPending");
   }
   if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
-    return error.message || "Agent Control rechazó la respuesta.";
+    return error.message || i18n.t("runtimeMessages.rejectedResponse");
   }
-  return "No se pudo confirmar la respuesta. Revisa la conexión e inténtalo de nuevo.";
+  return i18n.t("runtimeMessages.responseFailed");
 }
 
 export async function respondToApproval(sessionId: string, requestId: string, choice: ApprovalChoice) {
@@ -934,7 +934,7 @@ export async function respondToApproval(sessionId: string, requestId: string, ch
     }
     useAppStore.getState().updateApproval(sessionId, requestId, {
       state: "failed",
-      error: "Hermes no confirmó que la solicitud siga pendiente.",
+      error: i18n.t("runtimeMessages.noLongerPending"),
     });
     return receipt;
   } catch (error) {
@@ -1016,11 +1016,11 @@ export async function stopPrompt() {
     } catch {
       state.setConnection("degraded");
       const current = state.messages.find((message) => message.id === streamingId)?.content ?? "";
-      state.updateMessage(streamingId, { content: `${current}${current ? "\n\n" : ""}*No se pudo confirmar la detención; la ejecución podría continuar en Hermes.*` });
+      state.updateMessage(streamingId, { content: `${current}${current ? "\n\n" : ""}*${i18n.t("runtimeMessages.stopUnknown")}*` });
       return;
     }
   }
-  state.updateMessage(streamingId, { streaming: false, content: state.messages.find((message) => message.id === streamingId)?.content || "Ejecución detenida." });
+  state.updateMessage(streamingId, { streaming: false, content: state.messages.find((message) => message.id === streamingId)?.content || i18n.t("runtimeMessages.stopped") });
   state.setStreamingMessageId(sessionId, undefined);
   state.clearSessionInteractions(sessionId);
 }

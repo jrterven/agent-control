@@ -1,4 +1,5 @@
 import type { Automation, ChatMessage, Profile, SearchResult, SessionSummary, Workspace } from "../types";
+import i18n from "../i18n";
 
 export type SearchSources = {
   sessions: SessionSummary[];
@@ -13,7 +14,12 @@ function compact(value: string, maximum = 120) {
   return normalized.length > maximum ? `${normalized.slice(0, maximum - 1)}…` : normalized;
 }
 
-export function buildSearchResults({ sessions, workspaces, automations, messages, profiles }: SearchSources): SearchResult[] {
+type SearchTranslator = (key: string, options?: Record<string, string | number>) => string;
+
+export function buildSearchResults(
+  { sessions, workspaces, automations, messages, profiles }: SearchSources,
+  translate: SearchTranslator = (key, options) => String(i18n.t(key, options)),
+): SearchResult[] {
   const sessionById = new Map(sessions.map((session) => [session.id, session]));
   const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
 
@@ -30,7 +36,7 @@ export function buildSearchResults({ sessions, workspaces, automations, messages
         kind: "message",
         title: session?.title || compact(message.content, 56),
         excerpt: compact(message.content),
-        meta: `${profile?.displayName ?? "Agente"} · ${message.createdAt || "historial"}`,
+        meta: `${profile?.displayName ?? translate("searchMeta.agent")} · ${message.createdAt || translate("searchMeta.history")}`,
       };
     });
 
@@ -39,8 +45,8 @@ export function buildSearchResults({ sessions, workspaces, automations, messages
     targetId: session.id,
     kind: "session",
     title: session.title,
-    excerpt: compact(session.preview || "Conversación de Hermes"),
-    meta: `${profileById.get(session.profileId)?.displayName ?? "Agente"} · ${session.updatedAt}`,
+    excerpt: compact(session.preview || translate("searchMeta.conversation")),
+    meta: `${profileById.get(session.profileId)?.displayName ?? translate("searchMeta.agent")} · ${session.updatedAt}`,
   }));
 
   const workspaceResults: SearchResult[] = workspaces.map((workspace) => ({
@@ -48,8 +54,8 @@ export function buildSearchResults({ sessions, workspaces, automations, messages
     targetId: workspace.id,
     kind: "workspace",
     title: workspace.name,
-    excerpt: compact(workspace.description || `${workspace.sessionCount} sesiones`),
-    meta: `Workspace · ${workspace.sessionCount} sesiones`,
+    excerpt: compact(workspace.description || translate("searchMeta.sessionCount", { count: workspace.sessionCount })),
+    meta: translate("searchMeta.workspace", { count: workspace.sessionCount }),
   }));
 
   const automationResults: SearchResult[] = automations.map((automation) => ({
@@ -58,7 +64,7 @@ export function buildSearchResults({ sessions, workspaces, automations, messages
     kind: "automation",
     title: automation.name,
     excerpt: `${automation.schedule} · ${automation.timezone}`,
-    meta: automation.enabled ? "Automatización activa" : "Automatización pausada",
+    meta: automation.enabled ? translate("searchMeta.activeAutomation") : translate("searchMeta.pausedAutomation"),
   }));
 
   return [...messageResults, ...sessionResults, ...workspaceResults, ...automationResults];

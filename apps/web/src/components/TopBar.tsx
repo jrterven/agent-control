@@ -1,11 +1,18 @@
 import { CaretDown, List, Pulse, SidebarSimple } from "@phosphor-icons/react";
 import { IconButton, StatusDot } from "@hermes-control/ui";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../store/appStore";
 import { BrandMark } from "./BrandMark";
 
-const connectionLabels = { connected: "Conectado", reconnecting: "Reconectando", degraded: "Degradado", offline: "Sin conexión" } as const;
+const connectionLabelKeys = {
+  connected: "connection.connected",
+  reconnecting: "connection.reconnecting",
+  degraded: "connection.degraded",
+  offline: "connection.offline",
+} as const;
 
 export function TopBar() {
+  const { t } = useTranslation();
   const profileId = useAppStore((state) => state.selectedProfileId);
   const workspaceId = useAppStore((state) => state.selectedWorkspaceId);
   const connection = useAppStore((state) => state.connection);
@@ -21,20 +28,20 @@ export function TopBar() {
 
   return (
     <header className="top-bar">
-      <IconButton className="top-bar__menu" label="Abrir navegación" icon={<List size={25} />} selected={leftOpen} aria-controls="left-sidebar" aria-expanded={leftOpen} onClick={() => setLeftOpen(!leftOpen)} />
+      <IconButton className="top-bar__menu" label={t("nav.openNavigation")} icon={<List size={25} />} selected={leftOpen} aria-controls="left-sidebar" aria-expanded={leftOpen} onClick={() => setLeftOpen(!leftOpen)} />
       <div className="top-bar__identity">
         <BrandMark size="sm" />
         <button className="identity-button" type="button" onClick={() => setLeftOpen(true)}>
-          <span className="identity-button__name">{profile?.displayName ?? "Sin agente"}</span>
+          <span className="identity-button__name">{profile?.displayName ?? t("nav.noAgent")}</span>
           <CaretDown size={16} />
-          <span className="identity-button__status"><StatusDot tone={connection === "connected" ? "positive" : connection === "reconnecting" ? "warning" : "negative"} />{demoMode ? "Mock local" : connectionLabels[connection]}</span>
+          <span className="identity-button__status"><StatusDot tone={connection === "connected" ? "positive" : connection === "reconnecting" ? "warning" : "negative"} />{demoMode ? t("connection.localMock") : t(connectionLabelKeys[connection])}</span>
         </button>
       </div>
       <button className="workspace-switcher" type="button" onClick={() => setLeftOpen(true)}>
-        <span>{workspace?.name ?? "Sin workspace"}</span><CaretDown size={16} />
+        <span>{workspace?.name ?? t("nav.noWorkspace")}</span><CaretDown size={16} />
       </button>
-      <IconButton className="top-bar__activity" label="Abrir actividad y contexto" icon={<Pulse size={23} />} selected={activityOpen} aria-controls="activity-panel" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)} />
-      <IconButton className="top-bar__sidebar" label="Mostrar contexto" icon={<SidebarSimple size={23} />} selected={activityOpen} aria-controls="activity-panel" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)} />
+      <IconButton className="top-bar__activity" label={t("nav.openActivityContext")} icon={<Pulse size={23} />} selected={activityOpen} aria-controls="activity-panel" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)} />
+      <IconButton className="top-bar__sidebar" label={t("nav.showContext")} icon={<SidebarSimple size={23} />} selected={activityOpen} aria-controls="activity-panel" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)} />
     </header>
   );
 }

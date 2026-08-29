@@ -2,7 +2,7 @@ import axe from "axe-core";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "../i18n";
+import i18n from "../i18n";
 import { ChatView } from "../components/ChatView";
 import { automations, gateways, initialMessages, profiles, sessions, workspaces } from "../data";
 import { api } from "../lib/api";
@@ -28,7 +28,10 @@ describe("mobile-first chat", () => {
     });
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await i18n.changeLanguage("es");
+  });
 
   it("renders the approved conversation hierarchy and expandable tools", async () => {
     const user = userEvent.setup();
@@ -38,6 +41,17 @@ describe("mobile-first chat", () => {
     await user.click(screen.getByRole("button", { name: /Herramientas · 2/i }));
     expect(screen.getByText("Búsqueda académica")).toBeVisible();
     expect((await axe.run(container)).violations).toHaveLength(0);
+  });
+
+  it("changes chat controls to English without translating conversation content", async () => {
+    await i18n.changeLanguage("en");
+    render(<ChatView />);
+
+    expect(screen.getByText("August 28, 2026")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Message Newton…" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Tools · 2" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Memoria de agentes · agosto" })).toBeVisible();
+    expect(screen.getByText("Comparativa de memoria de agentes — Agosto 2026")).toBeVisible();
   });
 
   it("streams a demo response and offers an explicit stop action", async () => {

@@ -12,10 +12,9 @@ export default defineConfig({
       manifest: {
         name: "Agent Control",
         short_name: "Agent Control",
-        description: "Control seguro, móvil y multiagente para tu infraestructura de agentes.",
+        description: "Secure mobile control for multi-agent infrastructure.",
         theme_color: "#071018",
         background_color: "#071018",
-        lang: "es",
         display: "standalone",
         start_url: "/chats",
         scope: "/",

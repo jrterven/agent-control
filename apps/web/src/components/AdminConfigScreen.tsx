@@ -12,6 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { Badge, Button, Panel, Switch } from "@hermes-control/ui";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api, type AdminResourceName, type AdminResourceView } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 
@@ -21,14 +22,13 @@ type Route = { gatewayId: string; profileName: string };
 
 const tabDefinitions: Array<{
   id: AdminTab;
-  label: string;
   methods: string[];
 }> = [
-  { id: "general", label: "General", methods: ["models.list", "config.get", "usage.get"] },
-  { id: "identity", label: "Identidad", methods: ["soul.get"] },
-  { id: "tools", label: "Herramientas", methods: ["skills.list", "toolsets.list"] },
-  { id: "integrations", label: "Integraciones", methods: ["mcp.list", "channels.list"] },
-  { id: "secrets", label: "Secretos", methods: ["secrets.list"] },
+  { id: "general", methods: ["models.list", "config.get", "usage.get"] },
+  { id: "identity", methods: ["soul.get"] },
+  { id: "tools", methods: ["skills.list", "toolsets.list"] },
+  { id: "integrations", methods: ["mcp.list", "channels.list"] },
+  { id: "secrets", methods: ["secrets.list"] },
 ];
 
 const resourcesByTab: Record<AdminTab, AdminResourceName[]> = {
@@ -68,8 +68,8 @@ function booleanValue(value: unknown) {
   return value === true;
 }
 
-function displayNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? new Intl.NumberFormat("es-MX").format(value) : "—";
+function displayNumber(value: unknown, locale: string) {
+  return typeof value === "number" && Number.isFinite(value) ? new Intl.NumberFormat(locale).format(value) : "—";
 }
 
 async function readResource(route: Route, resource: AdminResourceName): Promise<AdminResourceView> {
@@ -98,6 +98,7 @@ function ModelsSection({ data, canWrite, busy, onSave }: {
   busy: boolean;
   onSave: (provider: string, model: string, confirmExpensiveModel: boolean) => Promise<boolean>;
 }) {
+  const { t } = useTranslation();
   const current = asRecord(data?.current);
   const providers = recordsFrom(data, "providers");
   const [provider, setProvider] = useState("");
@@ -123,17 +124,18 @@ function ModelsSection({ data, canWrite, busy, onSave }: {
   };
 
   return <Panel className="admin-section">
-    <SectionHeader icon={<Brain weight="duotone" />} title="Modelo principal" description="Selección detectada por Hermes para este perfil." badge={canWrite ? "editable" : "solo lectura"} />
+    <SectionHeader icon={<Brain weight="duotone" />} title={t("adminConfig.models.title")} description={t("adminConfig.models.description")} badge={canWrite ? t("adminConfig.common.editable") : t("adminConfig.common.readOnly")} />
     {providers.length ? <form className="admin-form-grid" onSubmit={(event) => { event.preventDefault(); void onSave(provider, model, confirmed); }}>
-      <label className="hc-field"><span className="hc-field__label">Proveedor</span><select value={provider} onChange={(event) => changeProvider(event.target.value)} disabled={!canWrite || busy}>{providers.map((item) => <option key={stringValue(item.id)} value={stringValue(item.id)}>{stringValue(item.label, stringValue(item.id))}</option>)}</select></label>
-      <label className="hc-field"><span className="hc-field__label">Modelo</span><select value={model} onChange={(event) => setModel(event.target.value)} disabled={!canWrite || busy}>{models.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
-      {canWrite ? <label className="admin-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>Confirmo el cambio si el modelo tiene un costo superior.</span></label> : null}
-      {canWrite ? <Button type="submit" variant="primary" disabled={busy || !provider || !model}>Guardar modelo</Button> : null}
-    </form> : <EmptySection>Hermes no devolvió opciones de modelo.</EmptySection>}
+      <label className="hc-field"><span className="hc-field__label">{t("adminConfig.models.provider")}</span><select value={provider} onChange={(event) => changeProvider(event.target.value)} disabled={!canWrite || busy}>{providers.map((item) => <option key={stringValue(item.id)} value={stringValue(item.id)}>{stringValue(item.label, stringValue(item.id))}</option>)}</select></label>
+      <label className="hc-field"><span className="hc-field__label">{t("adminConfig.models.model")}</span><select value={model} onChange={(event) => setModel(event.target.value)} disabled={!canWrite || busy}>{models.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+      {canWrite ? <label className="admin-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>{t("adminConfig.models.confirmExpensive")}</span></label> : null}
+      {canWrite ? <Button type="submit" variant="primary" disabled={busy || !provider || !model}>{t("adminConfig.models.save")}</Button> : null}
+    </form> : <EmptySection>{t("adminConfig.models.empty")}</EmptySection>}
   </Panel>;
 }
 
 function ConfigDocumentSection({ data, canWrite, busy, onSave }: { data?: Record<string, unknown>; canWrite: boolean; busy: boolean; onSave: (config: Record<string, unknown>) => Promise<boolean> }) {
+  const { t } = useTranslation();
   const document = Object.keys(asRecord(data?.config)).length ? asRecord(data?.config) : (data ?? {});
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
@@ -145,32 +147,35 @@ function ConfigDocumentSection({ data, canWrite, busy, onSave }: { data?: Record
       setError("");
       await onSave(parsed as Record<string, unknown>);
     } catch {
-      setError("Escribe un objeto JSON válido. Los secretos deben configurarse en su sección write-only.");
+      setError(t("adminConfig.config.invalidJson"));
     }
   };
   return <Panel className="admin-section">
-    <SectionHeader icon={<Robot weight="duotone" />} title="Configuración compatible" description="Documento saneado del perfil. Los campos con forma de secreto son rechazados por la API." badge={canWrite ? "avanzado" : "solo lectura"} />
-    <label className="hc-field"><span className="hc-field__label">Configuración JSON</span><textarea className="admin-code-editor" spellCheck={false} value={value} readOnly={!canWrite} onChange={(event) => setValue(event.target.value)} aria-describedby={error ? "config-json-error" : undefined} /></label>
+    <SectionHeader icon={<Robot weight="duotone" />} title={t("adminConfig.config.title")} description={t("adminConfig.config.description")} badge={canWrite ? t("adminConfig.config.advanced") : t("adminConfig.common.readOnly")} />
+    <label className="hc-field"><span className="hc-field__label">{t("adminConfig.config.json")}</span><textarea className="admin-code-editor" spellCheck={false} value={value} readOnly={!canWrite} onChange={(event) => setValue(event.target.value)} aria-describedby={error ? "config-json-error" : undefined} /></label>
     {error ? <p id="config-json-error" className="form-error" role="alert"><WarningCircle /> {error}</p> : null}
-    {canWrite ? <div className="admin-section__actions"><Button variant="primary" disabled={busy} onClick={() => void save()}>Aplicar configuración</Button></div> : null}
+    {canWrite ? <div className="admin-section__actions"><Button variant="primary" disabled={busy} onClick={() => void save()}>{t("adminConfig.config.apply")}</Button></div> : null}
   </Panel>;
 }
 
 function UsageSection({ data }: { data?: Record<string, unknown> }) {
+  const { t, i18n } = useTranslation();
   const totals = asRecord(data?.totals);
+  const locale = i18n.resolvedLanguage ?? i18n.language;
   return <Panel className="admin-section">
-    <SectionHeader icon={<ChartLineUp weight="duotone" />} title="Uso y contexto" description={`Ventana de ${displayNumber(data?.period_days)} días informada por Hermes.`} />
-    <dl className="admin-metrics"><div><dt>Entrada</dt><dd>{displayNumber(totals.total_input)}</dd></div><div><dt>Salida</dt><dd>{displayNumber(totals.total_output)}</dd></div><div><dt>Sesiones</dt><dd>{displayNumber(totals.total_sessions)}</dd></div></dl>
+    <SectionHeader icon={<ChartLineUp weight="duotone" />} title={t("adminConfig.usage.title")} description={t("adminConfig.usage.description", { days: displayNumber(data?.period_days, locale) })} />
+    <dl className="admin-metrics"><div><dt>{t("adminConfig.usage.input")}</dt><dd>{displayNumber(totals.total_input, locale)}</dd></div><div><dt>{t("adminConfig.usage.output")}</dt><dd>{displayNumber(totals.total_output, locale)}</dd></div><div><dt>{t("adminConfig.usage.sessions")}</dt><dd>{displayNumber(totals.total_sessions, locale)}</dd></div></dl>
   </Panel>;
 }
 
 function SoulSection({ data, canWrite, busy, onSave }: { data?: Record<string, unknown>; canWrite: boolean; busy: boolean; onSave: (content: string) => Promise<boolean> }) {
+  const { t } = useTranslation();
   const [content, setContent] = useState("");
   useEffect(() => setContent(stringValue(data?.content)), [data]);
   return <Panel className="admin-section">
-    <SectionHeader icon={<Robot weight="duotone" />} title="SOUL" description="Identidad e instrucciones oficiales del perfil, gestionadas en Hermes." badge={canWrite ? "editable" : "solo lectura"} />
-    <label className="hc-field"><span className="hc-field__label">Contenido de SOUL</span><textarea className="admin-soul-editor" value={content} readOnly={!canWrite} onChange={(event) => setContent(event.target.value)} /></label>
-    {canWrite ? <div className="admin-section__actions"><Button variant="primary" disabled={busy} onClick={() => void onSave(content)}>Guardar SOUL</Button></div> : null}
+    <SectionHeader icon={<Robot weight="duotone" />} title={t("adminConfig.soul.title")} description={t("adminConfig.soul.description")} badge={canWrite ? t("adminConfig.common.editable") : t("adminConfig.common.readOnly")} />
+    <label className="hc-field"><span className="hc-field__label">{t("adminConfig.soul.content")}</span><textarea className="admin-soul-editor" value={content} readOnly={!canWrite} onChange={(event) => setContent(event.target.value)} /></label>
+    {canWrite ? <div className="admin-section__actions"><Button variant="primary" disabled={busy} onClick={() => void onSave(content)}>{t("adminConfig.soul.save")}</Button></div> : null}
   </Panel>;
 }
 
@@ -183,11 +188,12 @@ function ToggleCollection({ title, description, icon, rows, canToggle, busy, onT
   busy: boolean;
   onToggle: (name: string, enabled: boolean) => Promise<boolean>;
 }) {
-  return <Panel className="admin-section"><SectionHeader icon={icon} title={title} description={description} badge={canToggle ? "editable" : "solo lectura"} />
+  const { t } = useTranslation();
+  return <Panel className="admin-section"><SectionHeader icon={icon} title={title} description={description} badge={canToggle ? t("adminConfig.common.editable") : t("adminConfig.common.readOnly")} />
     {rows.length ? <div className="admin-toggle-list">{rows.map((item) => {
       const name = stringValue(item.name, stringValue(item.id));
       return <Switch key={name} checked={booleanValue(item.enabled)} disabled={!canToggle || busy} onChange={(enabled) => void onToggle(name, enabled)} label={stringValue(item.label, name)} description={stringValue(item.description, stringValue(item.category))} />;
-    })}</div> : <EmptySection>No hay elementos anunciados para este perfil.</EmptySection>}
+    })}</div> : <EmptySection>{t("adminConfig.collections.empty")}</EmptySection>}
   </Panel>;
 }
 
@@ -197,6 +203,7 @@ function McpSection({ data, methods, busy, onAction }: {
   busy: boolean;
   onAction: (action: () => Promise<unknown>, message: string) => Promise<boolean>;
 }) {
+  const { t } = useTranslation();
   const rows = recordsFrom(data, "servers");
   const route = useAdminRoute();
   const csrfToken = useAppStore((state) => state.csrfToken);
@@ -208,7 +215,7 @@ function McpSection({ data, methods, busy, onAction }: {
   const create = async () => {
     if (!route) return;
     if (!name.trim() || Boolean(url.trim()) === Boolean(command.trim())) {
-      setValidation("Indica un nombre y exactamente una conexión: URL o comando.");
+      setValidation(t("adminConfig.mcp.validation"));
       setBearerToken("");
       return;
     }
@@ -219,26 +226,27 @@ function McpSection({ data, methods, busy, onAction }: {
         ...(url.trim() ? { url: url.trim() } : { command: command.trim() }),
         ...(bearerToken ? { bearerToken } : {}),
         enabled: true,
-      }, csrfToken), "Servidor MCP añadido.");
+      }, csrfToken), t("adminConfig.mcp.added"));
       if (ok) { setName(""); setUrl(""); setCommand(""); }
     } finally {
       setBearerToken("");
     }
   };
-  return <Panel className="admin-section"><SectionHeader icon={<PlugsConnected weight="duotone" />} title="Servidores MCP" description="Conexiones detectadas para el perfil. Los tokens solo se escriben y se vacían al terminar." badge={methods.has("mcp.create") ? "editable" : "solo lectura"} />
+  return <Panel className="admin-section"><SectionHeader icon={<PlugsConnected weight="duotone" />} title={t("adminConfig.mcp.title")} description={t("adminConfig.mcp.description")} badge={methods.has("mcp.create") ? t("adminConfig.common.editable") : t("adminConfig.common.readOnly")} />
     {rows.length ? <div className="admin-resource-list">{rows.map((item) => {
       const itemName = stringValue(item.name);
-      return <div key={itemName} className="admin-resource-row"><div><strong>{itemName}</strong><small>{stringValue(item.url, stringValue(item.command, "Transporte administrado"))}</small></div><Badge tone={booleanValue(item.configured) ? "positive" : "warning"}>{booleanValue(item.configured) ? "configurado" : "incompleto"}</Badge><div className="admin-row-actions">
-        {methods.has("mcp.toggle") ? <Switch checked={booleanValue(item.enabled)} disabled={busy} onChange={(enabled) => route && void onAction(() => api.adminToggleMcpServer(route.gatewayId, route.profileName, itemName, enabled, csrfToken), `${itemName} actualizado.`)} label={`Activar ${itemName}`} /> : null}
-        {methods.has("mcp.test") ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => route && void onAction(() => api.adminTestMcpServer(route.gatewayId, route.profileName, itemName, csrfToken), `Prueba de ${itemName} completada.`)}>Probar</Button> : null}
-        {methods.has("mcp.delete") ? <Button size="sm" variant="danger" disabled={busy} onClick={() => { if (route && window.confirm(`¿Eliminar el servidor MCP ${itemName}?`)) void onAction(() => api.adminDeleteMcpServer(route.gatewayId, route.profileName, itemName, csrfToken), `${itemName} eliminado.`); }}>Eliminar</Button> : null}
+      return <div key={itemName} className="admin-resource-row"><div><strong>{itemName}</strong><small>{stringValue(item.url, stringValue(item.command, t("adminConfig.mcp.managedTransport")))}</small></div><Badge tone={booleanValue(item.configured) ? "positive" : "warning"}>{booleanValue(item.configured) ? t("adminConfig.common.configured") : t("adminConfig.common.incomplete")}</Badge><div className="admin-row-actions">
+        {methods.has("mcp.toggle") ? <Switch checked={booleanValue(item.enabled)} disabled={busy} onChange={(enabled) => route && void onAction(() => api.adminToggleMcpServer(route.gatewayId, route.profileName, itemName, enabled, csrfToken), t("adminConfig.common.updated", { name: itemName }))} label={t("adminConfig.mcp.activate", { name: itemName })} /> : null}
+        {methods.has("mcp.test") ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => route && void onAction(() => api.adminTestMcpServer(route.gatewayId, route.profileName, itemName, csrfToken), t("adminConfig.common.testComplete", { name: itemName }))}>{t("adminConfig.mcp.test")}</Button> : null}
+        {methods.has("mcp.delete") ? <Button size="sm" variant="danger" disabled={busy} onClick={() => { if (route && window.confirm(t("adminConfig.mcp.deleteConfirm", { name: itemName }))) void onAction(() => api.adminDeleteMcpServer(route.gatewayId, route.profileName, itemName, csrfToken), t("adminConfig.common.deleted", { name: itemName })); }}>{t("adminConfig.mcp.delete")}</Button> : null}
       </div></div>;
-    })}</div> : <EmptySection>No hay servidores MCP configurados.</EmptySection>}
-    {methods.has("mcp.create") ? <div className="admin-create-box"><h3>Añadir servidor</h3><div className="admin-form-grid"><label className="hc-field"><span className="hc-field__label">Nombre</span><input className="hc-input" value={name} onChange={(event) => setName(event.target.value)} /></label><label className="hc-field"><span className="hc-field__label">URL</span><input className="hc-input" type="url" value={url} onChange={(event) => { setUrl(event.target.value); if (event.target.value) setCommand(""); }} /></label><label className="hc-field"><span className="hc-field__label">Comando local</span><input className="hc-input" value={command} onChange={(event) => { setCommand(event.target.value); if (event.target.value) setUrl(""); }} /></label><label className="hc-field"><span className="hc-field__label">Bearer token (solo escritura)</span><input className="hc-input" type="password" autoComplete="new-password" value={bearerToken} onChange={(event) => setBearerToken(event.target.value)} /></label></div>{validation ? <p className="form-error" role="alert"><WarningCircle /> {validation}</p> : null}<Button variant="primary" disabled={busy} onClick={() => void create()}>Añadir MCP</Button></div> : null}
+    })}</div> : <EmptySection>{t("adminConfig.mcp.empty")}</EmptySection>}
+    {methods.has("mcp.create") ? <div className="admin-create-box"><h3>{t("adminConfig.mcp.addTitle")}</h3><div className="admin-form-grid"><label className="hc-field"><span className="hc-field__label">{t("adminConfig.mcp.name")}</span><input className="hc-input" value={name} onChange={(event) => setName(event.target.value)} /></label><label className="hc-field"><span className="hc-field__label">{t("adminConfig.mcp.url")}</span><input className="hc-input" type="url" value={url} onChange={(event) => { setUrl(event.target.value); if (event.target.value) setCommand(""); }} /></label><label className="hc-field"><span className="hc-field__label">{t("adminConfig.mcp.localCommand")}</span><input className="hc-input" value={command} onChange={(event) => { setCommand(event.target.value); if (event.target.value) setUrl(""); }} /></label><label className="hc-field"><span className="hc-field__label">{t("adminConfig.mcp.bearerToken")}</span><input className="hc-input" type="password" autoComplete="new-password" value={bearerToken} onChange={(event) => setBearerToken(event.target.value)} /></label></div>{validation ? <p className="form-error" role="alert"><WarningCircle /> {validation}</p> : null}<Button variant="primary" disabled={busy} onClick={() => void create()}>{t("adminConfig.mcp.add")}</Button></div> : null}
   </Panel>;
 }
 
 function ChannelRow({ item, methods, busy, onAction }: { item: Record<string, unknown>; methods: Set<string>; busy: boolean; onAction: (action: () => Promise<unknown>, message: string) => Promise<boolean> }) {
+  const { t } = useTranslation();
   const route = useAdminRoute();
   const csrfToken = useAppStore((state) => state.csrfToken);
   const name = stringValue(item.id, stringValue(item.name));
@@ -249,20 +257,21 @@ function ChannelRow({ item, methods, busy, onAction }: { item: Record<string, un
     if (!route) return;
     const payload = Object.fromEntries(Object.entries(envValues).filter(([, value]) => value.length > 0));
     try {
-      if (Object.keys(payload).length) await onAction(() => api.adminUpdateChannel(route.gatewayId, route.profileName, name, { env: payload }, csrfToken), `${label} actualizado.`);
+      if (Object.keys(payload).length) await onAction(() => api.adminUpdateChannel(route.gatewayId, route.profileName, name, { env: payload }, csrfToken), t("adminConfig.common.updated", { name: label }));
     } finally {
       setEnvValues({});
     }
   };
-  return <div className="admin-channel"><div className="admin-channel__head"><div><strong>{label}</strong><small>{stringValue(item.state, booleanValue(item.configured) ? "configurado" : "requiere configuración")}</small></div>{methods.has("channels.update") ? <Switch checked={booleanValue(item.enabled)} disabled={busy} onChange={(enabled) => route && void onAction(() => api.adminUpdateChannel(route.gatewayId, route.profileName, name, { enabled }, csrfToken), `${label} actualizado.`)} label={`Activar ${label}`} /> : <Badge tone={booleanValue(item.enabled) ? "positive" : "neutral"}>{booleanValue(item.enabled) ? "activo" : "inactivo"}</Badge>}</div>
-    {envRows.length ? <div className="admin-env-list">{envRows.map((field) => { const key = stringValue(field.key); return <div key={key}><label className="hc-field"><span className="hc-field__label">{key} (solo escritura)</span><input className="hc-input" type="password" autoComplete="new-password" placeholder={booleanValue(field.is_set) ? "Configurado · escribe para reemplazar" : "Sin configurar"} value={envValues[key] ?? ""} onChange={(event) => setEnvValues((current) => ({ ...current, [key]: event.target.value }))} /></label>{methods.has("channels.update") && booleanValue(field.is_set) ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => { if (route && window.confirm(`¿Borrar ${key} de ${label}?`)) void onAction(() => api.adminUpdateChannel(route.gatewayId, route.profileName, name, { clearEnv: [key] }, csrfToken), `${key} eliminado.`); }}>Borrar valor</Button> : null}</div>; })}</div> : null}
-    <div className="admin-row-actions">{methods.has("channels.update") && envRows.length ? <Button size="sm" variant="primary" disabled={busy || !Object.values(envValues).some(Boolean)} onClick={() => void saveEnv()}>Guardar credenciales</Button> : null}{methods.has("channels.test") ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => route && void onAction(() => api.adminTestChannel(route.gatewayId, route.profileName, name, csrfToken), `Prueba de ${label} completada.`)}>Probar canal</Button> : null}</div>
+  return <div className="admin-channel"><div className="admin-channel__head"><div><strong>{label}</strong><small>{stringValue(item.state, booleanValue(item.configured) ? t("adminConfig.common.configured") : t("adminConfig.channels.requiresConfiguration"))}</small></div>{methods.has("channels.update") ? <Switch checked={booleanValue(item.enabled)} disabled={busy} onChange={(enabled) => route && void onAction(() => api.adminUpdateChannel(route.gatewayId, route.profileName, name, { enabled }, csrfToken), t("adminConfig.common.updated", { name: label }))} label={t("adminConfig.channels.activate", { name: label })} /> : <Badge tone={booleanValue(item.enabled) ? "positive" : "neutral"}>{booleanValue(item.enabled) ? t("adminConfig.common.active") : t("adminConfig.common.inactive")}</Badge>}</div>
+    {envRows.length ? <div className="admin-env-list">{envRows.map((field) => { const key = stringValue(field.key); return <div key={key}><label className="hc-field"><span className="hc-field__label">{t("adminConfig.channels.writeOnly", { key })}</span><input className="hc-input" type="password" autoComplete="new-password" placeholder={booleanValue(field.is_set) ? t("adminConfig.channels.configuredReplace") : t("adminConfig.channels.unconfigured")} value={envValues[key] ?? ""} onChange={(event) => setEnvValues((current) => ({ ...current, [key]: event.target.value }))} /></label>{methods.has("channels.update") && booleanValue(field.is_set) ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => { if (route && window.confirm(t("adminConfig.channels.clearConfirm", { key, name: label }))) void onAction(() => api.adminUpdateChannel(route.gatewayId, route.profileName, name, { clearEnv: [key] }, csrfToken), t("adminConfig.common.deleted", { name: key })); }}>{t("adminConfig.channels.clearValue")}</Button> : null}</div>; })}</div> : null}
+    <div className="admin-row-actions">{methods.has("channels.update") && envRows.length ? <Button size="sm" variant="primary" disabled={busy || !Object.values(envValues).some(Boolean)} onClick={() => void saveEnv()}>{t("adminConfig.channels.saveCredentials")}</Button> : null}{methods.has("channels.test") ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => route && void onAction(() => api.adminTestChannel(route.gatewayId, route.profileName, name, csrfToken), t("adminConfig.common.testComplete", { name: label }))}>{t("adminConfig.channels.test")}</Button> : null}</div>
   </div>;
 }
 
 function ChannelsSection({ data, methods, busy, onAction }: { data?: Record<string, unknown>; methods: Set<string>; busy: boolean; onAction: (action: () => Promise<unknown>, message: string) => Promise<boolean> }) {
+  const { t } = useTranslation();
   const rows = recordsFrom(data, "platforms");
-  return <Panel className="admin-section"><SectionHeader icon={<PlugsConnected weight="duotone" />} title="Canales" description="Canales y credenciales administrados por Hermes." badge={methods.has("channels.update") ? "editable" : "solo lectura"} />{rows.length ? <div className="admin-resource-list">{rows.map((item) => <ChannelRow key={stringValue(item.id, stringValue(item.name))} item={item} methods={methods} busy={busy} onAction={onAction} />)}</div> : <EmptySection>No hay canales anunciados.</EmptySection>}</Panel>;
+  return <Panel className="admin-section"><SectionHeader icon={<PlugsConnected weight="duotone" />} title={t("adminConfig.channels.title")} description={t("adminConfig.channels.description")} badge={methods.has("channels.update") ? t("adminConfig.common.editable") : t("adminConfig.common.readOnly")} />{rows.length ? <div className="admin-resource-list">{rows.map((item) => <ChannelRow key={stringValue(item.id, stringValue(item.name))} item={item} methods={methods} busy={busy} onAction={onAction} />)}</div> : <EmptySection>{t("adminConfig.channels.empty")}</EmptySection>}</Panel>;
 }
 
 function SecretRow({ item, canSet, canDelete, busy, onSet, onDelete }: {
@@ -273,17 +282,19 @@ function SecretRow({ item, canSet, canDelete, busy, onSet, onDelete }: {
   onSet: (name: string, value: string) => Promise<boolean>;
   onDelete: (name: string) => Promise<boolean>;
 }) {
+  const { t } = useTranslation();
   const name = stringValue(item.name);
   const [value, setValue] = useState("");
   const save = async () => {
     try { if (value) await onSet(name, value); } finally { setValue(""); }
   };
-  return <div className="admin-secret-row"><div><strong>{name}</strong><small>{stringValue(item.description, "Valor administrado por Hermes")}</small></div><Badge tone={booleanValue(item.configured) ? "positive" : "warning"}>{booleanValue(item.configured) ? "configurado" : "sin configurar"}</Badge>{canSet ? <label className="hc-field"><span className="hc-field__label">Nuevo valor para {name}</span><input className="hc-input" type="password" autoComplete="new-password" value={value} onChange={(event) => setValue(event.target.value)} /></label> : null}<div className="admin-row-actions">{canSet ? <Button size="sm" variant="primary" disabled={busy || !value} onClick={() => void save()}>Guardar valor</Button> : null}{canDelete && booleanValue(item.configured) ? <Button size="sm" variant="danger" disabled={busy} onClick={() => { if (window.confirm(`¿Eliminar ${name}? Hermes dejará de tener acceso a este valor.`)) void onDelete(name); }}>Eliminar</Button> : null}</div></div>;
+  return <div className="admin-secret-row"><div><strong>{name}</strong><small>{stringValue(item.description, t("adminConfig.secrets.managedValue"))}</small></div><Badge tone={booleanValue(item.configured) ? "positive" : "warning"}>{booleanValue(item.configured) ? t("adminConfig.common.configured") : t("adminConfig.channels.unconfigured")}</Badge>{canSet ? <label className="hc-field"><span className="hc-field__label">{t("adminConfig.secrets.newValue", { name })}</span><input className="hc-input" type="password" autoComplete="new-password" value={value} onChange={(event) => setValue(event.target.value)} /></label> : null}<div className="admin-row-actions">{canSet ? <Button size="sm" variant="primary" disabled={busy || !value} onClick={() => void save()}>{t("adminConfig.secrets.save")}</Button> : null}{canDelete && booleanValue(item.configured) ? <Button size="sm" variant="danger" disabled={busy} onClick={() => { if (window.confirm(t("adminConfig.secrets.deleteConfirm", { name }))) void onDelete(name); }}>{t("adminConfig.secrets.delete")}</Button> : null}</div></div>;
 }
 
 function SecretsSection({ data, methods, busy, onSet, onDelete }: { data?: Record<string, unknown>; methods: Set<string>; busy: boolean; onSet: (name: string, value: string) => Promise<boolean>; onDelete: (name: string) => Promise<boolean> }) {
+  const { t } = useTranslation();
   const rows = recordsFrom(data);
-  return <Panel className="admin-section admin-secrets"><SectionHeader icon={<Key weight="duotone" />} title="Secretos write-only" description="La interfaz solo conoce si un valor está configurado. Nunca recibe ni muestra su contenido." badge="protegido" />{rows.length ? <div className="admin-resource-list">{rows.map((item) => <SecretRow key={stringValue(item.name)} item={item} canSet={methods.has("secrets.set")} canDelete={methods.has("secrets.delete")} busy={busy} onSet={onSet} onDelete={onDelete} />)}</div> : <EmptySection>Hermes no anunció secretos configurables.</EmptySection>}</Panel>;
+  return <Panel className="admin-section admin-secrets"><SectionHeader icon={<Key weight="duotone" />} title={t("adminConfig.secrets.title")} description={t("adminConfig.secrets.description")} badge={t("adminConfig.common.protected")} />{rows.length ? <div className="admin-resource-list">{rows.map((item) => <SecretRow key={stringValue(item.name)} item={item} canSet={methods.has("secrets.set")} canDelete={methods.has("secrets.delete")} busy={busy} onSet={onSet} onDelete={onDelete} />)}</div> : <EmptySection>{t("adminConfig.secrets.empty")}</EmptySection>}</Panel>;
 }
 
 function useAdminRoute(): Route | undefined {
@@ -294,6 +305,7 @@ function useAdminRoute(): Route | undefined {
 }
 
 export function AdminConfigScreen({ header }: { header: React.ReactNode }) {
+  const { t } = useTranslation();
   const gateways = useAppStore((state) => state.gateways);
   const profiles = useAppStore((state) => state.profiles);
   const selectedGatewayId = useAppStore((state) => state.selectedGatewayId);
@@ -334,7 +346,7 @@ export function AdminConfigScreen({ header }: { header: React.ReactNode }) {
       if (!active) return;
       setSnapshots((current) => ({ ...current, ...Object.fromEntries(results.map((result) => [result.resource, result.data])) }));
     }).catch((cause: unknown) => {
-      if (active) setError(cause instanceof Error ? cause.message : "No se pudo leer la configuración de Hermes.");
+      if (active) setError(cause instanceof Error ? cause.message : t("adminConfig.errors.read"));
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [activeTab, methodKey, offline, route?.gatewayId, route?.profileName, visibleTabs.length]);
@@ -357,7 +369,7 @@ export function AdminConfigScreen({ header }: { header: React.ReactNode }) {
       setNotice(message);
       return true;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Hermes rechazó la operación.");
+      setError(cause instanceof Error ? cause.message : t("adminConfig.errors.rejected"));
       return false;
     } finally {
       setBusy(false);
@@ -368,16 +380,16 @@ export function AdminConfigScreen({ header }: { header: React.ReactNode }) {
 
   return <div className="page-wrap admin-config-page">
     {header}
-    <Panel className="admin-route-picker" aria-label="Destino de configuración"><label><span>Gateway</span><select value={selectedGatewayId} onChange={(event) => selectGateway(event.target.value)}>{gateways.map((gateway) => <option key={gateway.id} value={gateway.id}>{gateway.name}</option>)}</select></label><label><span>Perfil Hermes</span><select value={selectedProfileId} onChange={(event) => selectProfile(event.target.value)}>{profileOptions.map((item) => <option key={item.id} value={item.id}>{item.displayName} · {item.technicalName}</option>)}</select></label><div><span>Contrato</span><strong>{profile?.capabilitySet?.version ?? "sin verificar"}</strong><small>{methods.size} métodos exactos</small></div></Panel>
-    {offline ? <div className="success-banner success-banner--warning" role="status"><WarningCircle weight="fill" /> Administración bloqueada sin conexión. Los datos visibles pueden estar desactualizados.</div> : null}
+    <Panel className="admin-route-picker" aria-label={t("adminConfig.route.aria")}><label><span>{t("adminConfig.route.gateway")}</span><select value={selectedGatewayId} onChange={(event) => selectGateway(event.target.value)}>{gateways.map((gateway) => <option key={gateway.id} value={gateway.id}>{gateway.name}</option>)}</select></label><label><span>{t("adminConfig.route.profile")}</span><select value={selectedProfileId} onChange={(event) => selectProfile(event.target.value)}>{profileOptions.map((item) => <option key={item.id} value={item.id}>{item.displayName} · {item.technicalName}</option>)}</select></label><div><span>{t("adminConfig.route.contract")}</span><strong>{profile?.capabilitySet?.version ?? t("adminConfig.route.unverified")}</strong><small>{t("adminConfig.route.exactMethods", { count: methods.size })}</small></div></Panel>
+    {offline ? <div className="success-banner success-banner--warning" role="status"><WarningCircle weight="fill" /> {t("adminConfig.offline")}</div> : null}
     {notice ? <div className="success-banner" role="status"><CheckCircle weight="fill" /> {notice}</div> : null}
-    {error ? <div className="admin-error" role="alert"><WarningCircle weight="fill" /><span><strong>No se completó la operación</strong>{error}</span></div> : null}
-    {!visibleTabs.length ? <Panel className="safety-callout"><ShieldCheck size={24} /><div><strong>Sin funciones administrativas verificadas</strong><p>El perfil {profile?.displayName ?? "seleccionado"} no anunció métodos exactos de administración. Agent Control mantiene ocultos todos los controles.</p></div></Panel> : <div className="config-layout"><aside aria-label="Secciones de configuración">{visibleTabs.map((tab) => <button key={tab.id} type="button" className={activeTab === tab.id ? "is-active" : ""} aria-current={activeTab === tab.id ? "page" : undefined} onClick={() => setActiveTab(tab.id)}>{tab.label}</button>)}</aside><div className="config-sections" aria-busy={loading || busy}>{loading ? <div className="admin-loading" role="status"><SpinnerGap className="is-spinning" /> Consultando Hermes…</div> : null}
-      {activeTab === "general" ? <>{methods.has("models.list") ? <ModelsSection data={snapshots.models} canWrite={methods.has("models.set") && !offline} busy={busy} onSave={(provider, model, confirmExpensiveModel) => route ? perform(() => api.adminSetModel(route.gatewayId, route.profileName, { provider, model, confirmExpensiveModel }, csrfToken), "Modelo actualizado.", ["models", "config"]) : Promise.resolve(false)} /> : null}{methods.has("config.get") ? <ConfigDocumentSection data={snapshots.config} canWrite={methods.has("config.set") && !offline} busy={busy} onSave={(config) => route ? perform(() => api.adminUpdateConfig(route.gatewayId, route.profileName, config, csrfToken), "Configuración aplicada.", ["config"]) : Promise.resolve(false)} /> : null}{methods.has("usage.get") ? <UsageSection data={snapshots.usage} /> : null}</> : null}
-      {activeTab === "identity" && methods.has("soul.get") ? <SoulSection data={snapshots.soul} canWrite={methods.has("soul.set") && !offline} busy={busy} onSave={(content) => route ? perform(() => api.adminUpdateSoul(route.gatewayId, route.profileName, content, csrfToken), "SOUL actualizado.", ["soul"]) : Promise.resolve(false)} /> : null}
-      {activeTab === "tools" ? <>{methods.has("skills.list") ? <ToggleCollection title="Skills" description="Habilidades descubiertas en el perfil." icon={<Wrench weight="duotone" />} rows={recordsFrom(snapshots.skills)} canToggle={methods.has("skills.toggle") && !offline} busy={busy} onToggle={(name, enabled) => route ? perform(() => api.adminToggleSkill(route.gatewayId, route.profileName, name, enabled, csrfToken), `${name} actualizado.`, ["skills"]) : Promise.resolve(false)} /> : null}{methods.has("toolsets.list") ? <ToggleCollection title="Toolsets" description="Conjuntos de herramientas administrados por Hermes." icon={<Wrench weight="duotone" />} rows={recordsFrom(snapshots.toolsets)} canToggle={methods.has("toolsets.toggle") && !offline} busy={busy} onToggle={(name, enabled) => route ? perform(() => api.adminToggleToolset(route.gatewayId, route.profileName, name, enabled, csrfToken), `${name} actualizado.`, ["toolsets"]) : Promise.resolve(false)} /> : null}</> : null}
+    {error ? <div className="admin-error" role="alert"><WarningCircle weight="fill" /><span><strong>{t("adminConfig.errors.heading")}</strong>{error}</span></div> : null}
+    {!visibleTabs.length ? <Panel className="safety-callout"><ShieldCheck size={24} /><div><strong>{t("adminConfig.unavailable.title")}</strong><p>{t("adminConfig.unavailable.body", { profile: profile?.displayName ?? t("adminConfig.unavailable.selectedProfile") })}</p></div></Panel> : <div className="config-layout"><aside aria-label={t("adminConfig.route.aria")}>{visibleTabs.map((tab) => <button key={tab.id} type="button" className={activeTab === tab.id ? "is-active" : ""} aria-current={activeTab === tab.id ? "page" : undefined} onClick={() => setActiveTab(tab.id)}>{t(`adminConfig.tabs.${tab.id}`)}</button>)}</aside><div className="config-sections" aria-busy={loading || busy}>{loading ? <div className="admin-loading" role="status"><SpinnerGap className="is-spinning" /> {t("adminConfig.loading")}</div> : null}
+      {activeTab === "general" ? <>{methods.has("models.list") ? <ModelsSection data={snapshots.models} canWrite={methods.has("models.set") && !offline} busy={busy} onSave={(provider, model, confirmExpensiveModel) => route ? perform(() => api.adminSetModel(route.gatewayId, route.profileName, { provider, model, confirmExpensiveModel }, csrfToken), t("adminConfig.models.updated"), ["models", "config"]) : Promise.resolve(false)} /> : null}{methods.has("config.get") ? <ConfigDocumentSection data={snapshots.config} canWrite={methods.has("config.set") && !offline} busy={busy} onSave={(config) => route ? perform(() => api.adminUpdateConfig(route.gatewayId, route.profileName, config, csrfToken), t("adminConfig.config.applied"), ["config"]) : Promise.resolve(false)} /> : null}{methods.has("usage.get") ? <UsageSection data={snapshots.usage} /> : null}</> : null}
+      {activeTab === "identity" && methods.has("soul.get") ? <SoulSection data={snapshots.soul} canWrite={methods.has("soul.set") && !offline} busy={busy} onSave={(content) => route ? perform(() => api.adminUpdateSoul(route.gatewayId, route.profileName, content, csrfToken), t("adminConfig.soul.updated"), ["soul"]) : Promise.resolve(false)} /> : null}
+      {activeTab === "tools" ? <>{methods.has("skills.list") ? <ToggleCollection title={t("adminConfig.collections.skillsTitle")} description={t("adminConfig.collections.skillsDescription")} icon={<Wrench weight="duotone" />} rows={recordsFrom(snapshots.skills)} canToggle={methods.has("skills.toggle") && !offline} busy={busy} onToggle={(name, enabled) => route ? perform(() => api.adminToggleSkill(route.gatewayId, route.profileName, name, enabled, csrfToken), t("adminConfig.common.updated", { name }), ["skills"]) : Promise.resolve(false)} /> : null}{methods.has("toolsets.list") ? <ToggleCollection title={t("adminConfig.collections.toolsetsTitle")} description={t("adminConfig.collections.toolsetsDescription")} icon={<Wrench weight="duotone" />} rows={recordsFrom(snapshots.toolsets)} canToggle={methods.has("toolsets.toggle") && !offline} busy={busy} onToggle={(name, enabled) => route ? perform(() => api.adminToggleToolset(route.gatewayId, route.profileName, name, enabled, csrfToken), t("adminConfig.common.updated", { name }), ["toolsets"]) : Promise.resolve(false)} /> : null}</> : null}
       {activeTab === "integrations" ? <>{methods.has("mcp.list") ? <McpSection data={snapshots.mcp} methods={methods} busy={busy || offline} onAction={(action, message) => perform(action, message, ["mcp"])} /> : null}{methods.has("channels.list") ? <ChannelsSection data={snapshots.channels} methods={methods} busy={busy || offline} onAction={(action, message) => perform(action, message, ["channels"])} /> : null}</> : null}
-      {activeTab === "secrets" && methods.has("secrets.list") ? <SecretsSection data={snapshots.secrets} methods={methods} busy={busy || offline} onSet={(name, value) => route ? perform(() => api.adminSetSecret(route.gatewayId, route.profileName, name, value, csrfToken), `${name} guardado sin exponer su valor.`, ["secrets"]) : Promise.resolve(false)} onDelete={(name) => route ? perform(() => api.adminDeleteSecret(route.gatewayId, route.profileName, name, csrfToken), `${name} eliminado.`, ["secrets"]) : Promise.resolve(false)} /> : null}
+      {activeTab === "secrets" && methods.has("secrets.list") ? <SecretsSection data={snapshots.secrets} methods={methods} busy={busy || offline} onSet={(name, value) => route ? perform(() => api.adminSetSecret(route.gatewayId, route.profileName, name, value, csrfToken), t("adminConfig.secrets.saved", { name }), ["secrets"]) : Promise.resolve(false)} onDelete={(name) => route ? perform(() => api.adminDeleteSecret(route.gatewayId, route.profileName, name, csrfToken), t("adminConfig.common.deleted", { name }), ["secrets"]) : Promise.resolve(false)} /> : null}
     </div></div>}
   </div>;
 }

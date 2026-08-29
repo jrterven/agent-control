@@ -2,13 +2,14 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import {
   ArrowRight, CheckCircle, Clock, CloudCheck, Code,
   Database, DownloadSimple, FileText, FolderOpen, Gauge, GearSix, HardDrives,
-  Key, Lightning, MagnifyingGlass, Plus, Robot, ShieldCheck,
+  Key, Lightning, MagnifyingGlass, Plus, Robot, ShieldCheck, Translate,
   PencilSimple, Play, Pulse, SlidersHorizontal, TerminalWindow, Trash, UserCircle, WarningCircle,
 } from "@phosphor-icons/react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { Badge, Button, Field, Panel, StatusDot, Switch, cx } from "@hermes-control/ui";
 import { api, type ReadinessView } from "../lib/api";
@@ -20,17 +21,23 @@ import { useAppStore } from "../store/appStore";
 import type { Automation, AutomationRun, Gateway, Profile, SearchResult, ThemePreference } from "../types";
 import { BrandMark } from "../components/BrandMark";
 import { AdminConfigScreen } from "../components/AdminConfigScreen";
+import i18n from "../i18n";
+import { useLanguagePreference } from "../hooks/useLanguagePreference";
 
 export function PageHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
   return <header className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</header>;
 }
 
-const loginSchema = z.object({ username: z.string().min(1, "Escribe tu usuario"), password: z.string().min(12, "Usa al menos 12 caracteres") });
-type LoginValues = z.infer<typeof loginSchema>;
+type LoginValues = { username: string; password: string };
 
 export function LoginScreen() {
+  const { t } = useTranslation();
   const setAuth = useAppStore((state) => state.setAuth);
   const [serverError, setServerError] = useState("");
+  const loginSchema = useMemo(() => z.object({
+    username: z.string().min(1, t("login.usernameRequired")),
+    password: z.string().min(12, t("login.passwordLength")),
+  }), [t]);
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<LoginValues>({ resolver: zodResolver(loginSchema), defaultValues: { username: "", password: "" } });
   const onSubmit = handleSubmit(async (values) => {
     setServerError("");
@@ -38,23 +45,23 @@ export function LoginScreen() {
       const user = await api.login(values.username, values.password);
       setAuth("authenticated", user.name, user.csrfToken, false);
     } catch {
-      setServerError("No pudimos iniciar sesión. Revisa las credenciales o la conexión.");
+      setServerError(t("login.error"));
     }
   });
   return (
     <main className="login-screen">
       <section className="login-card" aria-labelledby="login-title">
         <div className="login-brand"><BrandMark size="lg" label="Agent Control" /><div><strong>Agent</strong><span>Control</span></div></div>
-        <span className="eyebrow">Acceso protegido</span>
-        <h1 id="login-title">Tus agentes. Un solo lugar.</h1>
-        <p>Conversa, organiza y automatiza tu infraestructura de agentes desde una interfaz segura, estés donde estés.</p>
+        <span className="eyebrow">{t("login.protected")}</span>
+        <h1 id="login-title">{t("login.title")}</h1>
+        <p>{t("login.description")}</p>
         <form onSubmit={onSubmit} noValidate>
-          <Field label="Usuario" autoComplete="username" error={errors.username?.message} {...register("username")} />
-          <Field label="Contraseña" type="password" autoComplete="current-password" error={errors.password?.message} {...register("password")} />
+          <Field label={t("login.username")} autoComplete="username" error={errors.username?.message} {...register("username")} />
+          <Field label={t("login.password")} type="password" autoComplete="current-password" error={errors.password?.message} {...register("password")} />
           {serverError ? <p className="form-error" role="alert"><WarningCircle /> {serverError}</p> : null}
-          <Button type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? "Comprobando…" : "Entrar a Agent Control"}</Button>
+          <Button type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? t("login.checking") : t("login.submit")}</Button>
         </form>
-        <footer><ShieldCheck size={18} /> La sesión se guarda en una cookie segura. Las credenciales nunca se almacenan en este dispositivo.</footer>
+        <footer><ShieldCheck size={18} /> {t("login.footer")}</footer>
       </section>
     </main>
   );
@@ -67,43 +74,37 @@ const administrativeWriteMethods = new Set([
   "channels.update", "secrets.set", "secrets.delete",
 ]);
 
-function profileWritePolicy(profile: Profile) {
-  if (!profile.mutable) return "Solo lectura";
+function profileWritePolicy(profile: Profile, t: (key: string) => string) {
+  if (!profile.mutable) return t("agentsPage.readOnly");
   if (profile.capabilitySet?.methods.some((method) => administrativeWriteMethods.has(method))) {
-    return "Conversación y administración";
+    return t("agentsPage.conversationAdmin");
   }
-  return "Conversación completa";
+  return t("agentsPage.fullConversation");
 }
 
 export function AgentsScreen() {
+  const { t } = useTranslation();
   const selectedProfileId = useAppStore((state) => state.selectedProfileId);
   const selectProfile = useAppStore((state) => state.selectProfile);
   const profiles = useAppStore((state) => state.profiles);
   return (
     <div className="page-wrap">
-      <PageHeader eyebrow="Perfiles de Hermes" title="Agentes" description="Perfiles descubiertos en la infraestructura Hermes existente. Control no crea ni reemplaza su runtime." />
+      <PageHeader eyebrow={t("agentsPage.eyebrow")} title={t("agentsPage.title")} description={t("agentsPage.description")} />
       <div className="agent-grid">
         {profiles.map((profile) => (
           <Panel key={profile.id} className={cx("agent-card", profile.id === selectedProfileId && "is-selected")}>
-            <header><span className="agent-card__avatar"><Robot weight="duotone" /></span><span><strong>{profile.displayName}</strong><small>{profile.technicalName}</small></span><Badge tone={profile.status === "ready" ? "positive" : "warning"}>{profile.status === "ready" ? "Disponible" : profile.status === "busy" ? "Trabajando" : "Sin configurar"}</Badge></header>
-            <dl><div><dt>Modelo</dt><dd>{profile.model}</dd></div><div><dt>Funciones disponibles</dt><dd>{profileWritePolicy(profile)}</dd></div></dl>
-            <div className="agent-card__actions"><Button variant={profile.id === selectedProfileId ? "primary" : "secondary"} onClick={() => selectProfile(profile.id)}>{profile.id === selectedProfileId ? "Activo" : "Usar agente"}</Button>{profile.capabilities?.config ? <Link to="/config" className="hc-button hc-button--ghost hc-button--md">Ver configuración</Link> : null}</div>
+            <header><span className="agent-card__avatar"><Robot weight="duotone" /></span><span><strong>{profile.displayName}</strong><small>{profile.technicalName}</small></span><Badge tone={profile.status === "ready" ? "positive" : "warning"}>{profile.status === "ready" ? t("agentsPage.available") : profile.status === "busy" ? t("agentsPage.working") : t("agentsPage.unconfigured")}</Badge></header>
+            <dl><div><dt>{t("agentsPage.model")}</dt><dd>{profile.model}</dd></div><div><dt>{t("agentsPage.functions")}</dt><dd>{profileWritePolicy(profile, t)}</dd></div></dl>
+            <div className="agent-card__actions"><Button variant={profile.id === selectedProfileId ? "primary" : "secondary"} onClick={() => selectProfile(profile.id)}>{profile.id === selectedProfileId ? t("agentsPage.active") : t("agentsPage.use")}</Button>{profile.capabilities?.config ? <Link to="/config" className="hc-button hc-button--ghost hc-button--md">{t("agentsPage.viewConfig")}</Link> : null}</div>
           </Panel>
         ))}
       </div>
-      <Panel className="safety-callout"><ShieldCheck size={24} /><div><strong>Experiencia completa, permisos seguros</strong><p>Newton, Jarvis y <code>control-dev</code> pueden crear y reanudar chats, usar herramientas, detener ejecuciones y responder aprobaciones o preguntas cuando Hermes las anuncie. Los cambios destructivos y de infraestructura permanecen aislados en <code>control-dev</code>.</p></div></Panel>
+      <Panel className="safety-callout"><ShieldCheck size={24} /><div><strong>{t("agentsPage.safetyTitle")}</strong><p>{t("agentsPage.safetyBody")}</p></div></Panel>
     </div>
   );
 }
 
-const automationSchema = z.object({
-  name: z.string().trim().min(3, "Escribe un nombre descriptivo"),
-  schedule: z.string().trim().refine((value) => value.split(/\s+/).length === 5, "Usa una expresión cron de 5 campos"),
-  timezone: z.string().trim().min(3, "Usa una zona IANA, por ejemplo America/Mexico_City"),
-  prompt: z.string().trim().min(3, "Describe la tarea que ejecutará Hermes"),
-  profileId: z.string().min(1, "Selecciona el perfil aislado"),
-});
-type AutomationValues = z.infer<typeof automationSchema>;
+type AutomationValues = { name: string; schedule: string; timezone: string; prompt: string; profileId: string };
 
 const emptyAutomationValues: AutomationValues = {
   name: "",
@@ -116,41 +117,34 @@ const emptyAutomationValues: AutomationValues = {
 const automationTemplates = [
   {
     id: "morning-brief",
-    label: "Resumen matutino",
-    name: "Resumen matutino",
+    translationKey: "morning",
     schedule: "30 8 * * MON-FRI",
-    prompt: "Prepara un resumen de prioridades, riesgos y próximos pasos para hoy.",
   },
   {
     id: "weekly-review",
-    label: "Revisión semanal",
-    name: "Revisión semanal",
+    translationKey: "weekly",
     schedule: "0 16 * * FRI",
-    prompt: "Resume los avances de la semana, decisiones pendientes y riesgos abiertos.",
   },
   {
     id: "daily-monitor",
-    label: "Monitoreo diario",
-    name: "Monitoreo diario",
+    translationKey: "monitor",
     schedule: "0 18 * * *",
-    prompt: "Revisa el estado del sistema y reporta únicamente cambios o anomalías relevantes.",
   },
 ] as const;
 
-export function describeCron(schedule: string, timezone: string): string {
+export function describeCron(schedule: string, timezone: string, translate: (key: string, options?: Record<string, string>) => string = (key, options) => String(i18n.t(key, options))): string {
   const [minute, hour, dayOfMonth, month, dayOfWeek] = schedule.trim().split(/\s+/);
-  if (![minute, hour, dayOfMonth, month, dayOfWeek].every(Boolean)) return "Expresión cron incompleta";
+  if (![minute, hour, dayOfMonth, month, dayOfWeek].every(Boolean)) return translate("automationsPage.cronIncomplete");
   const time = /^\d+$/.test(hour) && /^\d+$/.test(minute)
     ? `${String(Number(hour)).padStart(2, "0")}:${String(Number(minute)).padStart(2, "0")}`
     : `${minute} ${hour}`;
   const zone = timezone || "UTC";
-  if (dayOfMonth === "*" && month === "*" && dayOfWeek === "MON-FRI") return `De lunes a viernes a las ${time} (${zone})`;
-  if (dayOfMonth === "*" && month === "*" && dayOfWeek === "*") return `Todos los días a las ${time} (${zone})`;
+  if (dayOfMonth === "*" && month === "*" && dayOfWeek === "MON-FRI") return translate("automationsPage.cronWeekdays", { time, zone });
+  if (dayOfMonth === "*" && month === "*" && dayOfWeek === "*") return translate("automationsPage.cronDaily", { time, zone });
   if (dayOfMonth === "*" && month === "*" && /^(MON|TUE|WED|THU|FRI|SAT|SUN)$/.test(dayOfWeek)) {
-    const days: Record<string, string> = { MON: "lunes", TUE: "martes", WED: "miércoles", THU: "jueves", FRI: "viernes", SAT: "sábado", SUN: "domingo" };
-    return `Cada ${days[dayOfWeek]} a las ${time} (${zone})`;
+    return translate("automationsPage.cronDay", { day: translate(`automationsPage.days.${dayOfWeek}`), time, zone });
   }
-  return `Cron avanzado: ${schedule.trim()} (${zone})`;
+  return translate("automationsPage.cronAdvanced", { schedule: schedule.trim(), zone });
 }
 
 function uiAutomation(raw: Automation, profileId: string, previous?: Automation): Automation {
@@ -160,12 +154,20 @@ function uiAutomation(raw: Automation, profileId: string, previous?: Automation)
     ...raw,
     profileId,
     nextRuns,
-    nextRun: nextRuns[0] ?? "Por calcular",
+    nextRun: nextRuns[0] ?? "",
     lastStatus: previous?.lastStatus ?? raw.lastStatus ?? "idle",
   };
 }
 
 export function AutomationsScreen() {
+  const { t } = useTranslation();
+  const automationSchema = useMemo(() => z.object({
+    name: z.string().trim().min(3, t("automationsPage.validationName")),
+    schedule: z.string().trim().refine((value) => value.split(/\s+/).length === 5, t("automationsPage.validationCron")),
+    timezone: z.string().trim().min(3, t("automationsPage.validationTimezone")),
+    prompt: z.string().trim().min(3, t("automationsPage.validationPrompt")),
+    profileId: z.string().min(1, t("automationsPage.validationProfile")),
+  }), [t]);
   const storeItems = useAppStore((state) => state.automations);
   const profiles = useAppStore((state) => state.profiles);
   const [items, setItems] = useState(storeItems);
@@ -255,7 +257,7 @@ export function AutomationsScreen() {
     const profile = profiles.find((item) => item.id === values.profileId);
     const requiredCapability = editing ? profile?.capabilities?.cronUpdate : profile?.capabilities?.cronCreate;
     if (!profile?.mutable || !requiredCapability) {
-      setSubmitError("Hermes no confirmó esta operación cron para el perfil seleccionado.");
+      setSubmitError(t("automationsPage.unsupported"));
       return;
     }
     setSubmitError("");
@@ -277,7 +279,7 @@ export function AutomationsScreen() {
       }
       closeEditor();
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "No se pudo guardar la automatización.");
+      setSubmitError(error instanceof Error ? error.message : t("automationsPage.saveError"));
     }
   });
   const trigger = async (automation: Automation) => {
@@ -296,7 +298,7 @@ export function AutomationsScreen() {
     } finally { setActionId(""); }
   };
   const remove = async (automation: Automation) => {
-    if (!window.confirm(`Eliminar la automatización “${automation.name}” también en Hermes?`)) return;
+    if (!window.confirm(t("automationsPage.removeConfirm", { name: automation.name }))) return;
     setActionId(automation.id);
     try {
       await api.deleteAutomation(automation.id, csrfToken);
@@ -305,9 +307,9 @@ export function AutomationsScreen() {
   };
   return (
     <div className="page-wrap">
-      <PageHeader eyebrow="Ejecuciones programadas" title="Automatizaciones" description="Programa tareas aisladas y revisa cada ejecución sin mezclarlas con tus chats." action={<Button variant="primary" leadingIcon={<Plus />} onClick={openCreate} disabled={!eligibleProfiles.length || offline}>Nueva automatización</Button>} />
-      {!eligibleProfiles.length ? <Panel className="safety-callout"><ShieldCheck size={24} /><div><strong>Cron no está disponible</strong><p>El editor permanecerá cerrado hasta que Hermes anuncie la capacidad para algún perfil.</p></div></Panel> : null}
-      <div className="next-runs"><span className="eyebrow">Próximas cinco ejecuciones</span><div>{items.filter((item) => item.enabled).flatMap((item) => (item.nextRuns?.length ? item.nextRuns : [item.nextRun]).map((run) => ({ item, run }))).slice(0, 5).map(({ item, run }, index) => <span key={`${item.id}-${run}-${index}`}><Clock /><strong>{run || "Por calcular"}</strong><small>{item.name}</small></span>)}</div></div>
+      <PageHeader eyebrow={t("automationsPage.eyebrow")} title={t("automationsPage.title")} description={t("automationsPage.description")} action={<Button variant="primary" leadingIcon={<Plus />} onClick={openCreate} disabled={!eligibleProfiles.length || offline}>{t("automationsPage.new")}</Button>} />
+      {!eligibleProfiles.length ? <Panel className="safety-callout"><ShieldCheck size={24} /><div><strong>{t("automationsPage.unavailableTitle")}</strong><p>{t("automationsPage.unavailableBody")}</p></div></Panel> : null}
+      <div className="next-runs"><span className="eyebrow">{t("automationsPage.nextFive")}</span><div>{items.filter((item) => item.enabled).flatMap((item) => (item.nextRuns?.length ? item.nextRuns : [item.nextRun]).map((run) => ({ item, run }))).slice(0, 5).map(({ item, run }, index) => <span key={`${item.id}-${run}-${index}`}><Clock /><strong>{run || t("automationsPage.pending")}</strong><small>{item.name}</small></span>)}</div></div>
       <div className="automation-list">
         {items.map((automation) => {
           const profile = profiles.find((item) => item.id === automation.profileId);
@@ -315,29 +317,17 @@ export function AutomationsScreen() {
           const canTrigger = !offline && profile?.mutable === true && Boolean(profile.capabilities?.cronTrigger);
           const canDelete = !offline && profile?.mutable === true && Boolean(profile.capabilities?.cronDelete);
           const latestRun = runs[automation.id]?.[0];
-          const runLabel = latestRun?.status === "completed" ? "Última ejecución correcta" : latestRun?.status === "failed" ? "Última ejecución falló" : latestRun ? `Ejecución ${latestRun.status}` : "Sin ejecuciones";
-          return <Panel key={automation.id} className="automation-row"><span className="automation-row__icon"><Lightning weight="duotone" /></span><div><strong>{automation.name}</strong><p>{describeCron(automation.schedule, automation.timezone)}</p><span><Badge>{profile?.displayName ?? automation.profileName ?? "Perfil"}</Badge><Badge tone={latestRun?.status === "completed" ? "positive" : latestRun?.status === "failed" ? "warning" : "neutral"}>{runLabel}</Badge></span><details className="cron-details"><summary>Ver cron</summary><code>{automation.schedule}</code></details></div><div className="automation-row__end">{canUpdate ? <Switch checked={automation.enabled} disabled={actionId === automation.id} onChange={() => void toggle(automation)} label={automation.enabled ? "Activa" : "Pausada"} /> : null}<span className="automation-actions">{latestRun?.sessionLinkId ? <Button size="sm" variant="ghost" onClick={() => { selectSession(latestRun.sessionLinkId!); void navigate({ to: "/chats" }); }}>Abrir sesión</Button> : null}{canTrigger ? <Button size="sm" variant="ghost" leadingIcon={<Play />} disabled={actionId === automation.id} onClick={() => void trigger(automation)}>Ejecutar</Button> : null}{canUpdate ? <Button size="sm" variant="ghost" leadingIcon={<PencilSimple />} onClick={() => openEdit(automation)}>Editar</Button> : null}{canDelete ? <Button size="sm" variant="ghost" leadingIcon={<Trash />} disabled={actionId === automation.id} onClick={() => void remove(automation)}>Eliminar</Button> : null}</span></div></Panel>;
+          const runLabel = latestRun?.status === "completed" ? t("automationsPage.runSuccess") : latestRun?.status === "failed" ? t("automationsPage.runFailed") : latestRun ? t("automationsPage.runStatus", { status: latestRun.status }) : t("automationsPage.noRuns");
+          return <Panel key={automation.id} className="automation-row"><span className="automation-row__icon"><Lightning weight="duotone" /></span><div><strong>{automation.name}</strong><p>{describeCron(automation.schedule, automation.timezone, t)}</p><span><Badge>{profile?.displayName ?? automation.profileName ?? t("automationsPage.profile")}</Badge><Badge tone={latestRun?.status === "completed" ? "positive" : latestRun?.status === "failed" ? "warning" : "neutral"}>{runLabel}</Badge></span><details className="cron-details"><summary>{t("automationsPage.viewCron")}</summary><code>{automation.schedule}</code></details></div><div className="automation-row__end">{canUpdate ? <Switch checked={automation.enabled} disabled={actionId === automation.id} onChange={() => void toggle(automation)} label={automation.enabled ? t("automationsPage.enabled") : t("automationsPage.paused")} /> : null}<span className="automation-actions">{latestRun?.sessionLinkId ? <Button size="sm" variant="ghost" onClick={() => { selectSession(latestRun.sessionLinkId!); void navigate({ to: "/chats" }); }}>{t("automationsPage.openSession")}</Button> : null}{canTrigger ? <Button size="sm" variant="ghost" leadingIcon={<Play />} disabled={actionId === automation.id} onClick={() => void trigger(automation)}>{t("automationsPage.run")}</Button> : null}{canUpdate ? <Button size="sm" variant="ghost" leadingIcon={<PencilSimple />} onClick={() => openEdit(automation)}>{t("automationsPage.edit")}</Button> : null}{canDelete ? <Button size="sm" variant="ghost" leadingIcon={<Trash />} disabled={actionId === automation.id} onClick={() => void remove(automation)}>{t("automationsPage.remove")}</Button> : null}</span></div></Panel>;
         })}
       </div>
-      {editorOpen ? <div ref={editorDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="automation-editor-title"><button className="modal-scrim" aria-label="Cerrar editor" onClick={closeEditor} /><Panel className="form-modal automation-editor"><span className="eyebrow">Editor {advancedEditor ? "avanzado" : "simple"}</span><h2 id="automation-editor-title">{editing ? "Editar automatización" : "Nueva automatización"}</h2><p>{editing ? "Los cambios se aplicarán en Hermes después de validarlos." : "Se creará pausada para validar sus próximas ejecuciones antes de activarla."}</p><div className="editor-mode" role="group" aria-label="Modo del editor"><button type="button" className={!advancedEditor ? "is-active" : ""} aria-pressed={!advancedEditor} onClick={() => setAdvancedEditor(false)}>Simple</button><button type="button" className={advancedEditor ? "is-active" : ""} aria-pressed={advancedEditor} onClick={() => setAdvancedEditor(true)}>Cron avanzado</button></div><form onSubmit={save}>{!editing ? <fieldset className="automation-templates"><legend>Empezar con una plantilla</legend><div>{automationTemplates.map((template) => <button key={template.id} type="button" onClick={() => { setValue("name", template.name, { shouldValidate: true }); setValue("schedule", template.schedule, { shouldValidate: true }); setValue("prompt", template.prompt, { shouldValidate: true }); }}>{template.label}</button>)}</div></fieldset> : null}<Field label="Nombre" error={errors.name?.message} {...register("name")} /><label className="hc-field"><span>Perfil</span><select {...register("profileId")} disabled={Boolean(editing)}>{eligibleProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.displayName} · {profile.technicalName}</option>)}</select>{errors.profileId?.message ? <small className="hc-field__error">{errors.profileId.message}</small> : null}</label>{advancedEditor ? <Field label="Expresión cron · 5 campos" placeholder="30 8 * * FRI" error={errors.schedule?.message} {...register("schedule")} /> : <label className="hc-field"><span>Frecuencia</span><select value={watchedSchedule} onChange={(event) => setValue("schedule", event.target.value, { shouldValidate: true })}><option value="30 8 * * MON-FRI">Lunes a viernes · 08:30</option><option value="0 9 * * *">Todos los días · 09:00</option><option value="0 16 * * FRI">Cada viernes · 16:00</option>{!automationTemplates.some((template) => template.schedule === watchedSchedule) && watchedSchedule !== "0 9 * * *" ? <option value={watchedSchedule}>Horario personalizado actual</option> : null}</select>{errors.schedule?.message ? <small className="hc-field__error">{errors.schedule.message}</small> : null}</label>}<Field label="Zona horaria IANA" error={errors.timezone?.message} {...register("timezone")} /><output className="schedule-explanation" aria-live="polite"><Clock weight="duotone" /><span><strong>Así se ejecutará</strong>{describeCron(watchedSchedule, watchedTimezone)}</span></output><label className="hc-field"><span>Prompt</span><textarea rows={5} {...register("prompt")} />{errors.prompt?.message ? <small className="hc-field__error">{errors.prompt.message}</small> : null}</label>{submitError ? <p className="form-error" role="alert"><WarningCircle /> {submitError}</p> : null}<div><Button type="button" variant="ghost" onClick={closeEditor}>Cancelar</Button><Button type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? "Guardando…" : editing ? "Guardar cambios" : "Crear pausada"}</Button></div></form></Panel></div> : null}
+      {editorOpen ? <div ref={editorDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="automation-editor-title"><button className="modal-scrim" aria-label={t("automationsPage.closeEditor")} onClick={closeEditor} /><Panel className="form-modal automation-editor"><span className="eyebrow">{t("automationsPage.editor", { mode: advancedEditor ? t("automationsPage.advanced") : t("automationsPage.simple") })}</span><h2 id="automation-editor-title">{editing ? t("automationsPage.editTitle") : t("automationsPage.newTitle")}</h2><p>{editing ? t("automationsPage.editDescription") : t("automationsPage.newDescription")}</p><div className="editor-mode" role="group" aria-label={t("automationsPage.editorMode")}><button type="button" className={!advancedEditor ? "is-active" : ""} aria-pressed={!advancedEditor} onClick={() => setAdvancedEditor(false)}>{t("automationsPage.simple")}</button><button type="button" className={advancedEditor ? "is-active" : ""} aria-pressed={advancedEditor} onClick={() => setAdvancedEditor(true)}>{t("automationsPage.advancedCron")}</button></div><form onSubmit={save}>{!editing ? <fieldset className="automation-templates"><legend>{t("automationsPage.startTemplate")}</legend><div>{automationTemplates.map((template) => { const label = t(`automationsPage.templates.${template.translationKey}.label`); const prompt = t(`automationsPage.templates.${template.translationKey}.prompt`); return <button key={template.id} type="button" onClick={() => { setValue("name", label, { shouldValidate: true }); setValue("schedule", template.schedule, { shouldValidate: true }); setValue("prompt", prompt, { shouldValidate: true }); }}>{label}</button>; })}</div></fieldset> : null}<Field label={t("automationsPage.name")} error={errors.name?.message} {...register("name")} /><label className="hc-field"><span>{t("automationsPage.profile")}</span><select {...register("profileId")} disabled={Boolean(editing)}>{eligibleProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.displayName} · {profile.technicalName}</option>)}</select>{errors.profileId?.message ? <small className="hc-field__error">{errors.profileId.message}</small> : null}</label>{advancedEditor ? <Field label={t("automationsPage.cronExpression")} placeholder="30 8 * * FRI" error={errors.schedule?.message} {...register("schedule")} /> : <label className="hc-field"><span>{t("automationsPage.frequency")}</span><select value={watchedSchedule} onChange={(event) => setValue("schedule", event.target.value, { shouldValidate: true })}><option value="30 8 * * MON-FRI">{t("automationsPage.weekdays")}</option><option value="0 9 * * *">{t("automationsPage.daily")}</option><option value="0 16 * * FRI">{t("automationsPage.friday")}</option>{!automationTemplates.some((template) => template.schedule === watchedSchedule) && watchedSchedule !== "0 9 * * *" ? <option value={watchedSchedule}>{t("automationsPage.customSchedule")}</option> : null}</select>{errors.schedule?.message ? <small className="hc-field__error">{errors.schedule.message}</small> : null}</label>}<Field label={t("automationsPage.timezone")} error={errors.timezone?.message} {...register("timezone")} /><output className="schedule-explanation" aria-live="polite"><Clock weight="duotone" /><span><strong>{t("automationsPage.explanation")}</strong>{describeCron(watchedSchedule, watchedTimezone, t)}</span></output><label className="hc-field"><span>{t("automationsPage.prompt")}</span><textarea rows={5} {...register("prompt")} />{errors.prompt?.message ? <small className="hc-field__error">{errors.prompt.message}</small> : null}</label>{submitError ? <p className="form-error" role="alert"><WarningCircle /> {submitError}</p> : null}<div><Button type="button" variant="ghost" onClick={closeEditor}>{t("automationsPage.cancel")}</Button><Button type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? t("automationsPage.saving") : editing ? t("automationsPage.save") : t("automationsPage.createPaused")}</Button></div></form></Panel></div> : null}
     </div>
   );
 }
 
-const gatewaySchema = z.object({
-  name: z.string().min(2, "Escribe un nombre"),
-  restUrl: z.string().url("Usa una URL HTTP válida").refine((value) => value.startsWith("http://") || value.startsWith("https://"), "La URL debe comenzar con http:// o https://"),
-  wsUrl: z.string().url("Usa una URL WebSocket válida").refine((value) => value.startsWith("ws://") || value.startsWith("wss://"), "La URL debe comenzar con ws:// o wss://"),
-  apiUrl: z.string().url("Usa una URL válida").refine((value) => value.startsWith("http://") || value.startsWith("https://"), "La URL debe comenzar con http:// o https://").optional().or(z.literal("")),
-  dashboardToken: z.string().min(12, "La credencial debe tener al menos 12 caracteres").optional().or(z.literal("")),
-  apiKey: z.string().min(12, "La credencial debe tener al menos 12 caracteres").optional().or(z.literal("")),
-  trustedSourceSha: z.string().regex(/^[0-9a-fA-F]{40}$/, "Usa el SHA Git exacto de 40 caracteres hexadecimales").or(z.literal("")),
-});
-type GatewayValues = z.infer<typeof gatewaySchema>;
-const gatewayTrustSchema = z.object({
-  trustedSourceSha: z.string().regex(/^[0-9a-fA-F]{40}$/, "Usa el SHA Git exacto de 40 caracteres hexadecimales"),
-});
-type GatewayTrustValues = z.infer<typeof gatewayTrustSchema>;
+type GatewayValues = { name: string; restUrl: string; wsUrl: string; apiUrl: string; dashboardToken: string; apiKey: string; trustedSourceSha: string };
+type GatewayTrustValues = { trustedSourceSha: string };
 
 const emptyGatewayValues: GatewayValues = {
   name: "",
@@ -350,6 +340,19 @@ const emptyGatewayValues: GatewayValues = {
 };
 
 export function GatewaysScreen() {
+  const { t } = useTranslation();
+  const gatewaySchema = useMemo(() => z.object({
+    name: z.string().min(2, t("gatewaysPage.validationName")),
+    restUrl: z.string().url(t("gatewaysPage.validationHttp")).refine((value) => value.startsWith("http://") || value.startsWith("https://"), t("gatewaysPage.validationHttpPrefix")),
+    wsUrl: z.string().url(t("gatewaysPage.validationWs")).refine((value) => value.startsWith("ws://") || value.startsWith("wss://"), t("gatewaysPage.validationWsPrefix")),
+    apiUrl: z.string().url(t("gatewaysPage.validationUrl")).refine((value) => value.startsWith("http://") || value.startsWith("https://"), t("gatewaysPage.validationHttpPrefix")).optional().or(z.literal("")),
+    dashboardToken: z.string().min(12, t("gatewaysPage.validationCredential")).optional().or(z.literal("")),
+    apiKey: z.string().min(12, t("gatewaysPage.validationCredential")).optional().or(z.literal("")),
+    trustedSourceSha: z.string().regex(/^[0-9a-fA-F]{40}$/, t("gatewaysPage.validationSha")).or(z.literal("")),
+  }), [t]);
+  const gatewayTrustSchema = useMemo(() => z.object({
+    trustedSourceSha: z.string().regex(/^[0-9a-fA-F]{40}$/, t("gatewaysPage.validationSha")),
+  }), [t]);
   const [adding, setAdding] = useState(false);
   const [trustGateway, setTrustGateway] = useState<Gateway | null>(null);
   const [trustBusy, setTrustBusy] = useState(false);
@@ -419,7 +422,7 @@ export function GatewaysScreen() {
       completed = true;
     } catch {
       setConnection("degraded");
-      setSubmitError("No se pudo guardar el gateway. Las credenciales se descartaron; revisa la conexión e inténtalo de nuevo.");
+      setSubmitError(t("gatewaysPage.saveError"));
     } finally {
       // React Hook Form must not retain write-only credentials after any
       // attempt, including validation-safe server failures.
@@ -455,8 +458,8 @@ export function GatewaysScreen() {
       closeTrustForm();
     } catch {
       setTrustError(updated
-        ? "La confianza se actualizó, pero no se pudo refrescar el estado. Recarga la aplicación antes de operar."
-        : "No se pudo actualizar la confianza contractual. El gateway conserva su estado anterior.");
+        ? t("gatewaysPage.trustRefreshError")
+        : t("gatewaysPage.trustError"));
     } finally {
       // The operator assertion is write-only just like the gateway secrets.
       resetTrustField("trustedSourceSha", { defaultValue: "" });
@@ -469,18 +472,19 @@ export function GatewaysScreen() {
 
   return (
     <div className="page-wrap">
-      <PageHeader eyebrow="Infraestructura" title="Gateways" description="Conecta varios entornos sin revelar sus credenciales al resto de la interfaz." action={<Button variant="primary" leadingIcon={<Plus />} onClick={openForm} disabled={offline}>Añadir gateway</Button>} />
-      {saved === "connected" ? <div className="success-banner" role="status"><CheckCircle weight="fill" /> Gateway sincronizado. Los valores write-only no se conservaron en el navegador.</div> : null}
-      {saved === "degraded" ? <div className="success-banner success-banner--warning" role="status"><WarningCircle weight="fill" /> Gateway guardado, pero el probe de Hermes no respondió por completo. Revisa el diagnóstico antes de operar.</div> : null}
-      <div className="gateway-grid">{gateways.map((gateway) => <Panel key={gateway.id} className="gateway-card"><header><span><HardDrives weight="duotone" /></span><div><strong>{gateway.name}</strong><small>{gateway.location}</small></div><Badge tone={gateway.status === "connected" ? "positive" : "warning"}>{gateway.status === "connected" ? "Conectado" : "Degradado"}</Badge></header><div className="gateway-metrics"><span><strong>{gateway.latencyMs ?? "—"} ms</strong><small>latencia</small></span><span><strong>{gateway.version}</strong><small>Hermes</small></span><span><strong>{Object.values(gateway.capabilities).filter(Boolean).length}</strong><small>capacidades</small></span></div><p className="gateway-contract"><ShieldCheck weight="duotone" /><span><strong>{gateway.hasTrustedSourceSha ? "SHA confiable configurado" : "Solo lectura por defecto"}</strong><small>{gateway.hasTrustedSourceSha ? "El diagnóstico confirma por separado si el contrato coincide" : "Añade un SHA auditado para permitir la verificación contractual"}</small></span></p><footer><code>{gateway.sha ?? "SHA no reportado"}</code><span>{gateway.envManaged ? <small>Confianza gestionada por el backend</small> : <Button size="sm" variant="ghost" leadingIcon={<PencilSimple />} onClick={() => openTrustForm(gateway)} disabled={offline}>{gateway.hasTrustedSourceSha ? "Editar confianza" : "Configurar confianza"}</Button>}<Link to="/diagnostics">Diagnóstico <ArrowRight /></Link></span></footer></Panel>)}</div>
-      {adding ? <div ref={gatewayDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="gateway-form-title"><button className="modal-scrim" aria-label="Cerrar formulario" onClick={closeForm} /><Panel className="form-modal"><span className="eyebrow">Conexión privada</span><h2 id="gateway-form-title">Añadir gateway</h2><p>Las URLs, credenciales y cualquier SHA confiable se envían solo al backend. Los campos write-only se vacían inmediatamente.</p><form onSubmit={submit}><Field label="Nombre" placeholder="Servidor privado" error={errors.name?.message} {...register("name")} /><Field label="REST dashboard" type="url" placeholder="URL REST privada" error={errors.restUrl?.message} {...register("restUrl")} /><Field label="WebSocket dashboard" type="url" placeholder="URL WebSocket privada" error={errors.wsUrl?.message} {...register("wsUrl")} /><Field label="API fallback (opcional)" type="url" placeholder="URL API privada" error={errors.apiUrl?.message} {...register("apiUrl")} /><Field label="Token dashboard (solo escritura)" type="password" autoComplete="new-password" error={errors.dashboardToken?.message} {...register("dashboardToken")} /><Field label="API key fallback (solo escritura)" type="password" autoComplete="new-password" error={errors.apiKey?.message} {...register("apiKey")} /><Field label="SHA fuente confiable (solo escritura, opcional)" type="password" autoComplete="new-password" placeholder="40 caracteres hexadecimales" error={errors.trustedSourceSha?.message} {...register("trustedSourceSha")} /><p className="form-hint"><ShieldCheck /> Déjalo vacío para crear el gateway en modo seguro de solo lectura. No se confía en el SHA que Hermes anuncie por sí mismo.</p>{submitError ? <p className="form-error" role="alert"><WarningCircle /> {submitError}</p> : null}<div><Button type="button" variant="ghost" onClick={closeForm}>Cancelar</Button><Button type="submit" variant="primary" disabled={isSubmitting}>Guardar cifrado</Button></div></form></Panel></div> : null}
-      {trustGateway ? <div ref={trustDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="gateway-trust-title"><button className="modal-scrim" aria-label="Cerrar confianza" onClick={closeTrustForm} /><Panel className="form-modal"><span className="eyebrow">Contrato Hermes</span><h2 id="gateway-trust-title">Confianza de {trustGateway.name}</h2><p>Introduce solo un SHA Git que hayas verificado fuera de Agent Control. El backend lo usa para comparar el contrato auditado y nunca lo devuelve al navegador.</p><div className="form-hint" role="status"><ShieldCheck /><span><strong>{trustGateway.hasTrustedSourceSha ? "Hay un SHA confiable configurado" : "Gateway en solo lectura"}</strong><br />El valor actual permanece oculto; escribir uno nuevo lo reemplaza.</span></div><form onSubmit={saveTrust}><Field label="Nuevo SHA confiable (solo escritura)" type="password" autoComplete="new-password" placeholder="40 caracteres hexadecimales" error={trustErrors.trustedSourceSha?.message} {...registerTrust("trustedSourceSha")} />{trustError ? <p className="form-error" role="alert"><WarningCircle /> {trustError}</p> : null}<div><Button type="button" variant="ghost" onClick={closeTrustForm} disabled={trustBusy}>Cancelar</Button>{trustGateway.hasTrustedSourceSha ? <Button type="button" variant="danger" onClick={() => void applyTrust(null)} disabled={trustBusy}>Volver a solo lectura</Button> : null}<Button type="submit" variant="primary" disabled={trustBusy}>{trustBusy ? "Verificando…" : "Guardar y comprobar"}</Button></div></form></Panel></div> : null}
+      <PageHeader eyebrow={t("gatewaysPage.eyebrow")} title={t("gatewaysPage.title")} description={t("gatewaysPage.description")} action={<Button variant="primary" leadingIcon={<Plus />} onClick={openForm} disabled={offline}>{t("gatewaysPage.add")}</Button>} />
+      {saved === "connected" ? <div className="success-banner" role="status"><CheckCircle weight="fill" /> {t("gatewaysPage.synced")}</div> : null}
+      {saved === "degraded" ? <div className="success-banner success-banner--warning" role="status"><WarningCircle weight="fill" /> {t("gatewaysPage.degradedSaved")}</div> : null}
+      <div className="gateway-grid">{gateways.map((gateway) => <Panel key={gateway.id} className="gateway-card"><header><span><HardDrives weight="duotone" /></span><div><strong>{gateway.name}</strong><small>{gateway.location}</small></div><Badge tone={gateway.status === "connected" ? "positive" : "warning"}>{gateway.status === "connected" ? t("gatewaysPage.connected") : t("gatewaysPage.degraded")}</Badge></header><div className="gateway-metrics"><span><strong>{gateway.latencyMs ?? "—"} ms</strong><small>{t("gatewaysPage.latency")}</small></span><span><strong>{gateway.version}</strong><small>Hermes</small></span><span><strong>{Object.values(gateway.capabilities).filter(Boolean).length}</strong><small>{t("gatewaysPage.capabilities")}</small></span></div><p className="gateway-contract"><ShieldCheck weight="duotone" /><span><strong>{gateway.hasTrustedSourceSha ? t("gatewaysPage.trustedSha") : t("gatewaysPage.readOnly")}</strong><small>{gateway.hasTrustedSourceSha ? t("gatewaysPage.contractMatches") : t("gatewaysPage.addAuditedSha")}</small></span></p><footer><code>{gateway.sha ?? t("gatewaysPage.shaMissing")}</code><span>{gateway.envManaged ? <small>{t("gatewaysPage.backendTrust")}</small> : <Button size="sm" variant="ghost" leadingIcon={<PencilSimple />} onClick={() => openTrustForm(gateway)} disabled={offline}>{gateway.hasTrustedSourceSha ? t("gatewaysPage.editTrust") : t("gatewaysPage.configureTrust")}</Button>}<Link to="/diagnostics">{t("gatewaysPage.diagnostics")} <ArrowRight /></Link></span></footer></Panel>)}</div>
+      {adding ? <div ref={gatewayDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="gateway-form-title"><button className="modal-scrim" aria-label={t("gatewaysPage.closeForm")} onClick={closeForm} /><Panel className="form-modal"><span className="eyebrow">{t("gatewaysPage.privateConnection")}</span><h2 id="gateway-form-title">{t("gatewaysPage.addTitle")}</h2><p>{t("gatewaysPage.addDescription")}</p><form onSubmit={submit}><Field label={t("gatewaysPage.name")} placeholder={t("gatewaysPage.privateServer")} error={errors.name?.message} {...register("name")} /><Field label={t("gatewaysPage.restUrl")} type="url" placeholder={t("gatewaysPage.privateRest")} error={errors.restUrl?.message} {...register("restUrl")} /><Field label={t("gatewaysPage.wsUrl")} type="url" placeholder={t("gatewaysPage.privateWs")} error={errors.wsUrl?.message} {...register("wsUrl")} /><Field label={t("gatewaysPage.apiFallback")} type="url" placeholder={t("gatewaysPage.privateApi")} error={errors.apiUrl?.message} {...register("apiUrl")} /><Field label={t("gatewaysPage.dashboardToken")} type="password" autoComplete="new-password" error={errors.dashboardToken?.message} {...register("dashboardToken")} /><Field label={t("gatewaysPage.apiKey")} type="password" autoComplete="new-password" error={errors.apiKey?.message} {...register("apiKey")} /><Field label={t("gatewaysPage.sourceSha")} type="password" autoComplete="new-password" placeholder={t("gatewaysPage.shaPlaceholder")} error={errors.trustedSourceSha?.message} {...register("trustedSourceSha")} /><p className="form-hint"><ShieldCheck /> {t("gatewaysPage.safeHint")}</p>{submitError ? <p className="form-error" role="alert"><WarningCircle /> {submitError}</p> : null}<div><Button type="button" variant="ghost" onClick={closeForm}>{t("gatewaysPage.cancel")}</Button><Button type="submit" variant="primary" disabled={isSubmitting}>{t("gatewaysPage.saveEncrypted")}</Button></div></form></Panel></div> : null}
+      {trustGateway ? <div ref={trustDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="gateway-trust-title"><button className="modal-scrim" aria-label={t("gatewaysPage.closeTrust")} onClick={closeTrustForm} /><Panel className="form-modal"><span className="eyebrow">{t("gatewaysPage.contract")}</span><h2 id="gateway-trust-title">{t("gatewaysPage.trustTitle", { name: trustGateway.name })}</h2><p>{t("gatewaysPage.trustDescription")}</p><div className="form-hint" role="status"><ShieldCheck /><span><strong>{trustGateway.hasTrustedSourceSha ? t("gatewaysPage.trustConfigured") : t("gatewaysPage.gatewayReadOnly")}</strong><br />{t("gatewaysPage.trustHidden")}</span></div><form onSubmit={saveTrust}><Field label={t("gatewaysPage.newTrustedSha")} type="password" autoComplete="new-password" placeholder={t("gatewaysPage.shaPlaceholder")} error={trustErrors.trustedSourceSha?.message} {...registerTrust("trustedSourceSha")} />{trustError ? <p className="form-error" role="alert"><WarningCircle /> {trustError}</p> : null}<div><Button type="button" variant="ghost" onClick={closeTrustForm} disabled={trustBusy}>{t("gatewaysPage.cancel")}</Button>{trustGateway.hasTrustedSourceSha ? <Button type="button" variant="danger" onClick={() => void applyTrust(null)} disabled={trustBusy}>{t("gatewaysPage.resetReadOnly")}</Button> : null}<Button type="submit" variant="primary" disabled={trustBusy}>{trustBusy ? t("gatewaysPage.verifying") : t("gatewaysPage.saveVerify")}</Button></div></form></Panel></div> : null}
     </div>
   );
 }
 
 export function ConfigScreen() {
-  return <AdminConfigScreen header={<PageHeader eyebrow="Administración" title="Configuración de Hermes" description="Interfaz sobre la infraestructura existente: cada control llama al contrato oficial verificado del perfil seleccionado." />} />;
+  const { t } = useTranslation();
+  return <AdminConfigScreen header={<PageHeader eyebrow={t("configPage.eyebrow")} title={t("configPage.title")} description={t("configPage.description")} />} />;
 }
 
 export function diagnosticIsOperational(
@@ -495,6 +499,7 @@ export function diagnosticIsOperational(
 }
 
 export function DiagnosticsScreen() {
+  const { t } = useTranslation();
   const gatewayId = useAppStore((state) => state.selectedGatewayId);
   const profileId = useAppStore((state) => state.selectedProfileId);
   const connection = useAppStore((state) => state.connection);
@@ -508,9 +513,21 @@ export function DiagnosticsScreen() {
     const interval = window.setInterval(refresh, 15_000);
     return () => { active = false; window.clearInterval(interval); };
   }, []);
-  const capabilityLabels: Array<[keyof NonNullable<typeof gateway>["capabilities"], string]> = [["realtime", "Realtime RPC"], ["sessions", "Sesiones persistentes"], ["interrupt", "Interrupción"], ["cron", "Cron"], ["profiles", "Perfiles"], ["config", "Configuración"], ["memory", "Memoria"]];
+  const capabilityLabels: Array<[keyof NonNullable<typeof gateway>["capabilities"], string]> = [["realtime", "Realtime RPC"], ["sessions", t("diagnosticsPage.sessions")], ["interrupt", t("diagnosticsPage.interrupt")], ["cron", "Cron"], ["profiles", t("diagnosticsPage.profiles")], ["config", t("diagnosticsPage.configuration")], ["memory", t("diagnosticsPage.memory")]];
   const capabilities = profile?.capabilities ?? gateway?.capabilities;
   const healthy = diagnosticIsOperational(connection, gateway?.status, readiness);
+  const statusText = (value: string | undefined) => {
+    if (!value) return t("diagnosticsPage.checking");
+    if (value === "ready") return t("diagnosticsPage.ready");
+    if (value === "unavailable") return t("diagnosticsPage.unavailable");
+    if (value === "connected") return t("connected");
+    if (value === "online") return t("diagnosticsPage.operationalBadge");
+    if (value === "offline") return t("offline");
+    if (value === "degraded" || value === "not_ready") return t("diagnosticsPage.degraded");
+    if (value === "unknown") return t("diagnosticsPage.unknown");
+    if (value === "reconnecting") return t("reconnecting");
+    return value;
+  };
   const exportReport = () => {
     const payload = {
       generatedAt: new Date().toISOString(),
@@ -522,14 +539,15 @@ export function DiagnosticsScreen() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `hermes-control-diagnostico-${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `agent-control-diagnostics-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
   };
-  return <div className="page-wrap"><PageHeader eyebrow="Estado técnico" title="Diagnóstico" description="Comprueba salud, compatibilidad y transporte sin revelar valores sensibles." action={<Button leadingIcon={<DownloadSimple />} onClick={exportReport}>Exportar reporte saneado</Button>} /><div className="health-hero"><span className="health-hero__icon"><CloudCheck weight="duotone" /></span><div><span className="eyebrow">Estado global</span><h2>{healthy ? "Conexión operativa" : "Conexión degradada"}</h2><p>{gateway?.name ?? "Sin gateway seleccionado"} · {profile?.displayName ?? "sin perfil"}</p></div><Badge tone={healthy ? "positive" : "warning"}>{healthy ? "Operativo" : "Revisar"}</Badge></div><div className="diagnostic-grid"><Panel><header><Pulse /><strong>Conectividad</strong></header><dl><div><dt>Control API</dt><dd><StatusDot tone={readiness?.status === "ready" ? "positive" : "warning"} /> {readiness?.status === "ready" ? "Listo" : readiness ? "No disponible" : "Comprobando"}</dd></div><div><dt>Base local</dt><dd><StatusDot tone={readiness?.database === "ready" ? "positive" : "warning"} /> {readiness?.database ?? "comprobando"}</dd></div><div><dt>Hermes (último probe)</dt><dd><StatusDot tone={readiness?.upstream === "online" ? "positive" : "warning"} /> {readiness?.upstream ?? "comprobando"}</dd></div><div><dt>Gateway</dt><dd><StatusDot tone={gateway?.status === "connected" ? "positive" : "warning"} /> {gateway?.status ?? "desconocido"}</dd></div><div><dt>Realtime</dt><dd><StatusDot tone={connection === "connected" ? "positive" : "warning"} /> {connection}</dd></div></dl></Panel><Panel><header><Code /><strong>Compatibilidad</strong></header><dl><div><dt>Versión detectada</dt><dd>{gateway?.version ?? "desconocida"}</dd></div><div><dt>SHA</dt><dd><code>{gateway?.sha ?? "desconocido"}</code></dd></div><div><dt>Contrato</dt><dd>{capabilities?.realtime ? "dashboard-jsonrpc" : "sin verificar"}</dd></div></dl></Panel></div><Panel className="capability-table"><header><Gauge /><strong>Matriz de capacidades</strong></header><div>{capabilityLabels.map(([key, label]) => <span key={key}>{capabilities?.[key] ? <CheckCircle weight="fill" /> : <WarningCircle />}<strong>{label}</strong><small>{capabilities?.[key] ? "Verificado" : "No anunciado"}</small></span>)}</div></Panel><Panel className="log-preview"><header><TerminalWindow /><strong>Datos técnicos saneados</strong><Badge>sin secretos</Badge></header><pre><code>control={readiness?.status ?? "checking"}{"\n"}database={readiness?.database ?? "checking"}{"\n"}upstream={readiness?.upstream ?? "checking"}{"\n"}gateway={gateway?.name ?? "none"}{"\n"}profile={profile?.technicalName ?? "none"}{"\n"}version={gateway?.version ?? "unknown"}{"\n"}sha={gateway?.sha ?? "unknown"}</code></pre></Panel></div>;
+  return <div className="page-wrap"><PageHeader eyebrow={t("diagnosticsPage.eyebrow")} title={t("diagnosticsPage.title")} description={t("diagnosticsPage.description")} action={<Button leadingIcon={<DownloadSimple />} onClick={exportReport}>{t("diagnosticsPage.export")}</Button>} /><div className="health-hero"><span className="health-hero__icon"><CloudCheck weight="duotone" /></span><div><span className="eyebrow">{t("diagnosticsPage.global")}</span><h2>{healthy ? t("diagnosticsPage.operational") : t("diagnosticsPage.degraded")}</h2><p>{gateway?.name ?? t("diagnosticsPage.noGateway")} · {profile?.displayName ?? t("diagnosticsPage.noProfile")}</p></div><Badge tone={healthy ? "positive" : "warning"}>{healthy ? t("diagnosticsPage.operationalBadge") : t("diagnosticsPage.review")}</Badge></div><div className="diagnostic-grid"><Panel><header><Pulse /><strong>{t("diagnosticsPage.connectivity")}</strong></header><dl><div><dt>Control API</dt><dd><StatusDot tone={readiness?.status === "ready" ? "positive" : "warning"} /> {readiness?.status === "ready" ? t("diagnosticsPage.ready") : readiness ? t("diagnosticsPage.unavailable") : t("diagnosticsPage.checking")}</dd></div><div><dt>{t("diagnosticsPage.localDatabase")}</dt><dd><StatusDot tone={readiness?.database === "ready" ? "positive" : "warning"} /> {statusText(readiness?.database)}</dd></div><div><dt>{t("diagnosticsPage.lastProbe")}</dt><dd><StatusDot tone={readiness?.upstream === "online" ? "positive" : "warning"} /> {statusText(readiness?.upstream)}</dd></div><div><dt>Gateway</dt><dd><StatusDot tone={gateway?.status === "connected" ? "positive" : "warning"} /> {statusText(gateway?.status)}</dd></div><div><dt>Realtime</dt><dd><StatusDot tone={connection === "connected" ? "positive" : "warning"} /> {statusText(connection)}</dd></div></dl></Panel><Panel><header><Code /><strong>{t("diagnosticsPage.compatibility")}</strong></header><dl><div><dt>{t("diagnosticsPage.detectedVersion")}</dt><dd>{gateway?.version ?? t("diagnosticsPage.unknown")}</dd></div><div><dt>SHA</dt><dd><code>{gateway?.sha ?? t("diagnosticsPage.unknown")}</code></dd></div><div><dt>{t("diagnosticsPage.contract")}</dt><dd>{capabilities?.realtime ? "dashboard-jsonrpc" : t("diagnosticsPage.unverified")}</dd></div></dl></Panel></div><Panel className="capability-table"><header><Gauge /><strong>{t("diagnosticsPage.matrix")}</strong></header><div>{capabilityLabels.map(([key, label]) => <span key={key}>{capabilities?.[key] ? <CheckCircle weight="fill" /> : <WarningCircle />}<strong>{label}</strong><small>{capabilities?.[key] ? t("diagnosticsPage.verified") : t("diagnosticsPage.unannounced")}</small></span>)}</div></Panel><Panel className="log-preview"><header><TerminalWindow /><strong>{t("diagnosticsPage.sanitized")}</strong><Badge>{t("diagnosticsPage.noSecrets")}</Badge></header><pre><code>control={readiness?.status ?? "checking"}{"\n"}database={readiness?.database ?? "checking"}{"\n"}upstream={readiness?.upstream ?? "checking"}{"\n"}gateway={gateway?.name ?? "none"}{"\n"}profile={profile?.technicalName ?? "none"}{"\n"}version={gateway?.version ?? "unknown"}{"\n"}sha={gateway?.sha ?? "unknown"}</code></pre></Panel></div>;
 }
 
 export function SearchScreen() {
+  const { t, i18n: translation } = useTranslation();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | SearchResult["kind"]>("all");
   const [remoteResults, setRemoteResults] = useState<SearchResult[]>([]);
@@ -547,11 +565,12 @@ export function SearchScreen() {
   const profiles = useAppStore((state) => state.profiles);
   const selectSession = useAppStore((state) => state.selectSession);
   const selectWorkspace = useAppStore((state) => state.selectWorkspace);
-  const allResults = useMemo(() => buildSearchResults({ sessions, workspaces, automations, messages, profiles }), [automations, messages, profiles, sessions, workspaces]);
+  const allResults = useMemo(() => buildSearchResults({ sessions, workspaces, automations, messages, profiles }, t), [automations, messages, profiles, sessions, t, workspaces]);
   const localResults = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase("es");
-    return allResults.filter((result) => (filter === "all" || result.kind === filter) && (!needle || `${result.title} ${result.excerpt} ${result.meta}`.toLocaleLowerCase("es").includes(needle)));
-  }, [allResults, filter, query]);
+    const locale = translation.resolvedLanguage ?? translation.language;
+    const needle = query.trim().toLocaleLowerCase(locale);
+    return allResults.filter((result) => (filter === "all" || result.kind === filter) && (!needle || `${result.title} ${result.excerpt} ${result.meta}`.toLocaleLowerCase(locale).includes(needle)));
+  }, [allResults, filter, query, translation.language, translation.resolvedLanguage]);
   const useLocalSearch = demoMode || authState !== "authenticated";
   useEffect(() => {
     const normalized = query.trim();
@@ -575,7 +594,7 @@ export function SearchScreen() {
           if (controller.signal.aborted) return;
           setRemoteResults([]);
           setPartial(false);
-          setSearchError(error instanceof Error ? error.message : "No se pudo consultar Hermes.");
+          setSearchError(error instanceof Error ? error.message : t("searchPage.queryError"));
         })
         .finally(() => {
           if (!controller.signal.aborted) setLoading(false);
@@ -585,7 +604,7 @@ export function SearchScreen() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [filter, query, useLocalSearch]);
+  }, [filter, query, t, useLocalSearch]);
   const results = useLocalSearch ? localResults : remoteResults;
   const virtualizer = useVirtualizer({ count: results.length, getScrollElement: () => viewportRef.current, estimateSize: () => 84, overscan: 6 });
   const openResult = (result: SearchResult) => {
@@ -594,16 +613,18 @@ export function SearchScreen() {
     else if (result.targetId) selectSession(result.targetId);
     void navigate({ to: "/chats" });
   };
-  const filters: Array<[typeof filter, string]> = [["all", "Todo"], ["message", "Mensajes"], ["session", "Sesiones"], ["workspace", "Workspaces"], ["automation", "Automatizaciones"]];
+  const filters: Array<[typeof filter, string]> = [["all", t("searchPage.all")], ["message", t("searchPage.messages")], ["session", t("searchPage.sessions")], ["workspace", t("searchPage.workspaces")], ["automation", t("searchPage.automations")]];
   const emptyCopy = query.trim().length < 2
-    ? "Escribe al menos dos caracteres para buscar en Hermes."
+    ? t("searchPage.minChars")
     : loading
-      ? "Consultando el índice de Hermes…"
-      : searchError || "No hay coincidencias.";
-  return <div className="page-wrap search-page"><PageHeader eyebrow="Historial" title="Búsqueda global" description="Consulta el índice de mensajes de Hermes y la organización local de Control." /><label className="search-box"><MagnifyingGlass /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por tema, agente o fecha…" /><kbd>⌘ K</kbd></label><div className="search-filters">{filters.map(([value, label]) => <button key={value} type="button" aria-pressed={filter === value} className={filter === value ? "is-active" : ""} onClick={() => setFilter(value)}>{label}</button>)}</div>{partial ? <p className="form-warning" role="status"><WarningCircle /> Resultados parciales: una conexión Hermes no respondió.</p> : null}<div className="virtual-results" ref={viewportRef} aria-busy={loading}><div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>{virtualizer.getVirtualItems().map((row) => { const result = results[row.index]; return <button key={result.id} type="button" className="search-result" style={{ transform: `translateY(${row.start}px)`, height: row.size }} onClick={() => openResult(result)}><span className="search-result__icon">{result.kind === "automation" ? <Lightning /> : result.kind === "workspace" ? <FolderOpen /> : <FileText />}</span><span><strong>{result.title}</strong><small>{result.excerpt}</small></span><span className="search-result__meta">{result.meta}<ArrowRight /></span></button>; })}</div>{results.length === 0 ? <p className="empty-state" role="status">{emptyCopy}</p> : null}</div></div>;
+      ? t("searchPage.loading")
+      : searchError || t("searchPage.noMatches");
+  return <div className="page-wrap search-page"><PageHeader eyebrow={t("searchPage.eyebrow")} title={t("searchPage.title")} description={t("searchPage.description")} /><label className="search-box"><MagnifyingGlass /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("searchPage.placeholder")} /><kbd>⌘ K</kbd></label><div className="search-filters">{filters.map(([value, label]) => <button key={value} type="button" aria-pressed={filter === value} className={filter === value ? "is-active" : ""} onClick={() => setFilter(value)}>{label}</button>)}</div>{partial ? <p className="form-warning" role="status"><WarningCircle /> {t("searchPage.partial")}</p> : null}<div className="virtual-results" ref={viewportRef} aria-busy={loading}><div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>{virtualizer.getVirtualItems().map((row) => { const result = results[row.index]; return <button key={result.id} type="button" className="search-result" style={{ transform: `translateY(${row.start}px)`, height: row.size }} onClick={() => openResult(result)}><span className="search-result__icon">{result.kind === "automation" ? <Lightning /> : result.kind === "workspace" ? <FolderOpen /> : <FileText />}</span><span><strong>{result.title}</strong><small>{result.excerpt}</small></span><span className="search-result__meta">{result.meta}<ArrowRight /></span></button>; })}</div>{results.length === 0 ? <p className="empty-state" role="status">{emptyCopy}</p> : null}</div></div>;
 }
 
 export function SettingsScreen() {
+  const { t } = useTranslation();
+  const { language, changeLanguage, languageOptions } = useLanguagePreference();
   const theme = useAppStore((state) => state.theme);
   const setTheme = useAppStore((state) => state.setTheme);
   const cacheEnabled = useAppStore((state) => state.offlineCacheEnabled);
@@ -624,23 +645,24 @@ export function SettingsScreen() {
     await clearPrivateCache().catch(() => undefined);
     resetPrivateState();
   };
-  return <div className="page-wrap"><PageHeader eyebrow="Preferencias" title="Ajustes" description="Personaliza esta instalación sin guardar secretos en el dispositivo." /><div className="settings-layout"><Panel className="settings-section"><header><SlidersHorizontal /><div><strong>Apariencia</strong><p>El tema oscuro coincide con la experiencia móvil aprobada.</p></div></header><div className="theme-grid">{(["dark", "light", "auto"] as ThemePreference[]).map((option) => <button type="button" key={option} className={theme === option ? "is-active" : ""} onClick={() => setThemePreference(option)}><span className={`theme-preview theme-preview--${option}`}><i /><i /><i /></span><strong>{option === "dark" ? "Oscuro" : option === "light" ? "Claro" : "Automático"}</strong></button>)}</div></Panel><Panel className="settings-section"><header><Database /><div><strong>Disponibilidad sin conexión</strong><p>Solo shell, borradores y una caché cifrada opcional; nunca se reenvían mensajes en segundo plano.</p></div></header><Switch checked={cacheEnabled} onChange={changeCache} label="Caché cifrada del último workspace" description="Máximo 200 elementos, 10 MB y 7 días; sin adjuntos." /><Button variant="ghost" onClick={() => void clearPrivateCache()}>Borrar datos locales</Button></Panel><Panel className="settings-section"><header><UserCircle /><div><strong>Sesión</strong><p>{userName} · autenticación por cookie HttpOnly</p></div></header><Button variant="danger" disabled={loggingOut} onClick={() => void logout()}>{loggingOut ? "Cerrando…" : "Cerrar sesión en este dispositivo"}</Button></Panel></div></div>;
+  return <div className="page-wrap"><PageHeader eyebrow={t("settingsPage.eyebrow")} title={t("settingsPage.title")} description={t("settingsPage.description")} /><div className="settings-layout"><Panel className="settings-section"><header><Translate /><div><strong>{t("settingsPage.language")}</strong><p>{t("settingsPage.languageDescription")}</p></div></header><label className="hc-field"><span>{t("settingsPage.languageLabel")}</span><select value={language} onChange={(event) => void changeLanguage(event.target.value as typeof language)}>{languageOptions.map((option) => <option key={option.code} value={option.code}>{option.nativeName}</option>)}</select></label></Panel><Panel className="settings-section"><header><SlidersHorizontal /><div><strong>{t("settingsPage.appearance")}</strong><p>{t("settingsPage.appearanceDescription")}</p></div></header><div className="theme-grid">{(["dark", "light", "auto"] as ThemePreference[]).map((option) => <button type="button" key={option} className={theme === option ? "is-active" : ""} onClick={() => setThemePreference(option)}><span className={`theme-preview theme-preview--${option}`}><i /><i /><i /></span><strong>{option === "dark" ? t("settingsPage.dark") : option === "light" ? t("settingsPage.light") : t("settingsPage.auto")}</strong></button>)}</div></Panel><Panel className="settings-section"><header><Database /><div><strong>{t("settingsPage.offline")}</strong><p>{t("settingsPage.offlineDescription")}</p></div></header><Switch checked={cacheEnabled} onChange={changeCache} label={t("settingsPage.encryptedCache")} description={t("settingsPage.cacheLimits")} /><Button variant="ghost" onClick={() => void clearPrivateCache()}>{t("settingsPage.clearLocal")}</Button></Panel><Panel className="settings-section"><header><UserCircle /><div><strong>{t("settingsPage.session")}</strong><p>{t("settingsPage.cookieAuth", { user: userName })}</p></div></header><Button variant="danger" disabled={loggingOut} onClick={() => void logout()}>{loggingOut ? t("settingsPage.loggingOut") : t("settingsPage.logout")}</Button></Panel></div></div>;
 }
 
-const moreItems = [
-  { to: "/search", title: "Búsqueda global", description: "Sesiones, mensajes y automatizaciones", icon: MagnifyingGlass },
-  { to: "/gateways", title: "Gateways", description: "Conexiones y capacidades", icon: HardDrives },
-  { to: "/config", title: "Configuración", description: "Modelos, memoria, tools y MCP", icon: GearSix },
-  { to: "/diagnostics", title: "Diagnóstico", description: "Salud, versiones y replay", icon: Pulse },
-  { to: "/admin", title: "Seguridad", description: "Acceso, auditoría y respaldos", icon: ShieldCheck },
-  { to: "/settings", title: "Preferencias", description: "Tema y datos offline", icon: SlidersHorizontal },
-] as const;
-
 export function MoreScreen() {
-  return <div className="page-wrap"><PageHeader eyebrow="Centro de control" title="Más" description="Administración y herramientas avanzadas, fuera del flujo principal de chat." /><div className="more-grid">{moreItems.map(({ to, title, description, icon: Icon }) => <Link key={to} to={to}><span><Icon weight="duotone" /></span><div><strong>{title}</strong><small>{description}</small></div><ArrowRight /></Link>)}</div><Panel className="about-panel"><BrandMark size="md" /><div><strong>Agent Control</strong><p>Interfaz segura y móvil para tu infraestructura de agentes.</p></div><Badge>v0.1.0</Badge></Panel></div>;
+  const { t } = useTranslation();
+  const moreItems = [
+    { to: "/search", title: t("morePage.search"), description: t("morePage.searchDescription"), icon: MagnifyingGlass },
+    { to: "/gateways", title: t("morePage.gateways"), description: t("morePage.gatewaysDescription"), icon: HardDrives },
+    { to: "/config", title: t("morePage.config"), description: t("morePage.configDescription"), icon: GearSix },
+    { to: "/diagnostics", title: t("morePage.diagnostics"), description: t("morePage.diagnosticsDescription"), icon: Pulse },
+    { to: "/admin", title: t("morePage.security"), description: t("morePage.securityDescription"), icon: ShieldCheck },
+    { to: "/settings", title: t("morePage.preferences"), description: t("morePage.preferencesDescription"), icon: SlidersHorizontal },
+  ] as const;
+  return <div className="page-wrap"><PageHeader eyebrow={t("morePage.eyebrow")} title={t("morePage.title")} description={t("morePage.description")} /><div className="more-grid">{moreItems.map(({ to, title, description, icon: Icon }) => <Link key={to} to={to}><span><Icon weight="duotone" /></span><div><strong>{title}</strong><small>{description}</small></div><ArrowRight /></Link>)}</div><Panel className="about-panel"><BrandMark size="md" /><div><strong>Agent Control</strong><p>{t("morePage.about")}</p></div><Badge>v0.1.0</Badge></Panel></div>;
 }
 
 export function AdminScreen() {
+  const { t, i18n: translation } = useTranslation();
   const offline = useAppStore((state) => state.authState === "offline");
   const [auditEvents, setAuditEvents] = useState<Awaited<ReturnType<typeof api.audit>>>([]);
   const [auditOpen, setAuditOpen] = useState(false);
@@ -659,7 +681,7 @@ export function AdminScreen() {
     try {
       setAuditEvents(await api.audit());
     } catch {
-      setAuditError("No se pudo cargar la auditoría saneada.");
+      setAuditError(t("adminPage.loadError"));
     } finally {
       setAuditBusy(false);
     }
@@ -667,19 +689,19 @@ export function AdminScreen() {
 
   return (
     <div className="page-wrap">
-      <PageHeader eyebrow="Administración" title="Seguridad y operación" description="Controles locales para acceso, auditoría, respaldo y recuperación." />
+      <PageHeader eyebrow={t("adminPage.eyebrow")} title={t("adminPage.title")} description={t("adminPage.description")} />
       <div className="admin-grid">
-        <Panel><ShieldCheck weight="duotone" /><h2>Conversaciones protegidas</h2><p>Cookies HttpOnly, SameSite estricto, CSRF y validación de origen.</p><a href="/chats" className="hc-button hc-button--ghost hc-button--md">Abrir conversaciones</a></Panel>
-        <Panel><Key weight="duotone" /><h2>Vault cifrado</h2><p>AES-GCM con una clave maestra que permanece fuera de la base de datos.</p><Badge tone="positive">Configurado en backend</Badge></Panel>
-        <Panel><Database weight="duotone" /><h2>Backup y restore</h2><p>SQLite y clave maestra se respaldan por canales separados.</p><code className="runbook-reference">docs/operations/backup-restore.md</code></Panel>
-        <Panel><FileText weight="duotone" /><h2>Auditoría</h2><p>Acciones sensibles registradas con datos técnicos saneados.</p><Button variant="ghost" onClick={() => void toggleAudit()} disabled={offline}>{auditOpen ? "Cerrar eventos" : "Abrir eventos"}</Button></Panel>
+        <Panel><ShieldCheck weight="duotone" /><h2>{t("adminPage.protectedTitle")}</h2><p>{t("adminPage.protectedBody")}</p><a href="/chats" className="hc-button hc-button--ghost hc-button--md">{t("adminPage.openChats")}</a></Panel>
+        <Panel><Key weight="duotone" /><h2>{t("adminPage.vaultTitle")}</h2><p>{t("adminPage.vaultBody")}</p><Badge tone="positive">{t("adminPage.backendConfigured")}</Badge></Panel>
+        <Panel><Database weight="duotone" /><h2>{t("adminPage.backupTitle")}</h2><p>{t("adminPage.backupBody")}</p><code className="runbook-reference">docs/operations/backup-restore.md</code></Panel>
+        <Panel><FileText weight="duotone" /><h2>{t("adminPage.auditTitle")}</h2><p>{t("adminPage.auditBody")}</p><Button variant="ghost" onClick={() => void toggleAudit()} disabled={offline}>{auditOpen ? t("adminPage.closeEvents") : t("adminPage.openEvents")}</Button></Panel>
       </div>
       {auditOpen ? (
         <Panel className="audit-panel" aria-live="polite">
-          <header><div><span className="eyebrow">Registro local de Control</span><h2>Eventos recientes</h2></div><Badge>{auditEvents.length}</Badge></header>
-          {auditBusy ? <p>Cargando eventos…</p> : auditError ? <p className="form-error" role="alert"><WarningCircle /> {auditError}</p> : auditEvents.length ? (
-            <ol>{auditEvents.map((event) => <li key={event.id}><span><strong>{event.action}</strong><small>{event.targetType ?? "control"}{event.targetId ? ` · ${event.targetId}` : ""}</small></span><span><Badge tone={event.outcome === "success" ? "positive" : "warning"}>{event.outcome}</Badge><time dateTime={event.createdAt}>{new Date(event.createdAt).toLocaleString()}</time></span></li>)}</ol>
-          ) : <p>No hay eventos registrados.</p>}
+          <header><div><span className="eyebrow">{t("adminPage.localLog")}</span><h2>{t("adminPage.recentEvents")}</h2></div><Badge>{auditEvents.length}</Badge></header>
+          {auditBusy ? <p>{t("adminPage.loading")}</p> : auditError ? <p className="form-error" role="alert"><WarningCircle /> {auditError}</p> : auditEvents.length ? (
+            <ol>{auditEvents.map((event) => <li key={event.id}><span><strong>{event.action}</strong><small>{event.targetType ?? "control"}{event.targetId ? ` · ${event.targetId}` : ""}</small></span><span><Badge tone={event.outcome === "success" ? "positive" : "warning"}>{event.outcome}</Badge><time dateTime={event.createdAt}>{new Date(event.createdAt).toLocaleString(translation.resolvedLanguage ?? translation.language)}</time></span></li>)}</ol>
+          ) : <p>{t("adminPage.empty")}</p>}
         </Panel>
       ) : null}
     </div>
