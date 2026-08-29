@@ -51,6 +51,32 @@ describe("browser API boundary", () => {
     expect((fetchMock.mock.calls[4][1] as RequestInit).method).toBe("DELETE");
   });
 
+  it("sends only an allowlisted TTS model with the selected voice", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      configured: true,
+      provider: "elevenlabs",
+      modelId: "scribe_v2_realtime",
+      ttsModelId: "eleven_multilingual_v2",
+      voiceId: "voice-aria",
+      voiceName: "Aria",
+      speechAvailable: true,
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.saveElevenLabsVoice(
+      "voice-aria",
+      "eleven_multilingual_v2",
+      "csrf-memory-only",
+    );
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/v1/integrations/elevenlabs/voice");
+    expect(JSON.parse(String(init.body))).toEqual({
+      voiceId: "voice-aria",
+      ttsModelId: "eleven_multilingual_v2",
+    });
+  });
+
   it("responds to official approval and clarification gates through same-origin Control routes", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ requestId: "approval/1", resolved: 1, status: "resolved" }), { status: 200, headers: { "Content-Type": "application/json" } }))

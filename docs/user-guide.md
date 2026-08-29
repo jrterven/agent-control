@@ -125,8 +125,11 @@ fallback and does not require an Agent Control integration.
 
 The same write-only ElevenLabs key can synthesize agent responses:
 
-1. Open **More → Settings → Integrations** and choose a voice from the catalog
-   available to your ElevenLabs account. Press **Try voice** to play the
+1. Open **More → Settings → Integrations**, choose **Flash v2.5** for the
+   lowest latency or **Multilingual v2** for more natural, stable long-form
+   speech, and choose a voice from the catalog available to your ElevenLabs
+   account. Agent Control intentionally does not offer Eleven v3. Press
+   **Try voice** to play the
    provider's sample before saving it; the preview can be paused and resumed
    and does not change the active voice.
 2. In a chat, enable **Listen to responses live** to hear new answers while the
@@ -135,7 +138,8 @@ The same write-only ElevenLabs key can synthesize agent responses:
 3. To hear an older answer, press the speaker below that answer. The inline
    player provides play/pause, stop and 0.75×–2× speed controls.
 
-Live reading uses the provider's TTS WebSocket and a fresh, short-lived,
+The selected model applies to both live and historical playback. Live reading
+uses the provider's TTS WebSocket and a fresh, short-lived,
 single-use `tts_websocket` token. Agent Control sends incremental answer text;
 audio chunks return directly to the PWA and begin playing as they arrive.
 Historical playback sends the selected answer to an authenticated Control

@@ -83,7 +83,9 @@ flowchart TB
   cifrada por Control y usada únicamente para solicitar tokens de un solo uso.
   No es un adaptador de agente y no participa en el routing de sesiones.
 - **Integración de voz:** reutiliza la misma credencial cifrada, conserva solo
-  el ID/nombre no secretos de la voz elegida y nunca asocia el audio a Hermes.
+  el ID/nombre no secretos de la voz elegida y el modelo permitido (Flash v2.5
+  o Multilingual v2), y nunca asocia el audio a Hermes. Eleven v3 no forma parte
+  del contrato público.
 
 ## Dictado BYOK
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from uuid import uuid4
 
 import httpx
@@ -14,7 +15,7 @@ from hermes_control_api.models import AuditEvent, IdempotencyOperation
 class FakeSpeechClient:
     def __init__(self) -> None:
         self.api_keys: list[str] = []
-        self.generated: list[tuple[str, str, str]] = []
+        self.generated: list[tuple[str, str, str, str]] = []
         self.previewed: list[str] = []
 
     async def list_voices(self, api_key: str):
@@ -28,8 +29,10 @@ class FakeSpeechClient:
         self.api_keys.append(api_key)
         return "sutkn_tts_single_use_123"
 
-    async def open_audio_stream(self, api_key: str, *, voice_id: str, text: str):
-        self.generated.append((api_key, voice_id, text))
+    async def open_audio_stream(
+        self, api_key: str, *, voice_id: str, model_id: str, text: str
+    ):
+        self.generated.append((api_key, voice_id, model_id, text))
         return object(), None
 
     async def open_preview_stream(self, preview_url: str):
@@ -50,11 +53,16 @@ def put_key(client: TestClient, csrf: str, value: str):
     )
 
 
-def select_voice(client: TestClient, csrf: str, voice_id: str):
+def select_voice(
+    client: TestClient,
+    csrf: str,
+    voice_id: str,
+    tts_model_id: str = "eleven_flash_v2_5",
+):
     return client.put(
         "/api/v1/integrations/elevenlabs/voice",
         headers={"X-CSRF-Token": csrf, "Idempotency-Key": uuid4().hex},
-        json={"voiceId": voice_id},
+        json={"voiceId": voice_id, "ttsModelId": tts_model_id},
     )
 
 
@@ -97,13 +105,19 @@ def test_owner_selects_catalog_voice_and_bootstrap_enables_speech(authenticated,
     }
 
 
-def test_live_ticket_and_history_audio_use_same_write_only_key(authenticated, app):
+def test_live_ticket_and_history_audio_use_same_write_only_key_and_model(
+    authenticated, app
+):
     client, csrf = authenticated
     secret = "sk_tts_shared_123456789_private"
     fake = FakeSpeechClient()
     app.state.elevenlabs_speech_client = fake
     assert put_key(client, csrf, secret).status_code == 200
-    assert select_voice(client, csrf, "voice_beta").status_code == 200
+    selected = select_voice(
+        client, csrf, "voice_beta", "eleven_multilingual_v2"
+    )
+    assert selected.status_code == 200
+    assert selected.json()["ttsModelId"] == "eleven_multilingual_v2"
 
     ticket = client.post(
         "/api/v1/realtime/speech-token",
@@ -114,7 +128,7 @@ def test_live_ticket_and_history_audio_use_same_write_only_key(authenticated, ap
     assert ticket.json() == {
         "token": "sutkn_tts_single_use_123",
         "expiresAt": ticket.json()["expiresAt"],
-        "modelId": "eleven_flash_v2_5",
+        "modelId": "eleven_multilingual_v2",
         "voiceId": "voice_beta",
         "voiceName": "Brian",
     }
@@ -129,7 +143,9 @@ def test_live_ticket_and_history_audio_use_same_write_only_key(authenticated, ap
     assert audio.status_code == 200, audio.text
     assert audio.headers["content-type"].startswith("audio/mpeg")
     assert audio.content == b"ID3agent-audio"
-    assert fake.generated == [(secret, "voice_beta", "Read this response")]
+    assert fake.generated == [
+        (secret, "voice_beta", "eleven_multilingual_v2", "Read this response")
+    ]
     with app.state.session_factory() as db:
         assert db.scalar(select(IdempotencyOperation).where(
             IdempotencyOperation.idempotency_key == fake_idempotency_key
@@ -157,6 +173,19 @@ def test_speech_requires_selected_voice_and_csrf(authenticated, app):
         "/api/v1/integrations/elevenlabs/speech",
         json={"text": "No CSRF"},
     ).status_code == 403
+
+
+def test_voice_settings_reject_every_model_outside_the_explicit_allowlist(
+    authenticated, app
+):
+    client, csrf = authenticated
+    app.state.elevenlabs_speech_client = FakeSpeechClient()
+    assert put_key(client, csrf, "sk_tts_model_allowlist_123456789").status_code == 200
+
+    rejected = select_voice(client, csrf, "voice_alpha", "eleven_v3")
+
+    assert rejected.status_code == 422
+    assert "eleven_v3" not in client.get("/api/v1/integrations/elevenlabs").text
 
 
 def test_replacing_key_clears_voice_from_another_elevenlabs_workspace(authenticated, app):
@@ -204,6 +233,42 @@ async def test_official_speech_client_uses_fixed_voice_and_single_use_token_cont
     assert preview == b"ID3preview"
     assert seen[0][1].startswith("https://api.elevenlabs.io/v2/voices?")
     assert seen[1][1] == "https://api.elevenlabs.io/v1/single-use-token/tts_websocket"
+
+
+@pytest.mark.parametrize(
+    "model_id", ["eleven_flash_v2_5", "eleven_multilingual_v2"]
+)
+@pytest.mark.asyncio
+async def test_official_speech_client_forwards_only_the_selected_tts_model(model_id):
+    secret = "sk_tts_model_contract_123456789_private"
+    observed: dict[str, object] = {}
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        observed.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            content=b"ID3selected-model",
+            headers={"Content-Type": "audio/mpeg"},
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http_client:
+        speech = ElevenLabsSpeechClient(http_client)
+        response, own_client = await speech.open_audio_stream(
+            secret,
+            voice_id="voice_safe",
+            model_id=model_id,
+            text="A bounded test response",
+        )
+        body = b"".join(
+            [chunk async for chunk in speech.audio_chunks(response, own_client)]
+        )
+
+    assert observed == {
+        "text": "A bounded test response",
+        "model_id": model_id,
+    }
+    assert body == b"ID3selected-model"
 
 
 @pytest.mark.asyncio

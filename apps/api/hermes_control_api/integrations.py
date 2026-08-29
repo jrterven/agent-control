@@ -9,6 +9,7 @@ import zlib
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -21,7 +22,11 @@ from .security import SecretVault
 
 ELEVENLABS_PROVIDER = "elevenlabs"
 SCRIBE_REALTIME_MODEL_ID = "scribe_v2_realtime"
-ELEVENLABS_TTS_MODEL_ID = "eleven_flash_v2_5"
+ElevenLabsTtsModelId = Literal["eleven_flash_v2_5", "eleven_multilingual_v2"]
+ELEVENLABS_TTS_MODEL_ID: ElevenLabsTtsModelId = "eleven_flash_v2_5"
+ELEVENLABS_TTS_MODEL_IDS = frozenset(
+    {"eleven_flash_v2_5", "eleven_multilingual_v2"}
+)
 ELEVENLABS_TTS_OUTPUT_FORMAT = "mp3_44100_128"
 ELEVENLABS_REALTIME_TOKEN_URL = (
     "https://api.elevenlabs.io/v1/single-use-token/realtime_scribe"
@@ -580,6 +585,7 @@ class ElevenLabsSpeechClient:
         api_key: str,
         *,
         voice_id: str,
+        model_id: ElevenLabsTtsModelId,
         text: str,
     ) -> tuple[httpx.Response, httpx.AsyncClient | None]:
         own_client: httpx.AsyncClient | None = None
@@ -595,7 +601,7 @@ class ElevenLabsSpeechClient:
             ELEVENLABS_TTS_STREAM_URL.format(voice_id=voice_id),
             params={"output_format": ELEVENLABS_TTS_OUTPUT_FORMAT},
             headers=self._headers(api_key, "audio/mpeg"),
-            json={"text": text, "model_id": ELEVENLABS_TTS_MODEL_ID},
+            json={"text": text, "model_id": model_id},
         )
         try:
             response = await client.send(request, stream=True, follow_redirects=False)
@@ -775,6 +781,11 @@ class UserIntegrationService:
         configured = bool(row and row.api_key_ciphertext)
         return {
             "configured": configured,
+            "tts_model_id": (
+                row.tts_model_id
+                if row and row.tts_model_id in ELEVENLABS_TTS_MODEL_IDS
+                else ELEVENLABS_TTS_MODEL_ID
+            ),
             "voice_id": row.tts_voice_id if row else None,
             "voice_name": row.tts_voice_name if row else None,
             "speech_available": bool(configured and row and row.tts_voice_id),
@@ -813,22 +824,32 @@ class UserIntegrationService:
         *,
         voice_id: str,
         voice_name: str,
+        model_id: ElevenLabsTtsModelId | None,
     ) -> UserIntegration:
         row = self._row(db, owner.id)
         if row is None:
             raise IntegrationNotConfigured()
         row.tts_voice_id = voice_id
         row.tts_voice_name = voice_name[:200]
+        if model_id is not None:
+            row.tts_model_id = model_id
         db.flush()
         return row
 
-    def speech_configuration(self, db: Session, owner: User) -> tuple[str, str]:
+    def speech_configuration(
+        self, db: Session, owner: User
+    ) -> tuple[str, str, ElevenLabsTtsModelId]:
         row = self._row(db, owner.id)
         if row is None:
             raise IntegrationNotConfigured()
         if not row.tts_voice_id:
             raise SpeechVoiceNotConfigured()
-        return row.tts_voice_id, row.tts_voice_name or row.tts_voice_id
+        model_id: ElevenLabsTtsModelId = (
+            row.tts_model_id
+            if row.tts_model_id in ELEVENLABS_TTS_MODEL_IDS
+            else ELEVENLABS_TTS_MODEL_ID
+        )
+        return row.tts_voice_id, row.tts_voice_name or row.tts_voice_id, model_id
 
     def delete_api_key(self, db: Session, owner: User) -> bool:
         row = self._row(db, owner.id)

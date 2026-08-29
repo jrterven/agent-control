@@ -23,7 +23,6 @@ from ..integration_schemas import (
 from ..integrations import (
     ELEVENLABS_PROVIDER,
     ELEVENLABS_MAX_PREVIEW_RESPONSE_BYTES,
-    ELEVENLABS_TTS_MODEL_ID,
     SCRIBE_REALTIME_MODEL_ID,
     IntegrationError,
     SpeechVoicePreviewUnavailable,
@@ -293,6 +292,7 @@ async def set_elevenlabs_voice(
             owner,
             voice_id=str(selected["id"]),
             voice_name=str(selected["name"]),
+            model_id=payload.tts_model_id,
         )
     except IntegrationError:
         _audit_integration(
@@ -329,7 +329,7 @@ async def issue_speech_token(
     try:
         service = _service(request)
         api_key = service.api_key(db, owner)
-        voice_id, voice_name = service.speech_configuration(db, owner)
+        voice_id, voice_name, model_id = service.speech_configuration(db, owner)
         request.app.state.speech_rate_limiter.consume(owner.id)
         token = await request.app.state.elevenlabs_speech_client.issue_realtime_token(
             api_key
@@ -354,7 +354,7 @@ async def issue_speech_token(
     return SpeechTokenView(
         token=token,
         expires_at=token_expiration(),
-        model_id=ELEVENLABS_TTS_MODEL_ID,
+        model_id=model_id,
         voice_id=voice_id,
         voice_name=voice_name,
     )
@@ -371,12 +371,13 @@ async def stream_elevenlabs_speech(
     try:
         service = _service(request)
         api_key = service.api_key(db, owner)
-        voice_id, _ = service.speech_configuration(db, owner)
+        voice_id, _, model_id = service.speech_configuration(db, owner)
         request.app.state.speech_rate_limiter.consume(owner.id)
         upstream, own_client = (
             await request.app.state.elevenlabs_speech_client.open_audio_stream(
                 api_key,
                 voice_id=voice_id,
+                model_id=model_id,
                 text=payload.text,
             )
         )

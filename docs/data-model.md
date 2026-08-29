@@ -28,7 +28,8 @@ erDiagram
 - Gateway credentials are separate AES-GCM records with random nonces and AAD
   containing gateway ID plus field name. Read APIs return presence only.
 - `USER_INTEGRATION` is unique by `(owner_id, provider)`. For ElevenLabs it
-  stores only the encrypted API key and timestamps; AAD binds owner ID,
+  stores the encrypted API key plus the non-secret selected voice and TTS model;
+  the model is constrained to Flash v2.5 or Multilingual v2. AAD binds owner ID,
   provider and field name so ciphertext cannot be moved between users or uses.
   Reads expose `configured`, provider and model metadata, never the key.
 - A transcription integration is independent from `GATEWAY`, `PROFILE_REF`,

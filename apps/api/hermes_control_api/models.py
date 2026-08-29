@@ -62,6 +62,10 @@ class UserIntegration(Base, Timestamped):
             "api_key_ciphertext LIKE 'v1.%'",
             name="ck_user_integrations_encrypted_api_key",
         ),
+        CheckConstraint(
+            "tts_model_id IN ('eleven_flash_v2_5', 'eleven_multilingual_v2')",
+            name="ck_user_integrations_supported_tts_model",
+        ),
         Index("ix_user_integrations_owner_provider", "owner_id", "provider"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -75,6 +79,12 @@ class UserIntegration(Base, Timestamped):
     # user's selected voice into another user's chat.
     tts_voice_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     tts_voice_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    tts_model_id: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        default="eleven_flash_v2_5",
+        server_default="eleven_flash_v2_5",
+    )
 
 
 class AuthSession(Base):

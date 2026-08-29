@@ -6,13 +6,14 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator
 
 from .schemas import ApiModel
+from .integrations import ELEVENLABS_TTS_MODEL_ID, ElevenLabsTtsModelId
 
 
 class ElevenLabsIntegrationView(ApiModel):
     configured: bool
     provider: Literal["elevenlabs"] = "elevenlabs"
     model_id: Literal["scribe_v2_realtime"] = "scribe_v2_realtime"
-    tts_model_id: Literal["eleven_flash_v2_5"] = "eleven_flash_v2_5"
+    tts_model_id: ElevenLabsTtsModelId = ELEVENLABS_TTS_MODEL_ID
     voice_id: str | None = None
     voice_name: str | None = None
     speech_available: bool = False
@@ -61,6 +62,9 @@ class ElevenLabsVoiceListView(ApiModel):
 
 class ElevenLabsVoiceMutation(ApiModel):
     voice_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    # Optional for compatibility with an older cached PWA. Omitting it keeps
+    # the current model instead of silently resetting the owner's preference.
+    tts_model_id: ElevenLabsTtsModelId | None = None
 
 
 class SpeechTokenRequest(ApiModel):
@@ -70,7 +74,7 @@ class SpeechTokenRequest(ApiModel):
 class SpeechTokenView(ApiModel):
     token: str
     expires_at: datetime
-    model_id: Literal["eleven_flash_v2_5"] = "eleven_flash_v2_5"
+    model_id: ElevenLabsTtsModelId = ELEVENLABS_TTS_MODEL_ID
     voice_id: str
     voice_name: str
 

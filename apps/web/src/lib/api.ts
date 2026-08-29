@@ -46,11 +46,13 @@ export type ElevenLabsIntegrationView = {
   configured: boolean;
   provider: "elevenlabs";
   modelId: "scribe_v2_realtime";
-  ttsModelId?: "eleven_flash_v2_5";
+  ttsModelId?: ElevenLabsTtsModelId;
   voiceId?: string | null;
   voiceName?: string | null;
   speechAvailable?: boolean;
 };
+
+export type ElevenLabsTtsModelId = "eleven_flash_v2_5" | "eleven_multilingual_v2";
 
 export type ElevenLabsVoice = {
   id: string;
@@ -69,7 +71,7 @@ export type TranscriptionTokenView = {
 export type SpeechTokenView = {
   token: string;
   expiresAt: string;
-  modelId: "eleven_flash_v2_5";
+  modelId: ElevenLabsTtsModelId;
   voiceId: string;
   voiceName: string;
 };
@@ -373,10 +375,10 @@ export const api = {
   }),
   elevenLabsVoices: () => request<{ items: ElevenLabsVoice[] }>("/integrations/elevenlabs/voices"),
   elevenLabsVoicePreviewUrl: (voiceId: string) => `/api/v1/integrations/elevenlabs/voice-preview/${encodeURIComponent(voiceId)}`,
-  saveElevenLabsVoice: (voiceId: string, csrfToken?: string) => request<ElevenLabsIntegrationView>("/integrations/elevenlabs/voice", {
+  saveElevenLabsVoice: (voiceId: string, ttsModelId: ElevenLabsTtsModelId, csrfToken?: string) => request<ElevenLabsIntegrationView>("/integrations/elevenlabs/voice", {
     method: "PUT",
     headers: mutationHeaders(csrfToken),
-    body: JSON.stringify({ voiceId }),
+    body: JSON.stringify({ voiceId, ttsModelId }),
   }),
   createSpeechToken: (payload: { sessionId?: string | null } = {}, csrfToken?: string) => request<SpeechTokenView>("/realtime/speech-token", {
     method: "POST",

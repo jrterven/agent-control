@@ -29,7 +29,6 @@ from ..eventing import SubscriptionLimitError
 from ..gateway_health import gateway_health_state, profile_health_state
 from ..integrations import (
     ELEVENLABS_PROVIDER,
-    ELEVENLABS_TTS_MODEL_ID,
     SCRIBE_REALTIME_MODEL_ID,
     UserIntegrationService,
 )
@@ -540,7 +539,7 @@ def bootstrap(
             "speech": {
                 "available": integration_configuration["speech_available"],
                 "provider": ELEVENLABS_PROVIDER,
-                "modelId": ELEVENLABS_TTS_MODEL_ID,
+                "modelId": integration_configuration["tts_model_id"],
                 "voiceId": integration_configuration["voice_id"],
                 "voiceName": integration_configuration["voice_name"],
             },

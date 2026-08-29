@@ -94,6 +94,9 @@ origin. Live TTS uses a backend-minted `tts_websocket` single-use token and the
 browser connects only to
 `wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input`. Mock both
 contracts in automated tests; never synthesize test fixtures with a real key.
+The public preference and every provider request must accept only
+`eleven_flash_v2_5` and `eleven_multilingual_v2`; do not add `eleven_v3` without
+a separate product and security decision.
 
 `npm install` runs `patch-package` and must apply
 `patches/@elevenlabs+client+1.23.0.patch` cleanly to the pinned SDK. Treat a patch

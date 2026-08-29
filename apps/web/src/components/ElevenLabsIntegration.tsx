@@ -2,7 +2,7 @@ import { CheckCircle, Key, Microphone, Pause, Play, SpeakerHigh, Trash, WarningC
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge, Button, Field, Panel } from "@hermes-control/ui";
-import { api, type ElevenLabsIntegrationView, type ElevenLabsVoice } from "../lib/api";
+import { api, type ElevenLabsIntegrationView, type ElevenLabsTtsModelId, type ElevenLabsVoice } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 
 type Action = "load" | "save" | "test" | "voice" | "delete" | "";
@@ -18,6 +18,7 @@ export function ElevenLabsIntegration() {
   const [apiKey, setApiKey] = useState("");
   const [voices, setVoices] = useState<ElevenLabsVoice[]>([]);
   const [voiceId, setVoiceId] = useState("");
+  const [ttsModelId, setTtsModelId] = useState<ElevenLabsTtsModelId>("eleven_flash_v2_5");
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [action, setAction] = useState<Action>("");
   const [previewState, setPreviewState] = useState<PreviewState>("idle");
@@ -49,6 +50,10 @@ export function ElevenLabsIntegration() {
   }, [releasePreview]);
 
   useEffect(() => () => releasePreview(), [releasePreview]);
+
+  useEffect(() => {
+    setTtsModelId(view?.ttsModelId ?? "eleven_flash_v2_5");
+  }, [view?.ttsModelId]);
 
   useEffect(() => {
     if (previewVoiceId && previewVoiceId !== voiceId) stopPreview();
@@ -134,9 +139,12 @@ export function ElevenLabsIntegration() {
     setNotice("");
     setError("");
     try {
-      const integration = await api.saveElevenLabsVoice(voiceId, csrfToken);
+      const integration = await api.saveElevenLabsVoice(voiceId, ttsModelId, csrfToken);
       setView(integration);
-      setNotice(t("integrations.voiceSaved", { voice: integration.voiceName ?? voiceId }));
+      setNotice(t("integrations.voiceSaved", {
+        voice: integration.voiceName ?? voiceId,
+        model: t(`integrations.models.${integration.ttsModelId ?? ttsModelId}`),
+      }));
       await refreshFeatures();
     } catch {
       setError(t("integrations.voiceSaveError"));
@@ -246,6 +254,19 @@ export function ElevenLabsIntegration() {
       <p className="integration-settings__privacy"><WarningCircle /> {t("integrations.audioDisclosure")}</p>
       {view?.configured ? <div className="integration-settings__voice">
         <div className="integration-settings__voice-heading"><SpeakerHigh weight="fill" /><span><strong>{t("integrations.voice")}</strong><small>{t("integrations.voiceHint")}</small></span></div>
+        <label className="integration-settings__model">
+          <span>{t("integrations.model")}</span>
+          <select
+            aria-label={t("integrations.model")}
+            value={ttsModelId}
+            disabled={blocked}
+            onChange={(event) => setTtsModelId(event.target.value as ElevenLabsTtsModelId)}
+          >
+            <option value="eleven_flash_v2_5">{t("integrations.models.eleven_flash_v2_5")}</option>
+            <option value="eleven_multilingual_v2">{t("integrations.models.eleven_multilingual_v2")}</option>
+          </select>
+          <small>{t(`integrations.modelHints.${ttsModelId}`)}</small>
+        </label>
         <div className="integration-settings__voice-controls">
           <select
             aria-label={t("integrations.voice")}
@@ -270,10 +291,10 @@ export function ElevenLabsIntegration() {
                   ? t("integrations.resumePreview")
                   : t("integrations.previewVoice")}
           </Button>
-          <Button variant="secondary" disabled={blocked || voicesLoading || !voiceId || voiceId === view.voiceId} onClick={() => void saveVoice()}>{action === "voice" ? t("integrations.savingVoice") : t("integrations.saveVoice")}</Button>
+          <Button variant="secondary" disabled={blocked || voicesLoading || !voiceId || (voiceId === view.voiceId && ttsModelId === (view.ttsModelId ?? "eleven_flash_v2_5"))} onClick={() => void saveVoice()}>{action === "voice" ? t("integrations.savingVoice") : t("integrations.saveVoice")}</Button>
         </div>
         {voiceId && !voicesLoading && !voices.find((voice) => voice.id === voiceId)?.previewAvailable ? <small className="form-hint">{t("integrations.previewUnavailable")}</small> : null}
-        {view.voiceName ? <small className="integration-settings__voice-current"><CheckCircle weight="fill" /> {t("integrations.currentVoice", { voice: view.voiceName })}</small> : <small className="form-hint">{t("integrations.voiceRequired")}</small>}
+        {view.voiceName ? <small className="integration-settings__voice-current"><CheckCircle weight="fill" /> {t("integrations.currentVoice", { voice: view.voiceName, model: t(`integrations.models.${view.ttsModelId ?? "eleven_flash_v2_5"}`) })}</small> : <small className="form-hint">{t("integrations.voiceRequired")}</small>}
       </div> : null}
       {!view?.configured && action !== "load" ? <p className="form-hint"><Microphone /> {t("integrations.nativeFallback")}</p> : null}
       {notice ? <p className="integration-settings__notice" role="status" aria-live="polite"><CheckCircle weight="fill" /> {notice}</p> : null}

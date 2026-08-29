@@ -114,7 +114,7 @@ export type DictationFeature = {
 export type SpeechFeature = {
   available: boolean;
   provider: "elevenlabs";
-  modelId: "eleven_flash_v2_5";
+  modelId: "eleven_flash_v2_5" | "eleven_multilingual_v2";
   voiceId?: string | null;
   voiceName?: string | null;
 };

@@ -71,6 +71,7 @@ describe("owner-scoped ElevenLabs integration", () => {
     ] });
     const saveVoice = vi.spyOn(api, "saveElevenLabsVoice").mockResolvedValue({
       ...configuredIntegration,
+      ttsModelId: "eleven_multilingual_v2",
       speechAvailable: true,
       voiceId: "voice-aria",
       voiceName: "Aria",
@@ -89,8 +90,10 @@ describe("owner-scoped ElevenLabs integration", () => {
     expect(localStorageWrite).not.toHaveBeenCalled();
 
     const voice = await screen.findByRole("combobox", { name: "Voz para respuestas" });
+    const model = screen.getByRole("combobox", { name: "Modelo de voz" });
     await waitFor(() => expect(voices).toHaveBeenCalled());
     await user.selectOptions(voice, "voice-aria");
+    await user.selectOptions(model, "eleven_multilingual_v2");
     await user.click(screen.getByRole("button", { name: "Probar voz" }));
     await waitFor(() => expect(FakeAudio.instances).toHaveLength(1));
     expect(FakeAudio.instances[0]?.src).toBe("/api/v1/integrations/elevenlabs/voice-preview/voice-aria");
@@ -99,9 +102,9 @@ describe("owner-scoped ElevenLabs integration", () => {
     expect(await screen.findByRole("button", { name: "Continuar prueba" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Continuar prueba" }));
     expect(await screen.findByRole("button", { name: "Pausar prueba" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Usar esta voz" }));
-    await waitFor(() => expect(saveVoice).toHaveBeenCalledWith("voice-aria", "csrf-memory"));
-    expect(await screen.findByText("Voz activa: Aria")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Guardar voz y modelo" }));
+    await waitFor(() => expect(saveVoice).toHaveBeenCalledWith("voice-aria", "eleven_multilingual_v2", "csrf-memory"));
+    expect(await screen.findByText("Voz activa: Aria · Multilingual v2")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Probar conexión" }));
     await waitFor(() => expect(test).toHaveBeenCalledWith("csrf-memory"));
