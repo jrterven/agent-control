@@ -1,5 +1,4 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../i18n";
 import { ChatView } from "../components/ChatView";
@@ -35,7 +34,7 @@ describe("rehydrated Hermes tool history", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("folds role=tool rows from REST and RPC history into the assistant tool cards", async () => {
+  it("preserves role=tool history for the activity panel without inline chat cards", async () => {
     vi.spyOn(api, "sessionHistory").mockResolvedValue({
       items: [
         { id: "user-1", role: "user", content: "Busca evidencia", timestamp: 1_777_000_000 },
@@ -61,10 +60,8 @@ describe("rehydrated Hermes tool history", () => {
         { id: "assistant-1", role: "assistant", text: "La evidencia quedó contrastada.", timestamp: 1_777_000_003 },
       ],
     });
-    const user = userEvent.setup();
     render(<ReopenedChat />);
 
-    const toolsButton = await screen.findByRole("button", { name: /Herramientas · 2/i });
     const answer = await screen.findByText("La evidencia quedó contrastada.");
     expect(answer).toBeVisible();
     await waitFor(() => {
@@ -75,10 +72,6 @@ describe("rehydrated Hermes tool history", () => {
       ]));
     });
 
-    await user.click(toolsButton);
-    expect(screen.getByText("web search")).toBeVisible();
-    expect(screen.getByText("18 fuentes revisadas")).toBeVisible();
-    expect(screen.getByText("paper reader")).toBeVisible();
-    expect(screen.getByText("6 papers comparados")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Herramientas · 2/i })).not.toBeInTheDocument();
   });
 });

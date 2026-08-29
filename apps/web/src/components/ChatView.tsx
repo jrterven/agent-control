@@ -1,4 +1,4 @@
-import { CaretDown, Check, Checks, PaperPlaneTilt, Plus, Question, ShieldWarning, Stop, WarningCircle, Wrench } from "@phosphor-icons/react";
+import { Check, Checks, PaperPlaneTilt, Plus, Question, ShieldWarning, Stop, WarningCircle } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -28,19 +28,6 @@ function DeliveryIcon({ delivery }: { delivery?: ChatMessage["delivery"] }) {
   if (delivery === "ambiguous" || delivery === "failed") return <WarningCircle aria-label={t("chat.delivery.unconfirmed")} />;
   if (delivery === "sent") return <Checks aria-label={t("chat.delivery.delivered")} />;
   return <Check aria-label={t("chat.delivery.sending")} />;
-}
-
-function ToolCards({ tools }: { tools: NonNullable<ChatMessage["tools"]> }) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="tool-cards">
-      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span><Wrench size={17} /> {t("chat.toolsCount", { count: tools.length })}</span><CaretDown size={17} className={open ? "is-open" : ""} />
-      </button>
-      {open ? <div className="tool-cards__list">{tools.map((tool) => <div key={tool.id}><span className={`tool-state tool-state--${tool.status}`} /><span><strong>{tool.label}</strong><small>{tool.summary}{tool.durationMs ? ` · ${(tool.durationMs / 1000).toFixed(1)} s` : ""}</small></span><Badge tone={tool.status === "completed" ? "positive" : tool.status === "failed" ? "warning" : "info"}>{t(tool.status === "completed" ? "chat.toolStatus.completed" : tool.status === "failed" ? "chat.toolStatus.failed" : "chat.toolStatus.running")}</Badge></div>)}</div> : null}
-    </div>
-  );
 }
 
 function ApprovalCard({ request, offline, canRespond }: { request: ApprovalRequest; offline: boolean; canRespond: boolean }) {
@@ -296,7 +283,6 @@ function Message({ message, agentName }: { message: ChatMessage; agentName: stri
       <div className="assistant-content">
         <header><strong>{agentName}</strong><time>{message.createdAt}</time>{message.streaming ? <Badge tone="info">{t("chat.streaming")}</Badge> : null}</header>
         <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{message.content || " "}</ReactMarkdown>{message.streaming ? <span className="stream-caret" aria-hidden="true" /> : null}</div>
-        {message.tools?.length ? <ToolCards tools={message.tools} /> : null}
       </div>
     </article>
   );
@@ -318,8 +304,17 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
+    const styles = window.getComputedStyle(textarea);
+    const fontSize = Number.parseFloat(styles.fontSize) || 15;
+    const rawLineHeight = Number.parseFloat(styles.lineHeight);
+    const lineHeight = Number.isFinite(rawLineHeight)
+      ? rawLineHeight <= 4 ? rawLineHeight * fontSize : rawLineHeight
+      : fontSize * 1.5;
+    const verticalPadding = (Number.parseFloat(styles.paddingTop) || 0) + (Number.parseFloat(styles.paddingBottom) || 0);
+    const maxHeight = Math.ceil((lineHeight * 6) + verticalPadding);
     textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 132)}px`;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }, [value]);
 
   const onSubmit = async () => {

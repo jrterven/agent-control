@@ -1,5 +1,5 @@
 import axe from "axe-core";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "../i18n";
@@ -33,13 +33,11 @@ describe("mobile-first chat", () => {
     await i18n.changeLanguage("es");
   });
 
-  it("renders the approved conversation hierarchy and expandable tools", async () => {
-    const user = userEvent.setup();
+  it("renders the approved conversation hierarchy without duplicating tool activity", async () => {
     const { container } = render(<ChatView />);
     expect(screen.getByRole("heading", { name: "Memoria de agentes · agosto" })).toBeInTheDocument();
     expect(screen.getByText("Comparativa de memoria de agentes — Agosto 2026")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Herramientas · 2/i }));
-    expect(screen.getByText("Búsqueda académica")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Herramientas · 2/i })).not.toBeInTheDocument();
     expect((await axe.run(container)).violations).toHaveLength(0);
   });
 
@@ -49,9 +47,30 @@ describe("mobile-first chat", () => {
 
     expect(screen.getByText("August 28, 2026")).toBeVisible();
     expect(screen.getByRole("textbox", { name: "Message Newton…" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Tools · 2" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Tools · 2" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Memoria de agentes · agosto" })).toBeVisible();
     expect(screen.getByText("Comparativa de memoria de agentes — Agosto 2026")).toBeVisible();
+  });
+
+  it("starts at one line and scrolls only after the six-line composer limit", async () => {
+    render(<ChatView />);
+    const composer = screen.getByRole("textbox", { name: "Mensaje a Newton…" }) as HTMLTextAreaElement;
+    let measuredScrollHeight = 44;
+    Object.defineProperty(composer, "scrollHeight", {
+      configurable: true,
+      get: () => measuredScrollHeight,
+    });
+
+    fireEvent.change(composer, { target: { value: "Una línea" } });
+    await waitFor(() => expect(composer.style.height).toBe("44px"));
+    expect(composer.rows).toBe(1);
+    expect(composer.style.overflowY).toBe("hidden");
+
+    measuredScrollHeight = 1_000;
+    fireEvent.change(composer, { target: { value: "1\n2\n3\n4\n5\n6\n7" } });
+    await waitFor(() => expect(composer.style.overflowY).toBe("auto"));
+    expect(Number.parseFloat(composer.style.height)).toBeGreaterThanOrEqual(130);
+    expect(Number.parseFloat(composer.style.height)).toBeLessThanOrEqual(160);
   });
 
   it("streams a demo response and offers an explicit stop action", async () => {
