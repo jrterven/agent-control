@@ -171,6 +171,7 @@ export type AutomationRun = {
   startedAt?: string | null;
   finishedAt?: string | null;
   errorSummary?: string | null;
+  readAt?: string | null;
   createdAt: string;
   updatedAt: string;
 };

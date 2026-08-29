@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
 import { AutomationsScreen } from "../screens/Screens";
 import { useAppStore } from "../store/appStore";
-import type { Automation, Profile } from "../types";
+import type { Automation, AutomationRun, Profile } from "../types";
 
 const profile: Profile = {
   id: "profile-newton",
@@ -70,5 +70,56 @@ describe("automation editor contract", () => {
       enabled: false,
     }, "csrf-memory-only"));
     expect(await screen.findByText("Resumen semanal")).toBeInTheDocument();
+  });
+
+  it("filters automations by the persisted read state of their latest result", async () => {
+    const automation = (id: string, name: string): Automation => ({
+      id,
+      gatewayId: "gateway-a",
+      profileName: "default",
+      name,
+      schedule: "0 9 * * *",
+      timezone: "America/Mexico_City",
+      profileId: profile.id,
+      prompt: "Prepare a report",
+      enabled: true,
+      nextRun: "2030-01-04T15:00:00Z",
+      nextRuns: ["2030-01-04T15:00:00Z"],
+      lastStatus: "success",
+    });
+    const run = (automationId: string, readAt?: string): AutomationRun => ({
+      id: `run-${automationId}`,
+      automationId,
+      hermesRunId: `hermes-${automationId}`,
+      sessionLinkId: `session-${automationId}`,
+      status: "completed",
+      readAt,
+      createdAt: "2030-01-03T15:00:00Z",
+      updatedAt: "2030-01-03T15:00:00Z",
+    });
+    useAppStore.setState({
+      automations: [
+        automation("unread", "Informe pendiente"),
+        automation("read", "Informe leído"),
+        automation("empty", "Sin resultados"),
+      ],
+    });
+    vi.spyOn(api, "automationRuns").mockImplementation(async (automationId) => {
+      if (automationId === "unread") return [run(automationId)];
+      if (automationId === "read") return [run(automationId, "2030-01-03T16:00:00Z")];
+      return [];
+    });
+    const user = userEvent.setup();
+
+    const { container } = render(<AutomationsScreen />);
+
+    expect(await screen.findByRole("img", { name: "Resultado no leído" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /No leídas/ }));
+    expect(container.querySelectorAll(".automation-row")).toHaveLength(1);
+    expect(container.querySelector(".automation-row")).toHaveTextContent("Informe pendiente");
+
+    await user.click(screen.getByRole("tab", { name: /Leídas/ }));
+    expect(container.querySelectorAll(".automation-row")).toHaveLength(1);
+    expect(container.querySelector(".automation-row")).toHaveTextContent("Informe leído");
   });
 });

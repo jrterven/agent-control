@@ -2444,6 +2444,28 @@ class AutomationService:
             ).all()
         )
 
+    def mark_run_read(
+        self,
+        db: Session,
+        actor: User,
+        automation_run_id: str,
+    ) -> AutomationRun:
+        run = db.scalar(
+            select(AutomationRun)
+            .join(Automation, Automation.id == AutomationRun.automation_id)
+            .where(
+                AutomationRun.id == automation_run_id,
+                Automation.owner_id == actor.id,
+            )
+        )
+        if run is None:
+            raise NotFoundError("Automation run not found")
+        if run.read_at is None:
+            run.read_at = utc_now()
+            db.commit()
+            db.refresh(run)
+        return run
+
     def link_run_session(
         self,
         db: Session,

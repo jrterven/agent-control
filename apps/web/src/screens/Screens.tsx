@@ -159,6 +159,8 @@ function uiAutomation(raw: Automation, profileId: string, previous?: Automation)
   };
 }
 
+type AutomationReadFilter = "all" | "unread" | "read";
+
 export function AutomationsScreen() {
   const { t } = useTranslation();
   const automationSchema = useMemo(() => z.object({
@@ -178,6 +180,7 @@ export function AutomationsScreen() {
   const [actionId, setActionId] = useState("");
   const [runs, setRuns] = useState<Record<string, AutomationRun[]>>({});
   const [runsRefreshVersion, setRunsRefreshVersion] = useState(0);
+  const [readFilter, setReadFilter] = useState<AutomationReadFilter>("all");
   const csrfToken = useAppStore((state) => state.csrfToken);
   const demoMode = useAppStore((state) => state.demoMode);
   const offline = useAppStore((state) => state.authState === "offline");
@@ -305,21 +308,59 @@ export function AutomationsScreen() {
       setItems((current) => current.filter((item) => item.id !== automation.id));
     } finally { setActionId(""); }
   };
+  const latestResult = (automationId: string) => runs[automationId]?.find((run) => Boolean(run.sessionLinkId));
+  const unreadCount = items.filter((automation) => {
+    const result = latestResult(automation.id);
+    return result && !result.readAt;
+  }).length;
+  const readCount = items.filter((automation) => Boolean(latestResult(automation.id)?.readAt)).length;
+  const visibleItems = items.filter((automation) => {
+    if (readFilter === "all") return true;
+    const result = latestResult(automation.id);
+    return readFilter === "unread" ? Boolean(result && !result.readAt) : Boolean(result?.readAt);
+  });
+  const openRunSession = async (run: AutomationRun) => {
+    if (!run.sessionLinkId) return;
+    if (!run.readAt && !demoMode && !offline) {
+      try {
+        const updated = await api.markAutomationRunRead(run.id, csrfToken);
+        setRuns((current) => ({
+          ...current,
+          [run.automationId]: (current[run.automationId] ?? []).map((item) => item.id === updated.id ? updated : item),
+        }));
+      } catch {
+        // Reading the result is more important than its indicator. A later
+        // visit will retry once the connection is available again.
+      }
+    }
+    selectSession(run.sessionLinkId);
+    void navigate({ to: "/chats" });
+  };
   return (
     <div className="page-wrap">
       <PageHeader eyebrow={t("automationsPage.eyebrow")} title={t("automationsPage.title")} description={t("automationsPage.description")} action={<Button variant="primary" leadingIcon={<Plus />} onClick={openCreate} disabled={!eligibleProfiles.length || offline}>{t("automationsPage.new")}</Button>} />
       {!eligibleProfiles.length ? <Panel className="safety-callout"><ShieldCheck size={24} /><div><strong>{t("automationsPage.unavailableTitle")}</strong><p>{t("automationsPage.unavailableBody")}</p></div></Panel> : null}
       <div className="next-runs"><span className="eyebrow">{t("automationsPage.nextFive")}</span><div>{items.filter((item) => item.enabled).flatMap((item) => (item.nextRuns?.length ? item.nextRuns : [item.nextRun]).map((run) => ({ item, run }))).slice(0, 5).map(({ item, run }, index) => <span key={`${item.id}-${run}-${index}`}><Clock /><strong>{run || t("automationsPage.pending")}</strong><small>{item.name}</small></span>)}</div></div>
+      <div className="automation-filter-tabs" role="tablist" aria-label={t("automationsPage.filterLabel")}>
+        {([
+          ["all", t("automationsPage.all"), items.length],
+          ["unread", t("automationsPage.unread"), unreadCount],
+          ["read", t("automationsPage.read"), readCount],
+        ] as const).map(([filter, label, count]) => <button key={filter} type="button" role="tab" aria-selected={readFilter === filter} className={readFilter === filter ? "is-active" : ""} onClick={() => setReadFilter(filter)}><span>{label}</span><small>{count}</small></button>)}
+      </div>
       <div className="automation-list">
-        {items.map((automation) => {
+        {visibleItems.map((automation) => {
           const profile = profiles.find((item) => item.id === automation.profileId);
           const canUpdate = !offline && profile?.mutable === true && Boolean(profile.capabilities?.cronUpdate);
           const canTrigger = !offline && profile?.mutable === true && Boolean(profile.capabilities?.cronTrigger);
           const canDelete = !offline && profile?.mutable === true && Boolean(profile.capabilities?.cronDelete);
           const latestRun = runs[automation.id]?.[0];
+          const result = latestResult(automation.id);
+          const unread = Boolean(result && !result.readAt);
           const runLabel = latestRun?.status === "completed" ? t("automationsPage.runSuccess") : latestRun?.status === "failed" ? t("automationsPage.runFailed") : latestRun ? t("automationsPage.runStatus", { status: latestRun.status }) : t("automationsPage.noRuns");
-          return <Panel key={automation.id} className="automation-row"><span className="automation-row__icon"><Lightning weight="duotone" /></span><div><strong>{automation.name}</strong><p>{describeCron(automation.schedule, automation.timezone, t)}</p><span><Badge>{profile?.displayName ?? automation.profileName ?? t("automationsPage.profile")}</Badge><Badge tone={latestRun?.status === "completed" ? "positive" : latestRun?.status === "failed" ? "warning" : "neutral"}>{runLabel}</Badge></span><details className="cron-details"><summary>{t("automationsPage.viewCron")}</summary><code>{automation.schedule}</code></details></div><div className="automation-row__end">{canUpdate ? <Switch checked={automation.enabled} disabled={actionId === automation.id} onChange={() => void toggle(automation)} label={automation.enabled ? t("automationsPage.enabled") : t("automationsPage.paused")} /> : null}<span className="automation-actions">{latestRun?.sessionLinkId ? <Button size="sm" variant="ghost" onClick={() => { selectSession(latestRun.sessionLinkId!); void navigate({ to: "/chats" }); }}>{t("automationsPage.openSession")}</Button> : null}{canTrigger ? <Button size="sm" variant="ghost" leadingIcon={<Play />} disabled={actionId === automation.id} onClick={() => void trigger(automation)}>{t("automationsPage.run")}</Button> : null}{canUpdate ? <Button size="sm" variant="ghost" leadingIcon={<PencilSimple />} onClick={() => openEdit(automation)}>{t("automationsPage.edit")}</Button> : null}{canDelete ? <Button size="sm" variant="ghost" leadingIcon={<Trash />} disabled={actionId === automation.id} onClick={() => void remove(automation)}>{t("automationsPage.remove")}</Button> : null}</span></div></Panel>;
+          return <Panel key={automation.id} className="automation-row"><span className="automation-row__icon"><Lightning weight="duotone" /></span><div><span className="automation-row__title"><strong>{automation.name}</strong>{unread ? <span className="automation-unread-dot" role="img" aria-label={t("automationsPage.unreadResult")} title={t("automationsPage.unreadResult")} /> : null}</span><p>{describeCron(automation.schedule, automation.timezone, t)}</p><span><Badge>{profile?.displayName ?? automation.profileName ?? t("automationsPage.profile")}</Badge><Badge tone={latestRun?.status === "completed" ? "positive" : latestRun?.status === "failed" ? "warning" : "neutral"}>{runLabel}</Badge></span><details className="cron-details"><summary>{t("automationsPage.viewCron")}</summary><code>{automation.schedule}</code></details></div><div className="automation-row__end">{canUpdate ? <Switch checked={automation.enabled} disabled={actionId === automation.id} onChange={() => void toggle(automation)} label={automation.enabled ? t("automationsPage.enabled") : t("automationsPage.paused")} /> : null}<span className="automation-actions">{result?.sessionLinkId ? <Button size="sm" variant="ghost" onClick={() => void openRunSession(result)}>{t("automationsPage.openSession")}</Button> : null}{canTrigger ? <Button size="sm" variant="ghost" leadingIcon={<Play />} disabled={actionId === automation.id} onClick={() => void trigger(automation)}>{t("automationsPage.run")}</Button> : null}{canUpdate ? <Button size="sm" variant="ghost" leadingIcon={<PencilSimple />} onClick={() => openEdit(automation)}>{t("automationsPage.edit")}</Button> : null}{canDelete ? <Button size="sm" variant="ghost" leadingIcon={<Trash />} disabled={actionId === automation.id} onClick={() => void remove(automation)}>{t("automationsPage.remove")}</Button> : null}</span></div></Panel>;
         })}
+        {visibleItems.length === 0 ? <Panel className="automation-empty"><strong>{readFilter === "unread" ? t("automationsPage.emptyUnread") : readFilter === "read" ? t("automationsPage.emptyRead") : t("automationsPage.emptyAll")}</strong></Panel> : null}
       </div>
       {editorOpen ? <div ref={editorDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="automation-editor-title"><button className="modal-scrim" aria-label={t("automationsPage.closeEditor")} onClick={closeEditor} /><Panel className="form-modal automation-editor"><span className="eyebrow">{t("automationsPage.editor", { mode: advancedEditor ? t("automationsPage.advanced") : t("automationsPage.simple") })}</span><h2 id="automation-editor-title">{editing ? t("automationsPage.editTitle") : t("automationsPage.newTitle")}</h2><p>{editing ? t("automationsPage.editDescription") : t("automationsPage.newDescription")}</p><div className="editor-mode" role="group" aria-label={t("automationsPage.editorMode")}><button type="button" className={!advancedEditor ? "is-active" : ""} aria-pressed={!advancedEditor} onClick={() => setAdvancedEditor(false)}>{t("automationsPage.simple")}</button><button type="button" className={advancedEditor ? "is-active" : ""} aria-pressed={advancedEditor} onClick={() => setAdvancedEditor(true)}>{t("automationsPage.advancedCron")}</button></div><form onSubmit={save}>{!editing ? <fieldset className="automation-templates"><legend>{t("automationsPage.startTemplate")}</legend><div>{automationTemplates.map((template) => { const label = t(`automationsPage.templates.${template.translationKey}.label`); const prompt = t(`automationsPage.templates.${template.translationKey}.prompt`); return <button key={template.id} type="button" onClick={() => { setValue("name", label, { shouldValidate: true }); setValue("schedule", template.schedule, { shouldValidate: true }); setValue("prompt", prompt, { shouldValidate: true }); }}>{label}</button>; })}</div></fieldset> : null}<Field label={t("automationsPage.name")} error={errors.name?.message} {...register("name")} /><label className="hc-field"><span>{t("automationsPage.profile")}</span><select {...register("profileId")} disabled={Boolean(editing)}>{eligibleProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.displayName} · {profile.technicalName}</option>)}</select>{errors.profileId?.message ? <small className="hc-field__error">{errors.profileId.message}</small> : null}</label>{advancedEditor ? <Field label={t("automationsPage.cronExpression")} placeholder="30 8 * * FRI" error={errors.schedule?.message} {...register("schedule")} /> : <label className="hc-field"><span>{t("automationsPage.frequency")}</span><select value={watchedSchedule} onChange={(event) => setValue("schedule", event.target.value, { shouldValidate: true })}><option value="30 8 * * MON-FRI">{t("automationsPage.weekdays")}</option><option value="0 9 * * *">{t("automationsPage.daily")}</option><option value="0 16 * * FRI">{t("automationsPage.friday")}</option>{!automationTemplates.some((template) => template.schedule === watchedSchedule) && watchedSchedule !== "0 9 * * *" ? <option value={watchedSchedule}>{t("automationsPage.customSchedule")}</option> : null}</select>{errors.schedule?.message ? <small className="hc-field__error">{errors.schedule.message}</small> : null}</label>}<Field label={t("automationsPage.timezone")} error={errors.timezone?.message} {...register("timezone")} /><output className="schedule-explanation" aria-live="polite"><Clock weight="duotone" /><span><strong>{t("automationsPage.explanation")}</strong>{describeCron(watchedSchedule, watchedTimezone, t)}</span></output><label className="hc-field"><span>{t("automationsPage.prompt")}</span><textarea rows={5} {...register("prompt")} />{errors.prompt?.message ? <small className="hc-field__error">{errors.prompt.message}</small> : null}</label>{submitError ? <p className="form-error" role="alert"><WarningCircle /> {submitError}</p> : null}<div><Button type="button" variant="ghost" onClick={closeEditor}>{t("automationsPage.cancel")}</Button><Button type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? t("automationsPage.saving") : editing ? t("automationsPage.save") : t("automationsPage.createPaused")}</Button></div></form></Panel></div> : null}
     </div>

@@ -413,6 +413,7 @@ class AutomationRunView(ApiModel):
     started_at: datetime | None
     finished_at: datetime | None
     error_summary: str | None
+    read_at: datetime | None
     created_at: datetime
     updated_at: datetime
 

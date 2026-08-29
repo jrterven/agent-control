@@ -1454,6 +1454,25 @@ def list_automation_runs_for_automation(
     )
 
 
+@router.post(
+    "/automation-runs/{automation_run_id}/read",
+    response_model=AutomationRunView,
+)
+def mark_automation_run_read(
+    automation_run_id: str,
+    request: Request,
+    _: AuthSession = Depends(require_csrf),
+    __: str = Depends(require_idempotency),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> AutomationRun:
+    return AutomationService(services(request)).mark_run_read(
+        db,
+        user,
+        automation_run_id,
+    )
+
+
 @router.post("/realtime/tickets", response_model=TicketView, status_code=201)
 def issue_realtime_ticket(
     request: Request,

@@ -373,14 +373,23 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .next-runs svg { grid-row: 1 / 3; color: var(--accent); }
 .next-runs strong { font-size: 12px; }
 .next-runs small { color: var(--muted); font-size: 10px; }
+.automation-filter-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-bottom: 14px; padding: 4px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface-1); }
+.automation-filter-tabs button { min-width: 0; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 10px; border: 0; border-radius: 9px; color: var(--muted); background: transparent; font-weight: 680; cursor: pointer; }
+.automation-filter-tabs button.is-active { color: var(--text); background: var(--surface-elevated); box-shadow: 0 1px 8px rgb(0 0 0 / 18%); }
+.automation-filter-tabs small { min-width: 20px; height: 20px; display: inline-grid; place-items: center; padding: 0 5px; border-radius: 999px; color: var(--muted-strong); background: var(--surface-3); font-size: 10px; }
+.automation-filter-tabs button.is-active small { color: var(--accent-strong); background: var(--accent-soft-strong); }
 .automation-list { display: grid; gap: 10px; }
 .automation-row { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 14px; }
 .automation-row__icon { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; color: var(--accent); background: var(--accent-soft); font-size: 23px; }
+.automation-row__title { display: flex; flex-wrap: nowrap !important; align-items: center; gap: 8px; }
+.automation-row__title strong { min-width: 0; }
+.automation-unread-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 999px; background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent); }
 .automation-row p { margin: 3px 0 8px; color: var(--muted); font-size: 12px; }
 .automation-row > div:nth-child(2) > span { display: flex; flex-wrap: wrap; gap: 6px; }
 .automation-row__end { display: flex; align-items: center; gap: 10px; }
 .automation-row__end .hc-switch-row > span { display: none; }
 .automation-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.automation-empty { padding: 24px; color: var(--muted); text-align: center; }
 .cron-details { margin-top: 8px; color: var(--muted); font-size: 12px; }
 .cron-details summary { min-height: 32px; display: inline-flex; align-items: center; cursor: pointer; color: var(--muted); }
 .cron-details code { display: inline-block; margin-left: 8px; color: var(--text); }

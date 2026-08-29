@@ -218,6 +218,24 @@ def test_automation_lifecycle_runs_and_idempotent_replays(authenticated):
     assert run["hermesRunId"] is not None
     assert run["status"] == "completed"
     assert run["sessionLinkId"] is not None
+    assert run["readAt"] is None
+
+    assert client.post(f"/api/v1/automation-runs/{run['id']}/read").status_code == 403
+    read_headers = mutation_headers(csrf, "automation-run-read-once")
+    marked_read = client.post(
+        f"/api/v1/automation-runs/{run['id']}/read",
+        headers=read_headers,
+    )
+    read_replay = client.post(
+        f"/api/v1/automation-runs/{run['id']}/read",
+        headers=read_headers,
+    )
+    assert marked_read.status_code == read_replay.status_code == 200
+    assert marked_read.json()["readAt"] is not None
+    assert read_replay.headers["X-Idempotent-Replay"] == "true"
+    assert read_replay.json() == marked_read.json()
+    refreshed_runs = client.get(f"/api/v1/automations/{automation_id}/runs").json()
+    assert refreshed_runs[0]["readAt"] == marked_read.json()["readAt"]
 
 
 def test_delete_is_idempotent(authenticated):
@@ -340,12 +358,17 @@ def test_run_listing_is_owner_scoped(authenticated, app):
         db.add(foreign_run)
         db.commit()
         foreign_automation_id = foreign_automation.id
+        foreign_run_id = foreign_run.id
 
     runs = client.get("/api/v1/automation-runs")
     assert runs.status_code == 200
     assert len(runs.json()) == 1
     assert runs.json()[0]["automationId"] == owned["id"]
     assert client.get(f"/api/v1/automations/{foreign_automation_id}/runs").status_code == 404
+    assert client.post(
+        f"/api/v1/automation-runs/{foreign_run_id}/read",
+        headers=mutation_headers(csrf, "foreign-run-read"),
+    ).status_code == 404
 
 
 def test_every_automation_mutation_is_capability_gated(authenticated, app, monkeypatch):
