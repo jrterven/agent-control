@@ -52,6 +52,7 @@ class ElevenLabsVoiceView(ApiModel):
     name: str
     category: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
+    preview_available: bool = False
 
 
 class ElevenLabsVoiceListView(ApiModel):

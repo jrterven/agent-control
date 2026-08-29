@@ -57,6 +57,7 @@ export type ElevenLabsVoice = {
   name: string;
   category?: string | null;
   labels: Record<string, string>;
+  previewAvailable: boolean;
 };
 
 export type TranscriptionTokenView = {
@@ -371,6 +372,7 @@ export const api = {
     body: JSON.stringify(payload),
   }),
   elevenLabsVoices: () => request<{ items: ElevenLabsVoice[] }>("/integrations/elevenlabs/voices"),
+  elevenLabsVoicePreviewUrl: (voiceId: string) => `/api/v1/integrations/elevenlabs/voice-preview/${encodeURIComponent(voiceId)}`,
   saveElevenLabsVoice: (voiceId: string, csrfToken?: string) => request<ElevenLabsIntegrationView>("/integrations/elevenlabs/voice", {
     method: "PUT",
     headers: mutationHeaders(csrfToken),

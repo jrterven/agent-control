@@ -126,7 +126,9 @@ fallback and does not require an Agent Control integration.
 The same write-only ElevenLabs key can synthesize agent responses:
 
 1. Open **More → Settings → Integrations** and choose a voice from the catalog
-   available to your ElevenLabs account.
+   available to your ElevenLabs account. Press **Try voice** to play the
+   provider's sample before saving it; the preview can be paused and resumed
+   and does not change the active voice.
 2. In a chat, enable **Listen to responses live** to hear new answers while the
    agent is still generating them. This preference is local to the device and
    defaults to off.
@@ -144,7 +146,9 @@ Only visible assistant text is synthesized: code blocks, URLs and private
 Changing the API key clears the selected voice because the replacement key may
 belong to another ElevenLabs workspace. Select a voice again to re-enable
 playback. Audio synthesis consumes the quota and follows the retention settings
-of the owner's ElevenLabs account.
+of the owner's ElevenLabs account. Catalog previews reuse ElevenLabs' existing
+sample audio instead of synthesizing new text, so testing a voice does not spend
+TTS characters.
 
 ## Agents
 

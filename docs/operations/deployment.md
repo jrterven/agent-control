@@ -19,7 +19,9 @@ Tailscale Serve entries for `9119`/`8642`.
 
 BYOK voice features add outbound traffic only. FastAPI needs HTTPS egress to the
 fixed `https://api.elevenlabs.io` origin to mint single-use tokens, list voices
-and proxy historical TTS audio. Each participating browser needs WSS egress to
+and proxy historical TTS audio. Voice-catalog samples additionally require
+backend HTTPS egress to `storage.googleapis.com`; redirects and all paths
+outside ElevenLabs' public preview bucket remain blocked. Each participating browser needs WSS egress to
 the official speech-to-text and text-to-speech paths for microphone capture and
 live answer playback. No new inbound listener or Serve route is permitted.
 

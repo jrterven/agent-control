@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, Response
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Path, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -20,9 +22,11 @@ from ..integration_schemas import (
 )
 from ..integrations import (
     ELEVENLABS_PROVIDER,
+    ELEVENLABS_MAX_PREVIEW_RESPONSE_BYTES,
     ELEVENLABS_TTS_MODEL_ID,
     SCRIBE_REALTIME_MODEL_ID,
     IntegrationError,
+    SpeechVoicePreviewUnavailable,
     SpeechVoiceUnavailable,
     UserIntegrationService,
     token_expiration,
@@ -211,7 +215,54 @@ async def list_elevenlabs_voices(
     request.app.state.speech_rate_limiter.consume(owner.id)
     voices = await request.app.state.elevenlabs_speech_client.list_voices(api_key)
     return ElevenLabsVoiceListView(
-        items=[ElevenLabsVoiceView(**voice) for voice in voices]
+        items=[
+            ElevenLabsVoiceView(
+                id=str(voice["id"]),
+                name=str(voice["name"]),
+                category=str(voice["category"]) if voice.get("category") else None,
+                labels=dict(voice.get("labels") or {}),
+                preview_available=voice.get("preview_available") is True,
+            )
+            for voice in voices
+        ]
+    )
+
+
+@router.get("/api/v1/integrations/elevenlabs/voice-preview/{voice_id}")
+async def preview_elevenlabs_voice(
+    voice_id: Annotated[
+        str,
+        Path(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
+    ],
+    request: Request,
+    owner: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    service = _service(request)
+    api_key = service.api_key(db, owner)
+    request.app.state.speech_rate_limiter.consume(owner.id)
+    voices = await request.app.state.elevenlabs_speech_client.list_voices(api_key)
+    selected = next((voice for voice in voices if voice["id"] == voice_id), None)
+    preview_url = selected.get("preview_url") if selected else None
+    if not isinstance(preview_url, str):
+        raise SpeechVoicePreviewUnavailable()
+    upstream, own_client = (
+        await request.app.state.elevenlabs_speech_client.open_preview_stream(
+            preview_url
+        )
+    )
+    return StreamingResponse(
+        request.app.state.elevenlabs_speech_client.audio_chunks(
+            upstream,
+            own_client,
+            ELEVENLABS_MAX_PREVIEW_RESPONSE_BYTES,
+        ),
+        media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "private, max-age=300",
+            "Content-Disposition": 'inline; filename="voice-preview.mp3"',
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

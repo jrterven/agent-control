@@ -587,7 +587,7 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .integration-settings__voice-heading > svg { flex: 0 0 auto; color: var(--accent); font-size: 20px; }
 .integration-settings__voice-heading > span { display: grid; gap: 2px; }
 .integration-settings__voice-heading small { color: var(--muted); }
-.integration-settings__voice-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.integration-settings__voice-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
 .integration-settings__voice-controls select { min-width: 0; min-height: 44px; border: 1px solid var(--border-strong); border-radius: 10px; padding: 0 11px; color: var(--text); background: var(--surface-1); }
 .integration-settings__voice-current { display: flex; align-items: center; gap: 6px; color: var(--success-text); }
 .integration-settings__notice { display: flex; align-items: center; gap: 7px; margin: 12px 0 0; color: var(--success-text); font-size: 12px; }

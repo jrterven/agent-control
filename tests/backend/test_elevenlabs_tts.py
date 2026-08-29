@@ -15,12 +15,13 @@ class FakeSpeechClient:
     def __init__(self) -> None:
         self.api_keys: list[str] = []
         self.generated: list[tuple[str, str, str]] = []
+        self.previewed: list[str] = []
 
     async def list_voices(self, api_key: str):
         self.api_keys.append(api_key)
         return [
-            {"id": "voice_alpha", "name": "Aria", "category": "premade", "labels": {"accent": "American"}},
-            {"id": "voice_beta", "name": "Brian", "category": "cloned", "labels": {}},
+            {"id": "voice_alpha", "name": "Aria", "category": "premade", "labels": {"accent": "American"}, "preview_available": True, "preview_url": "https://storage.googleapis.com/eleven-public-prod/aria.mp3"},
+            {"id": "voice_beta", "name": "Brian", "category": "cloned", "labels": {}, "preview_available": False, "preview_url": None},
         ]
 
     async def issue_realtime_token(self, api_key: str) -> str:
@@ -31,8 +32,12 @@ class FakeSpeechClient:
         self.generated.append((api_key, voice_id, text))
         return object(), None
 
-    async def audio_chunks(self, response, own_client):
-        del response, own_client
+    async def open_preview_stream(self, preview_url: str):
+        self.previewed.append(preview_url)
+        return object(), None
+
+    async def audio_chunks(self, response, own_client, maximum=None):
+        del response, own_client, maximum
         yield b"ID3"
         yield b"agent-audio"
 
@@ -63,6 +68,17 @@ def test_owner_selects_catalog_voice_and_bootstrap_enables_speech(authenticated,
     catalog = client.get("/api/v1/integrations/elevenlabs/voices")
     assert catalog.status_code == 200, catalog.text
     assert [item["name"] for item in catalog.json()["items"]] == ["Aria", "Brian"]
+    assert catalog.json()["items"][0]["previewAvailable"] is True
+    assert "previewUrl" not in catalog.text
+
+    preview = client.get("/api/v1/integrations/elevenlabs/voice-preview/voice_alpha")
+    assert preview.status_code == 200, preview.text
+    assert preview.headers["content-type"].startswith("audio/mpeg")
+    assert preview.content == b"ID3agent-audio"
+    assert fake.previewed == ["https://storage.googleapis.com/eleven-public-prod/aria.mp3"]
+    unavailable = client.get("/api/v1/integrations/elevenlabs/voice-preview/voice_beta")
+    assert unavailable.status_code == 422
+    assert unavailable.json()["code"] == "SPEECH_VOICE_PREVIEW_UNAVAILABLE"
 
     selected = select_voice(client, csrf, "voice_alpha")
     assert selected.status_code == 200, selected.text
@@ -161,11 +177,15 @@ async def test_official_speech_client_uses_fixed_voice_and_single_use_token_cont
     seen: list[tuple[str, str]] = []
 
     def provider(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "storage.googleapis.com":
+            assert "xi-api-key" not in request.headers
+            seen.append((request.method, str(request.url)))
+            return httpx.Response(200, content=b"ID3preview", headers={"Content-Type": "audio/mpeg"}, request=request)
         assert request.headers["xi-api-key"] == secret
         seen.append((request.method, str(request.url)))
         if request.url.path.endswith("/v2/voices"):
             return httpx.Response(200, json={
-                "voices": [{"voice_id": "voice_safe", "name": "Safe voice", "labels": {"accent": "neutral"}}],
+                "voices": [{"voice_id": "voice_safe", "name": "Safe voice", "labels": {"accent": "neutral"}, "preview_url": "https://storage.googleapis.com/eleven-public-prod/safe.mp3"}],
                 "has_more": False,
             }, request=request)
         if request.url.path.endswith("/single-use-token/tts_websocket"):
@@ -176,9 +196,12 @@ async def test_official_speech_client_uses_fixed_voice_and_single_use_token_cont
         speech = ElevenLabsSpeechClient(http_client)
         voices = await speech.list_voices(secret)
         token = await speech.issue_realtime_token(secret)
+        preview_response, preview_client = await speech.open_preview_stream(str(voices[0]["preview_url"]))
+        preview = b"".join([chunk async for chunk in speech.audio_chunks(preview_response, preview_client, 1024)])
 
-    assert voices == [{"id": "voice_safe", "name": "Safe voice", "category": None, "labels": {"accent": "neutral"}}]
+    assert voices == [{"id": "voice_safe", "name": "Safe voice", "category": None, "labels": {"accent": "neutral"}, "preview_available": True, "preview_url": "https://storage.googleapis.com/eleven-public-prod/safe.mp3"}]
     assert token == "single_use_tts_123"
+    assert preview == b"ID3preview"
     assert seen[0][1].startswith("https://api.elevenlabs.io/v2/voices?")
     assert seen[1][1] == "https://api.elevenlabs.io/v1/single-use-token/tts_websocket"
 
@@ -194,3 +217,21 @@ async def test_official_speech_client_does_not_follow_provider_redirects():
             await speech.issue_realtime_token("sk_no_redirect_123456789")
 
     assert caught.value.code == "SPEECH_PROVIDER_CONFIGURATION_REJECTED"
+
+
+@pytest.mark.asyncio
+async def test_voice_preview_rejects_non_elevenlabs_storage_before_network():
+    requested = False
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        nonlocal requested
+        requested = True
+        return httpx.Response(200, content=b"unexpected", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http_client:
+        speech = ElevenLabsSpeechClient(http_client)
+        with pytest.raises(IntegrationError) as caught:
+            await speech.open_preview_stream("https://attacker.invalid/private.mp3")
+
+    assert caught.value.code == "SPEECH_VOICE_PREVIEW_UNAVAILABLE"
+    assert requested is False

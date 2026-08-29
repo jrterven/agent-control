@@ -9,6 +9,7 @@ import zlib
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 import httpx
 from sqlalchemy import select
@@ -36,6 +37,9 @@ ELEVENLABS_TOKEN_TTL = timedelta(minutes=15)
 ELEVENLABS_MAX_TOKEN_RESPONSE_BYTES = 16_384
 ELEVENLABS_MAX_VOICE_RESPONSE_BYTES = 2 * 1024 * 1024
 ELEVENLABS_MAX_AUDIO_RESPONSE_BYTES = 50 * 1024 * 1024
+ELEVENLABS_MAX_PREVIEW_RESPONSE_BYTES = 10 * 1024 * 1024
+ELEVENLABS_PREVIEW_HOST = "storage.googleapis.com"
+ELEVENLABS_PREVIEW_PATH_PREFIX = "/eleven-public-prod/"
 
 
 class IntegrationError(RuntimeError):
@@ -102,6 +106,15 @@ class SpeechVoiceUnavailable(IntegrationError):
         )
 
 
+class SpeechVoicePreviewUnavailable(IntegrationError):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=422,
+            code="SPEECH_VOICE_PREVIEW_UNAVAILABLE",
+            message="The selected ElevenLabs voice does not provide a safe preview",
+        )
+
+
 class TranscriptionTokenRateLimited(IntegrationError):
     def __init__(self, retry_after: int) -> None:
         super().__init__(
@@ -130,6 +143,34 @@ def _safe_retry_after(value: str | None) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if 1 <= parsed <= 3_600 else None
+
+
+def _safe_voice_preview_url(value: object) -> str | None:
+    """Accept only ElevenLabs' documented public preview bucket.
+
+    Voice metadata is authenticated but remains upstream-controlled input. The
+    URL is never exposed to the browser and is still constrained here so the
+    preview proxy cannot become an SSRF primitive.
+    """
+
+    if not isinstance(value, str) or not 1 <= len(value) <= 2_048:
+        return None
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError:
+        return None
+    if (
+        parts.scheme != "https"
+        or (parts.hostname or "").lower() != ELEVENLABS_PREVIEW_HOST
+        or port not in {None, 443}
+        or parts.username is not None
+        or parts.password is not None
+        or not parts.path.startswith(ELEVENLABS_PREVIEW_PATH_PREFIX)
+        or parts.fragment
+    ):
+        return None
+    return value
 
 
 class ElevenLabsScribeClient:
@@ -488,6 +529,7 @@ class ElevenLabsSpeechClient:
                     for key, value in (labels.items() if isinstance(labels, dict) else [])
                     if isinstance(key, str) and isinstance(value, str)
                 }
+                preview_url = _safe_voice_preview_url(row.get("preview_url"))
                 voices.append(
                     {
                         "id": voice_id,
@@ -496,6 +538,8 @@ class ElevenLabsSpeechClient:
                         if isinstance(row.get("category"), str)
                         else None,
                         "labels": safe_labels,
+                        "preview_available": preview_url is not None,
+                        "preview_url": preview_url,
                     }
                 )
             has_more = payload.get("has_more") is True if isinstance(payload, dict) else False
@@ -605,16 +649,86 @@ class ElevenLabsSpeechClient:
                 )
         return response, own_client
 
+    async def open_preview_stream(
+        self,
+        preview_url: str,
+    ) -> tuple[httpx.Response, httpx.AsyncClient | None]:
+        safe_url = _safe_voice_preview_url(preview_url)
+        if safe_url is None:
+            raise SpeechVoicePreviewUnavailable()
+
+        own_client: httpx.AsyncClient | None = None
+        client = self._http_client
+        if client is None:
+            own_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0, connect=5.0),
+                follow_redirects=False,
+            )
+            client = own_client
+        request = client.build_request(
+            "GET",
+            safe_url,
+            headers={
+                "Accept": "audio/mpeg",
+                "Accept-Encoding": "identity",
+                "User-Agent": "Agent-Control/0.1",
+            },
+        )
+        try:
+            response = await client.send(request, stream=True, follow_redirects=False)
+        except (httpx.TimeoutException, httpx.NetworkError):
+            if own_client is not None:
+                await own_client.aclose()
+            raise IntegrationError(
+                status_code=503,
+                code="SPEECH_PROVIDER_UNAVAILABLE",
+                message="The ElevenLabs voice preview is unavailable",
+                retryable=True,
+            ) from None
+        except httpx.RequestError:
+            if own_client is not None:
+                await own_client.aclose()
+            raise IntegrationError(
+                status_code=502,
+                code="SPEECH_PROVIDER_ERROR",
+                message="The ElevenLabs voice preview request failed",
+                retryable=True,
+            ) from None
+        if response.status_code != 200:
+            await response.aclose()
+            if own_client is not None:
+                await own_client.aclose()
+            raise SpeechVoicePreviewUnavailable()
+        content_type = response.headers.get("content-type", "").split(";", 1)[0]
+        if content_type not in {"audio/mpeg", "audio/mp3", "application/octet-stream"}:
+            await response.aclose()
+            if own_client is not None:
+                await own_client.aclose()
+            raise SpeechVoicePreviewUnavailable()
+        declared = response.headers.get("content-length")
+        if declared is not None:
+            try:
+                valid_length = 0 <= int(declared) <= ELEVENLABS_MAX_PREVIEW_RESPONSE_BYTES
+            except ValueError:
+                valid_length = False
+            if not valid_length:
+                await response.aclose()
+                if own_client is not None:
+                    await own_client.aclose()
+                raise SpeechVoicePreviewUnavailable()
+        return response, own_client
+
     @staticmethod
     async def audio_chunks(
         response: httpx.Response,
         own_client: httpx.AsyncClient | None,
+        maximum: int = ELEVENLABS_MAX_AUDIO_RESPONSE_BYTES,
     ) -> AsyncIterator[bytes]:
         total = 0
         try:
             async for chunk in response.aiter_bytes(chunk_size=65_536):
                 total += len(chunk)
-                if total > ELEVENLABS_MAX_AUDIO_RESPONSE_BYTES:
+                if total > maximum:
                     return
                 if chunk:
                     yield chunk

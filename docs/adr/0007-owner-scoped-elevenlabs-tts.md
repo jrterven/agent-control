@@ -16,6 +16,9 @@ the PWA.
 - The existing encrypted key is reused; no second credential is created.
 - The user selects a voice from the authenticated ElevenLabs v2 voice catalog.
   Only the voice ID and display name are stored as non-secret owner preferences.
+- Before saving, the user can play the catalog's existing preview sample. The
+  sample URL remains backend-only and is proxied only from ElevenLabs' fixed
+  public preview bucket, with redirect, MIME and size enforcement.
 - Replacing the key clears the voice until it is revalidated against the new
   account.
 - Live answers use `eleven_flash_v2_5` and the official TTS WebSocket. FastAPI
