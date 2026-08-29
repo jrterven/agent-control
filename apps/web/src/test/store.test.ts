@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useAppStore } from "../store/appStore";
-import type { ChatMessage, SessionSummary } from "../types";
+import type { BootstrapData, ChatMessage, SessionSummary } from "../types";
 
 const message = (id: string, sessionId: string, update: Partial<ChatMessage> = {}): ChatMessage => ({
   id, sessionId, role: "assistant", content: id, createdAt: "10:00", ...update,
@@ -68,5 +68,90 @@ describe("session usage snapshots", () => {
 
     useAppStore.getState().removeSession(session.id);
     expect(useAppStore.getState().sessionUsageById[session.id]).toBeUndefined();
+  });
+});
+
+describe("bootstrap selection reconciliation", () => {
+  const bootstrap: BootstrapData = {
+    gateways: [{
+      id: "gateway-remote",
+      name: "Gateway remoto",
+      location: "Túnel privado",
+      status: "connected",
+      version: "0.20.5",
+      sha: null,
+      capabilities: {
+        realtime: true,
+        sessions: true,
+        prompts: true,
+        interrupt: true,
+        cron: true,
+        profiles: true,
+        config: false,
+        memory: false,
+      },
+    }],
+    profiles: [{
+      id: "profile-jarvis",
+      gatewayId: "gateway-remote",
+      technicalName: "jarvis",
+      displayName: "Jarvis",
+      model: "gpt-test",
+      status: "ready",
+      mutable: false,
+    }],
+    workspaces: [{
+      id: "workspace-papers",
+      name: "Papers",
+      description: "",
+      sessionCount: 1,
+      updatedAt: "ahora",
+    }],
+    sessions: [
+      {
+        id: "automation-session",
+        profileId: "profile-jarvis",
+        storedSessionId: "automation-stored",
+        title: "Automatización de hoy",
+        preview: "",
+        updatedAt: "ahora",
+      },
+      {
+        id: "workspace-session",
+        workspaceId: "workspace-papers",
+        profileId: "profile-jarvis",
+        storedSessionId: "workspace-stored",
+        title: "Chat en Papers",
+        preview: "",
+        updatedAt: "ahora",
+      },
+    ],
+    automations: [],
+  };
+
+  beforeEach(() => {
+    useAppStore.getState().resetPrivateState();
+  });
+
+  it("preserves a no-workspace automation session during background refresh", () => {
+    useAppStore.setState({
+      bootstrapLoaded: true,
+      selectedGatewayId: "gateway-remote",
+      selectedProfileId: "profile-jarvis",
+      selectedWorkspaceId: "",
+      selectedSessionId: "automation-session",
+    });
+
+    useAppStore.getState().hydrateBootstrap(bootstrap);
+
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("");
+    expect(useAppStore.getState().selectedSessionId).toBe("automation-session");
+  });
+
+  it("still selects the first workspace during the initial bootstrap", () => {
+    useAppStore.getState().hydrateBootstrap(bootstrap);
+
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("workspace-papers");
+    expect(useAppStore.getState().selectedSessionId).toBe("workspace-session");
   });
 });

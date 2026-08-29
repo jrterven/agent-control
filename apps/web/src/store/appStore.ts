@@ -172,7 +172,15 @@ export const useAppStore = create<AppState>((set) => ({
   hydrateBootstrap: (data) => set((state) => {
     const selectedGatewayId = data.gateways.some((item) => item.id === state.selectedGatewayId) ? state.selectedGatewayId : data.gateways[0]?.id ?? "";
     const selectedProfileId = data.profiles.some((item) => item.id === state.selectedProfileId && item.gatewayId === selectedGatewayId) ? state.selectedProfileId : data.profiles.find((item) => item.gatewayId === selectedGatewayId)?.id ?? data.profiles[0]?.id ?? "";
-    const selectedWorkspaceId = data.workspaces.some((item) => item.id === state.selectedWorkspaceId) ? state.selectedWorkspaceId : data.workspaces[0]?.id ?? "";
+    // An empty workspace id is the explicit "Sin workspace" filter once the
+    // app has loaded. Preserve it during background refreshes so sessions
+    // opened from automation runs are not silently replaced by a session in
+    // the first workspace.
+    const selectedWorkspaceId = state.bootstrapLoaded && state.selectedWorkspaceId === ""
+      ? ""
+      : data.workspaces.some((item) => item.id === state.selectedWorkspaceId)
+        ? state.selectedWorkspaceId
+        : data.workspaces[0]?.id ?? "";
     const selectedSessionId = data.sessions.some((item) => item.id === state.selectedSessionId && item.profileId === selectedProfileId && (!selectedWorkspaceId || item.workspaceId === selectedWorkspaceId)) ? state.selectedSessionId : data.sessions.find((item) => item.profileId === selectedProfileId && (!selectedWorkspaceId || item.workspaceId === selectedWorkspaceId))?.id ?? "";
     return { ...data, bootstrapLoaded: true, selectedGatewayId, selectedProfileId, selectedWorkspaceId, selectedSessionId };
   }),
