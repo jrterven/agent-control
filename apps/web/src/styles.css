@@ -35,6 +35,8 @@
   --danger-text: #ff9ca1;
   --danger-surface: #301417;
   --danger-border: #6a2d33;
+  --danger-contrast: #26070a;
+  --danger-ring: rgb(242 108 114 / .32);
   --shadow: 0 24px 70px rgb(0 0 0 / .44);
 }
 
@@ -70,6 +72,8 @@
   --danger-text: #a8323b;
   --danger-surface: #ffe8e9;
   --danger-border: #eeb2b6;
+  --danger-contrast: #ffffff;
+  --danger-ring: rgb(199 70 80 / .28);
   --shadow: 0 22px 65px rgb(42 64 78 / .18);
 }
 
@@ -313,7 +317,7 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .composer__actions { min-height: 44px; grid-column: 2; grid-row: 1; display: flex; align-items: flex-end; justify-content: flex-end; gap: 7px; }
 .composer__actions > span:empty { display: none; }
 .dictation-button { color: var(--accent) !important; border-color: var(--border-accent) !important; background: var(--accent-soft) !important; }
-.dictation-button.is-selected { color: var(--negative-text, #ffb0b7) !important; border-color: var(--negative, #ef6571) !important; background: rgb(239 101 113 / .13) !important; animation: dictation-pulse 1.4s ease-in-out infinite; }
+.dictation-button.is-selected { color: var(--danger-contrast) !important; border-color: var(--danger) !important; background: var(--danger) !important; box-shadow: 0 0 0 3px var(--danger-ring), 0 5px 14px rgb(0 0 0 / .2); animation: dictation-pulse 1.4s ease-in-out infinite; }
 .dictation-state { grid-column: 1 / -1; grid-row: 2; min-width: 0; display: grid; align-items: center; gap: 3px; border-top: 1px solid var(--border); padding: 7px 5px 3px; color: var(--accent); font-size: 11px; }
 .dictation-state > span { font-weight: 760; white-space: nowrap; }
 .dictation-state > small { grid-column: 1 / -1; color: var(--muted); font-size: 9px; line-height: 1.4; }
@@ -323,7 +327,10 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .dictation-consent__points li { display: grid; grid-template-columns: 24px 1fr; align-items: start; gap: 10px; color: var(--text-soft); line-height: 1.5; }
 .dictation-consent__points svg { margin-top: 2px; color: var(--accent); }
 .dictation-consent__actions { display: flex; justify-content: flex-end; gap: 8px; }
-@keyframes dictation-pulse { 50% { box-shadow: 0 0 0 4px rgb(239 101 113 / .12); } }
+@keyframes dictation-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--danger-ring), 0 5px 14px rgb(0 0 0 / .2); }
+  50% { box-shadow: 0 0 0 5px transparent, 0 6px 18px rgb(0 0 0 / .24); }
+}
 .send-button { color: #03151e !important; border-color: var(--accent) !important; background: var(--accent) !important; }
 .send-button:disabled { opacity: .36; cursor: not-allowed; }
 .composer-note { width: min(790px, 100%); margin: 6px auto 0; color: var(--muted); text-align: center; font-size: 9px; }
