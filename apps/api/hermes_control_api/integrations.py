@@ -167,6 +167,7 @@ def _safe_voice_preview_url(value: object) -> str | None:
         or parts.username is not None
         or parts.password is not None
         or not parts.path.startswith(ELEVENLABS_PREVIEW_PATH_PREFIX)
+        or not parts.path.lower().endswith(".mp3")
         or parts.fragment
     ):
         return None
@@ -700,7 +701,17 @@ class ElevenLabsSpeechClient:
                 await own_client.aclose()
             raise SpeechVoicePreviewUnavailable()
         content_type = response.headers.get("content-type", "").split(";", 1)[0]
-        if content_type not in {"audio/mpeg", "audio/mp3", "application/octet-stream"}:
+        # A small set of ElevenLabs' documented public GCS previews are valid
+        # MPEG audio but carry the legacy ``text/plain`` object metadata. The
+        # URL has already been constrained to ElevenLabs' fixed public bucket
+        # and an ``.mp3`` path, so accepting that one compatibility MIME here
+        # does not turn the proxy into a general content fetcher.
+        if content_type not in {
+            "audio/mpeg",
+            "audio/mp3",
+            "application/octet-stream",
+            "text/plain",
+        }:
             await response.aclose()
             if own_client is not None:
                 await own_client.aclose()

@@ -207,6 +207,55 @@ async def test_official_speech_client_uses_fixed_voice_and_single_use_token_cont
 
 
 @pytest.mark.asyncio
+async def test_voice_preview_accepts_legacy_gcs_text_plain_mp3_metadata():
+    requested = False
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        nonlocal requested
+        requested = True
+        return httpx.Response(
+            200,
+            content=b"\xff\xfbP\xc4preview",
+            headers={"Content-Type": "text/plain"},
+            request=request,
+        )
+
+    preview_url = (
+        "https://storage.googleapis.com/eleven-public-prod/premade/voices/"
+        "pNInz6obpgDQGcFmaJgB/sample.mp3"
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http_client:
+        speech = ElevenLabsSpeechClient(http_client)
+        response, own_client = await speech.open_preview_stream(preview_url)
+        body = b"".join(
+            [chunk async for chunk in speech.audio_chunks(response, own_client, 1024)]
+        )
+
+    assert requested is True
+    assert body.startswith(b"\xff\xfb")
+
+
+@pytest.mark.asyncio
+async def test_voice_preview_rejects_non_mp3_path_before_network():
+    requested = False
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        nonlocal requested
+        requested = True
+        return httpx.Response(200, content=b"not audio", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http_client:
+        speech = ElevenLabsSpeechClient(http_client)
+        with pytest.raises(IntegrationError) as caught:
+            await speech.open_preview_stream(
+                "https://storage.googleapis.com/eleven-public-prod/not-audio.txt"
+            )
+
+    assert caught.value.code == "SPEECH_VOICE_PREVIEW_UNAVAILABLE"
+    assert requested is False
+
+
+@pytest.mark.asyncio
 async def test_official_speech_client_does_not_follow_provider_redirects():
     def redirect(request: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"Location": "https://attacker.invalid/steal"}, request=request)

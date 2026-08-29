@@ -1,5 +1,5 @@
 import axe from "axe-core";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "../i18n";
@@ -80,7 +80,9 @@ describe("mobile-first chat", () => {
   });
 
   afterEach(async () => {
+    cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     await i18n.changeLanguage("es");
   });
 
@@ -160,6 +162,86 @@ describe("mobile-first chat", () => {
   it("turns Markdown into bounded, speakable response text", () => {
     expect(textForSpeech("## Informe\n**Listo** [detalle](https://example.com)\n```sh\nsecret\n```\nMEDIA:[private](/tmp/a.mp3)"))
       .toBe("Informe Listo detalle");
+  });
+
+  it("claims Android media playback from the speaker tap before downloading speech", async () => {
+    class FakeSourceBuffer extends EventTarget {
+      mode = "segments";
+      updating = false;
+
+      appendBuffer() {
+        queueMicrotask(() => this.dispatchEvent(new Event("updateend")));
+      }
+    }
+
+    class FakeMediaSource extends EventTarget {
+      static isTypeSupported = vi.fn(() => true);
+      static instances: FakeMediaSource[] = [];
+      readyState = "open";
+      sourceBuffer = new FakeSourceBuffer();
+      addSourceBuffer = vi.fn(() => this.sourceBuffer);
+      endOfStream = vi.fn(() => { this.readyState = "ended"; });
+
+      constructor() {
+        super();
+        FakeMediaSource.instances.push(this);
+      }
+    }
+
+    class FakeAudio extends EventTarget {
+      static instances: FakeAudio[] = [];
+      src = "";
+      preload = "";
+      playbackRate = 1;
+      paused = true;
+      ended = false;
+      currentTime = 0;
+      play = vi.fn(async () => {
+        this.paused = false;
+        this.dispatchEvent(new Event("playing"));
+      });
+      pause = vi.fn(() => { this.paused = true; });
+      load = vi.fn();
+      removeAttribute = vi.fn((name: string) => { if (name === "src") this.src = ""; });
+
+      constructor() {
+        super();
+        FakeAudio.instances.push(this);
+      }
+    }
+
+    const NativeURL = URL;
+    vi.stubGlobal("Audio", FakeAudio);
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    vi.stubGlobal("URL", class extends NativeURL {
+      static createObjectURL = vi.fn(() => "blob:history-audio");
+      static revokeObjectURL = vi.fn();
+    });
+    useAppStore.setState({
+      features: {
+        dictation: { available: false, provider: "elevenlabs", modelId: "scribe_v2_realtime" },
+        speech: { available: true, provider: "elevenlabs", modelId: "eleven_flash_v2_5", voiceId: "voice-aria", voiceName: "Aria" },
+      },
+    });
+    let releaseSpeech!: (response: Response) => void;
+    const streamSpeech = vi.spyOn(api, "streamSpeech").mockImplementation(() => new Promise((resolve) => {
+      releaseSpeech = resolve;
+    }));
+    const user = userEvent.setup();
+    render(<ChatView />);
+
+    await user.click(screen.getAllByRole("button", { name: "Escuchar esta respuesta" })[0]);
+    expect(FakeAudio.instances).toHaveLength(1);
+    expect(FakeAudio.instances[0].play).toHaveBeenCalledTimes(1);
+    expect(streamSpeech).toHaveBeenCalledTimes(1);
+    expect(FakeAudio.instances[0].play.mock.invocationCallOrder[0])
+      .toBeLessThan(streamSpeech.mock.invocationCallOrder[0]);
+
+    releaseSpeech(new Response(new Uint8Array([0x49, 0x44, 0x33, 0x04]), {
+      headers: { "Content-Type": "audio/mpeg" },
+    }));
+    await waitFor(() => expect(FakeMediaSource.instances[0].endOfStream).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText("Reproduciendo")).toBeVisible());
   });
 
   it("requires explicit first-use consent before requesting a token or microphone", async () => {
