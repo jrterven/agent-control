@@ -589,6 +589,54 @@ export function useBootstrapData() {
     })();
     return () => { active = false; };
   }, [authState, bootstrapLoaded, csrfToken, demoMode, hydrateBootstrap, setConnection]);
+
+  useEffect(() => {
+    if (authState !== "authenticated" || demoMode || !bootstrapLoaded) return;
+    let active = true;
+    let refreshing = false;
+
+    const refreshProjection = async () => {
+      if (!active || refreshing) return;
+      refreshing = true;
+      try {
+        const refreshed = await api.bootstrap();
+        if (!active) return;
+        hydrateBootstrap(refreshed);
+        const snapshot = useAppStore.getState();
+        const selectedGateway = refreshed.gateways.find(
+          (gateway) => gateway.id === snapshot.selectedGatewayId,
+        );
+        const hermesConnected = selectedGateway
+          ? selectedGateway.status === "connected"
+          : refreshed.gateways.some((gateway) => gateway.status === "connected");
+        setConnection(hermesConnected ? "connected" : "degraded");
+        if (snapshot.offlineCacheEnabled) {
+          await saveOfflineSnapshot(
+            refreshed,
+            snapshot.userName,
+            snapshot.selectedWorkspaceId,
+          );
+        }
+      } catch {
+        if (active) setConnection("degraded");
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshProjection();
+    };
+    const interval = window.setInterval(() => void refreshProjection(), 30_000);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [authState, bootstrapLoaded, demoMode, hydrateBootstrap, setConnection]);
 }
 
 export function useSessionHistory() {

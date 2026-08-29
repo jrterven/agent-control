@@ -74,7 +74,7 @@
 }
 
 * { box-sizing: border-box; }
-html { min-width: 320px; background: var(--bg); }
+html { min-width: 320px; background: var(--bg); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { margin: 0; min-width: 320px; min-height: 100vh; overflow: hidden; color: var(--text); background: var(--bg); font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 button, input, textarea, select { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
@@ -408,9 +408,10 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .hc-field > select:focus, .hc-field > textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-ring); }
 .success-banner { min-height: 48px; display: flex; align-items: center; gap: 9px; margin: -8px 0 18px; padding: 10px 14px; color: var(--success-text); border: 1px solid var(--success-border); border-radius: 12px; background: var(--success-surface); }
 .success-banner--warning { color: var(--warning-text); border-color: var(--warning-border); background: var(--warning-surface); }
-.gateway-card { padding: 17px; }
+.gateway-card { min-width: 0; max-width: 100%; overflow: hidden; padding: 17px; }
 .gateway-card > header { display: flex; align-items: center; gap: 10px; }
 .gateway-card > header > div { min-width: 0; flex: 1; display: grid; }
+.gateway-card > header > .hc-badge { flex: 0 0 auto; max-width: 100%; white-space: nowrap; }
 .gateway-card > header small { color: var(--muted); }
 .gateway-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 18px 0; }
 .gateway-metrics span { display: grid; padding: 10px; border-radius: 10px; background: var(--surface-2); }
@@ -418,12 +419,12 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .gateway-metrics small { color: var(--muted); font-size: 10px; }
 .gateway-contract { display: flex; align-items: center; gap: 9px; min-height: 54px; margin: 0 0 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-1); }
 .gateway-contract > svg { flex: 0 0 auto; color: var(--accent); font-size: 22px; }
-.gateway-contract > span { display: grid; gap: 2px; }
+.gateway-contract > span { min-width: 0; display: grid; gap: 2px; }
 .gateway-contract strong { font-size: 12px; }
 .gateway-contract small { color: var(--muted); font-size: 11px; }
-.gateway-card footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.gateway-card footer > span { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-.gateway-card code { color: var(--muted); font-size: 11px; }
+.gateway-card footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.gateway-card footer > span { min-width: 0; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+.gateway-card code { max-width: 100%; overflow-wrap: anywhere; color: var(--muted); font-size: 11px; }
 .gateway-card a { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-size: 12px; font-weight: 700; }
 .form-hint { display: flex; align-items: flex-start; gap: 8px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .form-hint > svg { flex: 0 0 auto; margin-top: 1px; color: var(--accent); font-size: 18px; }
@@ -666,6 +667,8 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
   .user-bubble { max-width: 91%; }
   .markdown-body h2 { font-size: 19px; }
   .gateway-metrics { grid-template-columns: 1fr 1fr; }
+  .gateway-card > header { display: grid; grid-template-columns: 44px minmax(0, 1fr); }
+  .gateway-card > header > .hc-badge { grid-column: 2; justify-self: start; }
   .theme-grid { grid-template-columns: 1fr; }
   .theme-grid > button { grid-template-columns: 86px 1fr; align-items: center; }
   .theme-preview { height: 52px; }

@@ -70,9 +70,9 @@ const administrativeWriteMethods = new Set([
 function profileWritePolicy(profile: Profile) {
   if (!profile.mutable) return "Solo lectura";
   if (profile.capabilitySet?.methods.some((method) => administrativeWriteMethods.has(method))) {
-    return "Administración autorizada";
+    return "Conversación y administración";
   }
-  return "Conversación autorizada";
+  return "Conversación completa";
 }
 
 export function AgentsScreen() {
@@ -86,12 +86,12 @@ export function AgentsScreen() {
         {profiles.map((profile) => (
           <Panel key={profile.id} className={cx("agent-card", profile.id === selectedProfileId && "is-selected")}>
             <header><span className="agent-card__avatar"><Robot weight="duotone" /></span><span><strong>{profile.displayName}</strong><small>{profile.technicalName}</small></span><Badge tone={profile.status === "ready" ? "positive" : "warning"}>{profile.status === "ready" ? "Disponible" : profile.status === "busy" ? "Trabajando" : "Sin configurar"}</Badge></header>
-            <dl><div><dt>Modelo</dt><dd>{profile.model}</dd></div><div><dt>Política de escritura</dt><dd>{profileWritePolicy(profile)}</dd></div></dl>
+            <dl><div><dt>Modelo</dt><dd>{profile.model}</dd></div><div><dt>Funciones disponibles</dt><dd>{profileWritePolicy(profile)}</dd></div></dl>
             <div className="agent-card__actions"><Button variant={profile.id === selectedProfileId ? "primary" : "secondary"} onClick={() => selectProfile(profile.id)}>{profile.id === selectedProfileId ? "Activo" : "Usar agente"}</Button>{profile.capabilities?.config ? <Link to="/config" className="hc-button hc-button--ghost hc-button--md">Ver configuración</Link> : null}</div>
           </Panel>
         ))}
       </div>
-      <Panel className="safety-callout"><ShieldCheck size={24} /><div><strong>Permisos protegidos por el backend</strong><p>Newton y Jarvis pueden conversar. La configuración, automatización y eliminación permanecen aisladas en <code>control-dev</code>.</p></div></Panel>
+      <Panel className="safety-callout"><ShieldCheck size={24} /><div><strong>Experiencia completa, permisos seguros</strong><p>Newton, Jarvis y <code>control-dev</code> pueden crear y reanudar chats, usar herramientas, detener ejecuciones y responder aprobaciones o preguntas cuando Hermes las anuncie. Los cambios destructivos y de infraestructura permanecen aislados en <code>control-dev</code>.</p></div></Panel>
     </div>
   );
 }

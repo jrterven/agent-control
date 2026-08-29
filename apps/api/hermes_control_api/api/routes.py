@@ -324,9 +324,19 @@ def readiness(request: Request) -> Any:
         "status": "unknown"
     }
     watcher_status = str(watcher_snapshot["status"])
+    capability_watcher = getattr(request.app.state, "capability_refresh_health", None)
+    capability_watcher_snapshot = (
+        capability_watcher.snapshot(at=now)
+        if capability_watcher is not None
+        else {"status": "unknown"}
+    )
+    capability_watcher_status = str(capability_watcher_snapshot["status"])
     return {
         "status": (
-            "degraded" if watcher_status in {"failed", "stale", "unknown"} else "ready"
+            "degraded"
+            if watcher_status in {"failed", "stale", "unknown"}
+            or capability_watcher_status in {"failed", "stale", "unknown"}
+            else "ready"
         ),
         "database": "ready",
         "upstream": upstream,
@@ -336,6 +346,8 @@ def readiness(request: Request) -> Any:
         "lastUpstreamCheckAt": last_health.isoformat() if last_health else None,
         "automationRoutes": watcher_status,
         "automationRouteWatcher": watcher_snapshot,
+        "capabilityRefresh": capability_watcher_status,
+        "capabilityRefreshWatcher": capability_watcher_snapshot,
         "time": now.isoformat(),
     }
 

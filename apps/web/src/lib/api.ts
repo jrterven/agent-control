@@ -78,6 +78,7 @@ export type ReadinessView = {
   staleGateways?: number;
   lastUpstreamCheckAt?: string | null;
   automationRoutes?: "starting" | "healthy" | "failed" | "stale" | "unknown";
+  capabilityRefresh?: "starting" | "healthy" | "failed" | "stale" | "unknown";
   time: string;
 };
 

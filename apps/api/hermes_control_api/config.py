@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     session_ttl_hours: int = 12
     realtime_ticket_ttl_seconds: int = 30
     capability_ttl_seconds: int = Field(default=60, ge=5, le=3_600)
+    capability_refresh_seconds: int = Field(default=30, ge=5, le=1_800)
     vault_key_b64: str | None = None
     provider_mode: Literal["auto", "real", "mock"] = "real"
     mock_fallback_enabled: bool = False

@@ -188,6 +188,58 @@ def test_readiness_reports_watcher_failure_staleness_and_recovery(client, app):
     assert stale.json()["automationRoutes"] == "stale"
 
 
+def test_capability_watcher_renews_expired_profile_permissions(authenticated, app):
+    client, _csrf = authenticated
+    with app.state.session_factory() as db:
+        profile = db.scalar(
+            select(ProfileRef).where(ProfileRef.profile_name == "default")
+        )
+        assert profile is not None
+        profile.capabilities = {}
+        profile.capabilities_checked_at = utc_now() - timedelta(
+            seconds=app.state.services.settings.capability_ttl_seconds + 1
+        )
+        db.commit()
+
+    expired = client.get("/api/v1/bootstrap")
+    assert expired.status_code == 200
+    newton = next(
+        row for row in expired.json()["profiles"] if row["technicalName"] == "default"
+    )
+    assert newton["mutable"] is False
+    assert newton["capabilities"]["prompts"] is False
+
+    client.portal.call(app.state.warm_capabilities_once)
+
+    renewed = client.get("/api/v1/bootstrap")
+    assert renewed.status_code == 200
+    newton = next(
+        row for row in renewed.json()["profiles"] if row["technicalName"] == "default"
+    )
+    assert newton["mutable"] is True
+    assert newton["capabilities"]["sessions"] is True
+    assert newton["capabilities"]["prompts"] is True
+    assert newton["capabilities"]["interrupt"] is True
+    assert "approval.respond" in newton["capabilitySet"]["methods"]
+    assert "clarify.respond" in newton["capabilitySet"]["methods"]
+
+
+def test_readiness_reports_capability_watcher_failure_and_recovery(client, app):
+    health = app.state.capability_refresh_health
+    now = datetime.now(timezone.utc)
+
+    health.mark_failure(at=now)
+    failed = client.get("/api/v1/ready")
+    assert failed.status_code == 200
+    assert failed.json()["status"] == "degraded"
+    assert failed.json()["capabilityRefresh"] == "failed"
+
+    health.mark_success(at=now)
+    recovered = client.get("/api/v1/ready")
+    assert recovered.json()["status"] == "ready"
+    assert recovered.json()["capabilityRefresh"] == "healthy"
+
+
 def test_readiness_and_gateway_projections_expire_cached_upstream_health_by_ttl(
     authenticated, app
 ):

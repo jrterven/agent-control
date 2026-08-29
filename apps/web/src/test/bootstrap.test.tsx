@@ -71,4 +71,31 @@ describe("fresh bootstrap", () => {
     await waitFor(() => expect(useAppStore.getState().bootstrapLoaded).toBe(true));
     expect(useAppStore.getState().connection).toBe("degraded");
   });
+
+  it("renews the capability projection when the mobile app returns to the foreground", async () => {
+    useAppStore.setState({
+      bootstrapLoaded: true,
+      gateways: [gateway("connected")],
+      profiles: [profile],
+    });
+    const refreshedProfile: Profile = {
+      ...profile,
+      mutable: true,
+      capabilities: {
+        realtime: true, sessions: true, prompts: true, interrupt: true,
+        cron: false, profiles: true, config: false, memory: false,
+      },
+    };
+    const bootstrap = vi.spyOn(api, "bootstrap").mockResolvedValue({
+      ...data("connected"),
+      profiles: [refreshedProfile],
+    });
+
+    render(<BootstrapProbe />);
+    window.dispatchEvent(new Event("focus"));
+
+    await waitFor(() => expect(bootstrap).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(useAppStore.getState().profiles[0].mutable).toBe(true));
+    expect(useAppStore.getState().connection).toBe("connected");
+  });
 });

@@ -24,7 +24,7 @@ from .config import Settings, get_settings
 from .database import Base, build_engine, build_session_factory
 from .eventing import EventHub
 from .middleware import BodySizeLimitMiddleware, IdempotencyMiddleware, SecurityBoundaryMiddleware
-from .models import Automation
+from .models import Automation, Gateway
 from .providers import build_provider_pool
 from .realtime import persist_normalized_event
 from .security import SecretVault
@@ -36,6 +36,7 @@ from .services import (
     GatewayService,
     HermesSessionRouter,
     NotFoundError,
+    ProfileService,
     UpstreamUnavailableError,
 )
 
@@ -111,6 +112,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings.automation_route_watch_seconds * 2,
         )
     )
+    capability_refresh_interval = min(
+        settings.capability_refresh_seconds,
+        max(2.5, settings.capability_ttl_seconds / 2),
+    )
+    capability_refresh_health = SupervisorHealth(
+        stale_after_seconds=max(
+            settings.capability_ttl_seconds,
+            capability_refresh_interval * 3,
+        )
+    )
+
+    async def warm_capabilities_once() -> None:
+        """Renew profile-scoped capability proofs without a browser mutation.
+
+        Capability assertions deliberately expire quickly. Keeping their
+        renewal in the backend prevents a long-lived PWA from becoming stuck
+        in read-only mode while preserving the fail-closed TTL when Hermes or
+        its private tunnel is actually unavailable.
+        """
+
+        with session_factory() as db:
+            gateway_ids = list(
+                db.scalars(select(Gateway.id).where(Gateway.enabled.is_(True))).all()
+            )
+        for gateway_id in gateway_ids:
+            try:
+                with session_factory() as db:
+                    await ProfileService(service_container).sync(db, gateway_id)
+            except asyncio.CancelledError:
+                raise
+            except SQLAlchemyError:
+                # A local database error invalidates the supervisor pass and
+                # must remain visible through its health state.
+                raise
+            except Exception:
+                # One unavailable gateway must not stop refreshes for the
+                # other independently configured gateways.
+                continue
+
+    async def supervise_capabilities() -> None:
+        await supervise_periodic(
+            warm_capabilities_once,
+            health=capability_refresh_health,
+            interval_seconds=capability_refresh_interval,
+        )
 
     async def warm_automation_routes_once() -> None:
         """Reconcile authoritative cron sessions even with no browser open.
@@ -172,8 +218,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         automation_watcher = asyncio.create_task(
             supervise_automation_routes(), name="hermes-automation-route-watcher"
         )
+        capability_watcher = asyncio.create_task(
+            supervise_capabilities(), name="hermes-capability-refresh-watcher"
+        )
         app.state.automation_route_watcher_task = automation_watcher
+        app.state.capability_refresh_watcher_task = capability_watcher
         app.state.warm_automation_routes_once = warm_automation_routes_once
+        app.state.warm_capabilities_once = warm_capabilities_once
         app.state.mark_orphaned_local_triggers_unknown = lambda: _mark_orphans(
             session_factory, service_container
         )
@@ -181,8 +232,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             automation_watcher.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await automation_watcher
+            capability_watcher.cancel()
+            for watcher in (automation_watcher, capability_watcher):
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watcher
             await provider_pool.close()
             engine.dispose()
 
@@ -198,6 +251,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.session_factory = session_factory
     app.state.services = service_container
     app.state.automation_route_health = automation_route_health
+    app.state.capability_refresh_health = capability_refresh_health
     app.add_middleware(IdempotencyMiddleware)
     app.add_middleware(SecurityBoundaryMiddleware, settings=settings)
     app.add_middleware(
