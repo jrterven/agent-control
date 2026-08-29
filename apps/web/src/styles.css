@@ -359,6 +359,12 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .safety-callout { display: flex; align-items: flex-start; gap: 13px; margin-top: 16px; padding: 16px; color: var(--success-text); border-color: var(--success-border); background: var(--success-surface); }
 .safety-callout p { margin: 4px 0 0; color: var(--text-soft); }
 .safety-callout code { color: var(--success-text); }
+.create-agent-callout { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 14px; margin-top: 16px; padding: 17px; }
+.create-agent-callout__icon { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; color: var(--accent); background: var(--accent-soft); font-size: 24px; }
+.create-agent-callout p { margin: 3px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.create-agent-callout > .hc-button { min-width: 148px; }
+.agent-creator { width: min(560px, 100%); }
+.agent-creator textarea { min-height: 132px; resize: vertical; }
 .next-runs { margin-bottom: 20px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-1); }
 .next-runs > div { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 10px; }
 .next-runs > div > span { display: grid; grid-template-columns: 28px 1fr; align-items: center; column-gap: 8px; }
@@ -633,6 +639,8 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
   .page-header > .hc-button { width: 44px; padding: 0; font-size: 0; }
   .page-header > .hc-button .hc-button__icon { margin: 0; }
   .agent-grid, .gateway-grid, .diagnostic-grid, .more-grid, .admin-grid { grid-template-columns: 1fr; }
+  .create-agent-callout { grid-template-columns: 44px minmax(0, 1fr); align-items: start; }
+  .create-agent-callout > .hc-button { width: 100%; grid-column: 1 / -1; }
   .next-runs > div { grid-template-columns: 1fr; }
   .automation-row { grid-template-columns: 42px minmax(0, 1fr); }
   .automation-row__end { grid-column: 2; justify-content: space-between; }

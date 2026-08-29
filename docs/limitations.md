@@ -16,6 +16,10 @@
   expose their complete verified contract, including cron and administration.
   Operators can still narrow `HERMES_CONTROL_MUTABLE_PROFILES` when deploying
   a shared or less-trusted installation.
+- Agents created in Control start with empty memory and history and share the
+  gateway-managed inference authentication pool. They do not automatically
+  receive a Telegram bot/channel; messaging-channel setup remains a separate
+  Hermes administration task.
 - The audited Hermes memory endpoints are not profile-aware, so memory reads
   and writes are hidden for real 0.20.5/0.20.6 providers.
 - An event replay buffer can truncate. Control rehydrates durable history, but

@@ -59,6 +59,42 @@ describe("browser API boundary", () => {
     expect(init.headers).toEqual(expect.objectContaining({ "Idempotency-Key": expect.any(String), "X-CSRF-Token": "csrf-memory-only" }));
   });
 
+  it("creates a fresh agent through the same-origin profile boundary", async () => {
+    const response = {
+      id: "profile-researcher",
+      gatewayId: "gateway-a",
+      technicalName: "researcher-ai",
+      displayName: "Researcher",
+      model: "unconfigured",
+      status: "ready",
+      mutable: true,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(response), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.createProfile({
+      gatewayId: "gateway-a",
+      technicalName: "researcher-ai",
+      displayName: "Researcher",
+      description: "Researches technical sources without inherited credentials.",
+    }, "csrf-memory-only");
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/v1/profiles");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("same-origin");
+    expect(init.headers).toEqual(expect.objectContaining({
+      "Idempotency-Key": expect.any(String),
+      "X-CSRF-Token": "csrf-memory-only",
+    }));
+    expect(JSON.parse(String(init.body))).toEqual({
+      gatewayId: "gateway-a",
+      technicalName: "researcher-ai",
+      displayName: "Researcher",
+      description: "Researches technical sources without inherited credentials.",
+    });
+  });
+
   it("sends operator trust only to the gateway PATCH and supports explicit revocation", async () => {
     const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ id: "gateway-a" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);

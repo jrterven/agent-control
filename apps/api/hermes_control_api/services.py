@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -49,7 +49,7 @@ from .models import (
 )
 from .providers import authoritative_provider_read
 from .realtime import persist_normalized_event
-from .schemas import AutomationCreate, GatewayCreate, GatewayUpdate, SessionCreate, WorkspaceCreate
+from .schemas import AutomationCreate, GatewayCreate, GatewayUpdate, ProfileCreate, SessionCreate, WorkspaceCreate
 from .security import SecretVault, random_token, token_hash
 
 
@@ -158,6 +158,7 @@ UPSTREAM_MUTATION_CAPABILITIES: frozenset[str] = frozenset(
         "channels.test",
         "secrets.set",
         "secrets.delete",
+        "profiles.create",
     }
 )
 
@@ -279,6 +280,23 @@ class AppServices:
     provider_pool: ProviderPool
     session_router: HermesSessionRouter
     session_factory: Any | None = None
+    profile_creation_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
+
+
+def grant_control_managed_profile(services: AppServices, profile_name: str) -> None:
+    """Make a Control-created profile usable across the audited operations.
+
+    The durable authority is ``ProfileRef.managed_by_control``. These in-memory
+    lists feed the existing profile guard and are rebuilt from that marker on
+    every process start.
+    """
+
+    for configured in (
+        services.settings.mutable_profiles,
+        services.settings.interactive_profiles,
+    ):
+        if profile_name not in configured:
+            configured.append(profile_name)
 
 
 def record_profile_health(
@@ -448,6 +466,12 @@ class GatewayService:
 
     def seed_environment_gateway(self, db: Session) -> Gateway:
         settings = self.services.settings
+        for managed_name in db.scalars(
+            select(ProfileRef.profile_name).where(
+                ProfileRef.managed_by_control.is_(True)
+            )
+        ).all():
+            grant_control_managed_profile(self.services, managed_name)
         configured_dashboard_token = settings.hermes_dashboard_token or None
         configured_api_key = settings.hermes_api_key or None
         gateway = db.scalar(select(Gateway).where(Gateway.env_managed.is_(True)))
@@ -886,7 +910,7 @@ class ProfileService:
                 # inherit capabilities from another route or from mock fallback.
                 pass
         for profile in profiles:
-            display_name = {
+            discovered_display_name = {
                 "default": "Newton",
                 "jarvis": "Jarvis",
             }.get(profile.name, profile.display_name)
@@ -900,12 +924,13 @@ class ProfileService:
                 row = ProfileRef(
                     gateway_id=gateway_id,
                     profile_name=profile.name,
-                    display_name=display_name,
+                    display_name=discovered_display_name,
                 )
                 db.add(row)
             # Hermes 0.20.5 may return only the technical name. Preserve the
-            # operator-confirmed aliases used throughout Agent Control.
-            row.display_name = display_name
+            # operator-confirmed aliases and aliases assigned during creation.
+            if profile.name in {"default", "jarvis"} or not row.managed_by_control:
+                row.display_name = discovered_display_name
             row.model = profile.model
             capability = scoped_capabilities.get(profile.name)
             # Official 0.20.5/0.20.6 profiles.list omits status. The scoped
@@ -947,6 +972,132 @@ class ProfileService:
         return list(
             db.scalars(select(ProfileRef).where(ProfileRef.gateway_id == gateway_id)).all()
         )
+
+    async def create(
+        self,
+        db: Session,
+        actor: User,
+        payload: ProfileCreate,
+    ) -> ProfileRef:
+        gateway_lock = self.services.profile_creation_locks.setdefault(
+            payload.gateway_id, asyncio.Lock()
+        )
+        async with gateway_lock:
+            profiles = list(
+                db.scalars(
+                    select(ProfileRef).where(
+                        ProfileRef.gateway_id == payload.gateway_id
+                    )
+                ).all()
+            )
+            if not profiles:
+                raise NotFoundError("Gateway profiles were not found")
+            existing = db.scalar(
+                select(ProfileRef).where(
+                    ProfileRef.gateway_id == payload.gateway_id,
+                    ProfileRef.profile_name == payload.technical_name,
+                )
+            )
+            if existing is not None:
+                raise ConflictError("An agent with that technical name already exists")
+
+            management_profile = None
+            for candidate in sorted(
+                profiles,
+                key=lambda item: (
+                    {"control-dev": 0, "default": 1, "jarvis": 2}.get(
+                        item.profile_name, 3
+                    ),
+                    item.profile_name,
+                ),
+            ):
+                try:
+                    await require_capability(
+                        db,
+                        self.services,
+                        gateway_id=payload.gateway_id,
+                        profile_name=candidate.profile_name,
+                        method="profiles.create",
+                    )
+                except ConflictError:
+                    continue
+                management_profile = candidate
+                break
+            if management_profile is None:
+                raise ConflictError(
+                    "No gateway profile has verified permission to create agents"
+                )
+            connection = await self.gateway_service.connection(
+                db, payload.gateway_id, management_profile.profile_name
+            )
+            provider = await self.services.provider_pool.get(connection)
+            created_profile = None
+            try:
+                created_profile = await provider.create_profile(
+                    name=payload.technical_name,
+                    display_name=payload.display_name,
+                    description=payload.description,
+                )
+            except JsonRpcError as exc:
+                if exc.code == 4062:
+                    raise ConflictError(
+                        "Hermes rejected that technical name or it already exists"
+                    ) from exc
+                raise
+            except RuntimeError as exc:
+                if str(exc) != "MUTATION_DELIVERY_UNKNOWN":
+                    raise
+                # Never resend an ambiguous upstream mutation. A successful
+                # read reconciliation is sufficient because profile names are
+                # unique in Hermes.
+                discovered = await authoritative_provider_read(
+                    provider, "list_profiles"
+                )
+                if payload.technical_name not in {item.name for item in discovered}:
+                    raise UpstreamUnavailableError(
+                        "Agent creation outcome is unknown; refresh agents before retrying"
+                    ) from exc
+
+            grant_control_managed_profile(self.services, payload.technical_name)
+            rows = await self.sync(
+                db,
+                payload.gateway_id,
+                profile_name=management_profile.profile_name,
+            )
+            row = next(
+                (
+                    item
+                    for item in rows
+                    if item.profile_name == payload.technical_name
+                ),
+                None,
+            )
+            if row is None:
+                raise UpstreamUnavailableError(
+                    "Hermes created the agent but it is not visible yet; refresh agents"
+                )
+            row.display_name = payload.display_name
+            row.description = payload.description
+            row.managed_by_control = True
+            if created_profile is not None and created_profile.status == "degraded":
+                # Creation is already committed upstream. Keep the discovered
+                # agent visible, but do not claim it is ready when Hermes could
+                # not write its identity or inherit an inference model.
+                row.status = "degraded"
+            audit(
+                db,
+                actor=actor,
+                action="profile.create",
+                target_type="profile",
+                target_id=row.id,
+                details={
+                    "gatewayId": payload.gateway_id,
+                    "profileName": payload.technical_name,
+                },
+            )
+            db.commit()
+            db.refresh(row)
+            return row
 
 
 class WorkspaceService:

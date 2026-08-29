@@ -156,13 +156,16 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     assert "capabilities_checked_at" in {
         column["name"] for column in schema.get_columns("profile_refs")
     }
+    assert {"description", "managed_by_control"} <= {
+        column["name"] for column in schema.get_columns("profile_refs")
+    }
     assert "read_at" in {
         column["name"] for column in schema.get_columns("automation_runs")
     }
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0006_automation_run_read"
+        ).scalar_one() == "0007_control_managed_profiles"
     engine.dispose()
 
     downgrade = subprocess.run(

@@ -1,4 +1,4 @@
-import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, Gateway, RealtimeEvent, SearchResult, SessionSummary, Workspace } from "../types";
+import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, Gateway, Profile, RealtimeEvent, SearchResult, SessionSummary, Workspace } from "../types";
 
 export type AdminResourceName = "models" | "config" | "soul" | "skills" | "toolsets" | "mcp" | "channels" | "usage" | "secrets";
 
@@ -33,6 +33,13 @@ export type GatewayCreateInput = {
 
 export type GatewayUpdateInput = {
   trustedSourceSha?: string | null;
+};
+
+export type ProfileCreateInput = {
+  gatewayId: string;
+  technicalName: string;
+  displayName: string;
+  description: string;
 };
 
 export type AutomationCreateInput = {
@@ -246,6 +253,11 @@ export const api = {
   refreshProfiles: (gatewayId: string, csrfToken?: string) => request(`/profiles/refresh?gatewayId=${encodeURIComponent(gatewayId)}`, {
     method: "POST",
     headers: { "Idempotency-Key": crypto.randomUUID(), ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) },
+  }),
+  createProfile: (payload: ProfileCreateInput, csrfToken?: string) => request<Profile>("/profiles", {
+    method: "POST",
+    headers: mutationHeaders(csrfToken),
+    body: JSON.stringify(payload),
   }),
   syncSessions: (gatewayId: string, profileName: string, csrfToken?: string) => request<SessionWire[]>("/sessions/sync", {
     method: "POST",

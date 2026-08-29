@@ -248,6 +248,13 @@ class HermesProvider(Protocol):
 
     async def capabilities(self) -> CapabilitySet: ...
     async def list_profiles(self) -> list[HermesProfile]: ...
+    async def create_profile(
+        self,
+        *,
+        name: str,
+        display_name: str,
+        description: str,
+    ) -> HermesProfile: ...
     async def list_sessions(self) -> list[HermesSession]: ...
     async def search_sessions(
         self, query: str, *, limit: int = 20
@@ -823,6 +830,8 @@ class HermesGatewayProvider:
             if audited_contract and audited is not None:
                 if "session.list" in methods:
                     methods.update(audited[1])
+                if "profiles.list" in methods:
+                    methods.add("profiles.create")
                 # The official Hermes cron contract uses the profile's
                 # configured timezone and falls back to the host's local zone
                 # when that value is empty. Its dashboard and Telegram clients
@@ -948,6 +957,60 @@ class HermesGatewayProvider:
             )
             for item in rows
         ]
+
+    async def create_profile(
+        self,
+        *,
+        name: str,
+        display_name: str,
+        description: str,
+    ) -> HermesProfile:
+        """Create one official Hermes profile without exposing its host path.
+
+        This mutation is deliberately sent once. A missing reply is ambiguous
+        and must be reconciled by the caller through ``profiles.list`` rather
+        than retried automatically.
+        """
+
+        await self._ensure_connected()
+        soul = f"# {display_name}\n\nYou are {display_name}.\n\n{description.strip()}\n"
+        try:
+            raw = await self.rpc.request(
+                "profiles.create",
+                {
+                    "name": name,
+                    "description": description,
+                    "soul": soul,
+                    "mirror_credentials": True,
+                    # Hermes' shared global auth fallback avoids forking
+                    # renewable OAuth token state into another auth.json.
+                    "share_auth": True,
+                    "clone_all": False,
+                    "no_skills": False,
+                },
+            )
+        except (JsonRpcDisconnected, ConnectionError, OSError, TimeoutError) as exc:
+            raise RuntimeError("MUTATION_DELIVERY_UNKNOWN") from exc
+        if not isinstance(raw, Mapping):
+            raise UpstreamPayloadError("Hermes profile response must be an object")
+        returned_name = _bounded_text(
+            raw.get("name"), label="profile name", max_length=64
+        )
+        if returned_name != name:
+            raise UpstreamPayloadError("Hermes returned a different profile identity")
+        mirrored = raw.get("mirrored")
+        setup_ready = bool(raw.get("soul_written")) and isinstance(
+            mirrored, Mapping
+        ) and mirrored.get("auth") == "shared" and bool(
+            raw.get("model_set") or mirrored.get("model_inherited")
+        )
+        # Hermes also returns filesystem and credential-mirroring diagnostics.
+        # They are intentionally discarded at this trust boundary.
+        return HermesProfile(
+            name=returned_name,
+            display_name=display_name,
+            status="unknown" if setup_ready else "degraded",
+        )
 
     async def list_sessions(self) -> list[HermesSession]:
         self._session_inventory_complete = False
@@ -2243,9 +2306,12 @@ class HermesGatewayProvider:
 class InMemoryHermesProvider:
     """Deterministic provider used offline and by integration tests."""
 
+    _profiles_by_gateway: dict[str, dict[str, HermesProfile]] = defaultdict(dict)
+
     def __init__(self, connection: ProviderConnection, event_sink: EventSink | None = None) -> None:
         self.connection = connection
         self.event_sink = event_sink
+        self._created_profiles = self._profiles_by_gateway[connection.gateway_id]
         self._sessions: dict[str, HermesSession] = {}
         self._messages: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._automations: dict[str, HermesAutomation] = {}
@@ -2330,6 +2396,7 @@ class InMemoryHermesProvider:
             methods=frozenset(
                 {
                     "profiles.list",
+                    "profiles.create",
                     "session.list",
                     "session.create",
                     "session.resume",
@@ -2381,7 +2448,23 @@ class InMemoryHermesProvider:
         label = {"default": "Newton", "jarvis": "Jarvis"}.get(
             self.connection.profile_name, self.connection.profile_name
         )
-        return [HermesProfile(self.connection.profile_name, label, "online", "mock-model")]
+        own = HermesProfile(
+            self.connection.profile_name, label, "online", "mock-model"
+        )
+        return [own, *self._created_profiles.values()]
+
+    async def create_profile(
+        self,
+        *,
+        name: str,
+        display_name: str,
+        description: str,
+    ) -> HermesProfile:
+        if name == self.connection.profile_name or name in self._created_profiles:
+            raise JsonRpcError(4062, "profile already exists")
+        profile = HermesProfile(name, display_name, "online", "mock-model")
+        self._created_profiles[name] = profile
+        return profile
 
     async def list_sessions(self) -> list[HermesSession]:
         return sorted(self._sessions.values(), key=lambda row: row.updated_at, reverse=True)

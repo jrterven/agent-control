@@ -82,11 +82,100 @@ function profileWritePolicy(profile: Profile, t: (key: string) => string) {
   return t("agentsPage.fullConversation");
 }
 
+type AgentCreateValues = {
+  technicalName: string;
+  displayName: string;
+  description: string;
+};
+
+const emptyAgentCreateValues: AgentCreateValues = {
+  technicalName: "",
+  displayName: "",
+  description: "",
+};
+
 export function AgentsScreen() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const selectedProfileId = useAppStore((state) => state.selectedProfileId);
   const selectProfile = useAppStore((state) => state.selectProfile);
   const profiles = useAppStore((state) => state.profiles);
+  const selectedGatewayId = useAppStore((state) => state.selectedGatewayId);
+  const csrfToken = useAppStore((state) => state.csrfToken);
+  const offline = useAppStore((state) => state.authState === "offline");
+  const demoMode = useAppStore((state) => state.demoMode);
+  const hydrateBootstrap = useAppStore((state) => state.hydrateBootstrap);
+  const [creatorOpen, setCreatorOpen] = useState(false);
+  const [createError, setCreateError] = useState("");
+  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
+  const sourceProfile = selectedProfile ?? profiles.find((profile) => (
+    profile.gatewayId === selectedGatewayId && profile.capabilities?.profileCreate
+  ));
+  const targetGatewayId = sourceProfile?.gatewayId ?? selectedGatewayId;
+  const canCreateProfile = Boolean(
+    targetGatewayId
+    && sourceProfile?.capabilities?.profileCreate
+    && !offline
+    && !demoMode,
+  );
+  const agentCreateSchema = useMemo(() => z.object({
+    technicalName: z.string()
+      .trim()
+      .min(2, t("agentsPage.validationTechnicalName"))
+      .max(64, t("agentsPage.validationTechnicalName"))
+      .regex(/^[a-z][a-z0-9-]*$/, t("agentsPage.validationTechnicalName"))
+      .refine(
+        (value) => !profiles.some((profile) => profile.gatewayId === targetGatewayId && profile.technicalName.toLowerCase() === value.toLowerCase()),
+        t("agentsPage.duplicateTechnicalName"),
+      ),
+    displayName: z.string().trim().min(2, t("agentsPage.validationDisplayName")).max(80, t("agentsPage.validationDisplayName")),
+    description: z.string().trim().min(10, t("agentsPage.validationDescription")).max(4_000, t("agentsPage.validationDescription")),
+  }), [profiles, t, targetGatewayId]);
+  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<AgentCreateValues>({
+    resolver: zodResolver(agentCreateSchema),
+    defaultValues: emptyAgentCreateValues,
+  });
+  const closeCreator = () => {
+    setCreatorOpen(false);
+    setCreateError("");
+    reset(emptyAgentCreateValues);
+  };
+  const creatorDialog = useOverlayDialog<HTMLDivElement>({ open: creatorOpen, onClose: closeCreator, mediaQuery: "(min-width: 0px)" });
+  const openCreator = () => {
+    setCreateError("");
+    reset(emptyAgentCreateValues);
+    setCreatorOpen(true);
+  };
+  const createAgent = handleSubmit(async (values) => {
+    if (!canCreateProfile || !targetGatewayId || !sourceProfile) {
+      setCreateError(t("agentsPage.createUnsupported"));
+      return;
+    }
+    setCreateError("");
+    try {
+      const created = await api.createProfile({
+        gatewayId: targetGatewayId,
+        technicalName: values.technicalName,
+        displayName: values.displayName,
+        description: values.description,
+      }, csrfToken);
+      const bootstrap = await api.bootstrap();
+      const refreshedProfile = bootstrap.profiles.find((profile) => (
+        profile.id === created.id
+        || (profile.gatewayId === targetGatewayId && profile.technicalName === created.technicalName)
+      ));
+      const activeProfile = refreshedProfile ?? created;
+      hydrateBootstrap(refreshedProfile ? bootstrap : {
+        ...bootstrap,
+        profiles: [...bootstrap.profiles.filter((profile) => profile.id !== created.id), created],
+      });
+      selectProfile(activeProfile.id);
+      closeCreator();
+      void navigate({ to: "/chats" });
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : t("agentsPage.createError"));
+    }
+  });
   return (
     <div className="page-wrap">
       <PageHeader eyebrow={t("agentsPage.eyebrow")} title={t("agentsPage.title")} description={t("agentsPage.description")} />
@@ -100,6 +189,30 @@ export function AgentsScreen() {
         ))}
       </div>
       <Panel className="safety-callout"><ShieldCheck size={24} /><div><strong>{t("agentsPage.safetyTitle")}</strong><p>{t("agentsPage.safetyBody")}</p></div></Panel>
+      <Panel className="create-agent-callout">
+        <span className="create-agent-callout__icon"><Robot weight="duotone" /></span>
+        <div><strong>{t("agentsPage.createCalloutTitle")}</strong><p>{canCreateProfile ? t("agentsPage.createCalloutBody") : t("agentsPage.createUnavailable")}</p></div>
+        <Button variant="primary" leadingIcon={<Plus />} onClick={openCreator} disabled={!canCreateProfile}>{t("agentsPage.newAgent")}</Button>
+      </Panel>
+      {creatorOpen ? <div ref={creatorDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="agent-creator-title" aria-describedby="agent-creator-description">
+        <button className="modal-scrim" aria-label={t("agentsPage.closeCreator")} onClick={closeCreator} />
+        <Panel className="form-modal agent-creator">
+          <span className="eyebrow">{t("agentsPage.creatorEyebrow")}</span>
+          <h2 id="agent-creator-title">{t("agentsPage.creatorTitle")}</h2>
+          <p id="agent-creator-description">{t("agentsPage.creatorDescription")}</p>
+          <form onSubmit={createAgent} noValidate>
+            <Field label={t("agentsPage.technicalName")} aria-label={t("agentsPage.technicalName")} hint={t("agentsPage.technicalNameHint")} autoCapitalize="none" autoCorrect="off" spellCheck={false} error={errors.technicalName?.message} {...register("technicalName")} />
+            <Field label={t("agentsPage.displayName")} aria-label={t("agentsPage.displayName")} autoComplete="off" error={errors.displayName?.message} {...register("displayName")} />
+            <label className="hc-field">
+              <span className="hc-field__label">{t("agentsPage.agentDescription")}</span>
+              <textarea rows={6} aria-label={t("agentsPage.agentDescription")} placeholder={t("agentsPage.agentDescriptionPlaceholder")} aria-invalid={Boolean(errors.description)} {...register("description")} />
+              {errors.description?.message ? <span className="hc-field__error">{errors.description.message}</span> : <span className="hc-field__hint">{t("agentsPage.agentDescriptionHint")}</span>}
+            </label>
+            {createError ? <p className="form-error" role="alert"><WarningCircle /> {createError}</p> : null}
+            <div><Button type="button" variant="ghost" onClick={closeCreator}>{t("agentsPage.cancel")}</Button><Button type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? t("agentsPage.creating") : t("agentsPage.createAndUse")}</Button></div>
+          </form>
+        </Panel>
+      </div> : null}
     </div>
   );
 }

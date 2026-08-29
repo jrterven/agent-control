@@ -96,6 +96,8 @@ class ProfileRef(Base, Timestamped):
     gateway_id: Mapped[str] = mapped_column(ForeignKey("gateways.id", ondelete="CASCADE"))
     profile_name: Mapped[str] = mapped_column(String(120))
     display_name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str | None] = mapped_column(Text)
+    managed_by_control: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="unknown")
     model: Mapped[str | None] = mapped_column(String(200))
     capabilities: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

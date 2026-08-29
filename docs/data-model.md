@@ -31,6 +31,11 @@ erDiagram
   can never prolong a capability assertion. Gateway health is a fail-closed
   aggregate of all configured/discovered profile observations: mixed or stale
   membership is degraded/unknown rather than last-writer-wins.
+- `PROFILE_REF.managed_by_control` durably marks profiles created through the
+  UI. Their local display name and description survive upstream discovery, and
+  the marker rebuilds their audited mutation grant after a Control restart.
+  Hermes remains authoritative for the actual profile, model, SOUL, skills and
+  conversations.
 - `IDEMPOTENCY_OPERATION` records request hash, status and response reference;
   the same key with different input is rejected.
 - Messages remain in Hermes. Control may store only drafts, safe display

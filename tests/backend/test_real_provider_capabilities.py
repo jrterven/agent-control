@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 import hermes_client.provider as provider_module
@@ -226,8 +228,84 @@ async def test_audited_real_provider_uses_rest_cron_probe_and_hides_memory(
     assert "cron.list" in capabilities.methods
     assert "cron.create" in capabilities.methods
     assert "session.create" in capabilities.methods
+    assert "profiles.create" in capabilities.methods
     assert {"approval.respond", "clarify.respond"}.issubset(capabilities.methods)
     assert not any(method.startswith("memory.") for method in capabilities.methods)
+
+
+@pytest.mark.asyncio
+async def test_profile_creation_uses_fresh_shared_auth_contract_once(monkeypatch):
+    provider = HermesGatewayProvider(
+        _connection(trusted_source_sha=AUDITED_0205_SHA)
+    )
+    monkeypatch.setattr(provider, "_ensure_connected", AsyncMock())
+    request = AsyncMock(
+        return_value={
+            "ok": True,
+            "name": "researcher",
+            "path": "/private/profile/path",
+            "soul_written": True,
+            "model_set": False,
+            "mirrored": {
+                "env": False,
+                "auth": "shared",
+                "model_inherited": True,
+                "voice": True,
+            },
+        }
+    )
+    monkeypatch.setattr(provider.rpc, "request", request)
+    try:
+        created = await provider.create_profile(
+            name="researcher",
+            display_name="Researcher",
+            description="Research primary sources and explain uncertainty.",
+        )
+    finally:
+        await provider.close()
+
+    assert created.name == "researcher"
+    assert created.display_name == "Researcher"
+    assert created.status == "unknown"
+    request.assert_awaited_once()
+    method, params = request.await_args.args
+    assert method == "profiles.create"
+    assert params["mirror_credentials"] is True
+    assert params["share_auth"] is True
+    assert params["clone_all"] is False
+    assert "clone_from" not in params
+    assert params["description"] in params["soul"]
+
+
+@pytest.mark.asyncio
+async def test_profile_creation_marks_partial_setup_degraded(monkeypatch):
+    provider = HermesGatewayProvider(
+        _connection(trusted_source_sha=AUDITED_0205_SHA)
+    )
+    monkeypatch.setattr(provider, "_ensure_connected", AsyncMock())
+    monkeypatch.setattr(
+        provider.rpc,
+        "request",
+        AsyncMock(
+            return_value={
+                "ok": True,
+                "name": "researcher",
+                "soul_written": False,
+                "model_set": False,
+                "mirrored": {"auth": "shared", "model_inherited": False},
+            }
+        ),
+    )
+    try:
+        created = await provider.create_profile(
+            name="researcher",
+            display_name="Researcher",
+            description="Research primary sources and explain uncertainty.",
+        )
+    finally:
+        await provider.close()
+
+    assert created.status == "degraded"
 
 
 @pytest.mark.asyncio

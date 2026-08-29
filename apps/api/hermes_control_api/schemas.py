@@ -9,6 +9,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 _CRON_TOKEN = re.compile(r"^[A-Za-z0-9*,/\-]+$")
+_RESERVED_PROFILE_NAMES = {
+    "default",
+    "hermes",
+    "root",
+    "sudo",
+    "test",
+    "tmp",
+}
 _MONTH_NAMES = {
     name: index
     for index, name in enumerate(
@@ -218,6 +226,52 @@ class ProfileView(ApiModel):
     model: str | None = None
     mutable: bool = False
     capabilities: dict[str, Any] = Field(default_factory=dict)
+    capability_set: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProfileCreate(ApiModel):
+    gateway_id: str = Field(min_length=1, max_length=36)
+    technical_name: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$",
+    )
+    display_name: str = Field(min_length=2, max_length=80)
+    description: str = Field(min_length=10, max_length=4_000)
+
+    @field_validator("technical_name")
+    @classmethod
+    def reject_reserved_profile_name(cls, value: str) -> str:
+        if value in _RESERVED_PROFILE_NAMES:
+            raise ValueError("Technical profile name is reserved")
+        return value
+
+    @field_validator("display_name")
+    @classmethod
+    def validate_display_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any(ord(char) < 32 for char in normalized):
+            raise ValueError("Display name must be a single printable line")
+        return normalized
+
+    @field_validator("description")
+    @classmethod
+    def trim_profile_description(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Profile description cannot be blank")
+        return normalized
+
+
+class ProfileCreateView(ApiModel):
+    id: str
+    gateway_id: str
+    technical_name: str
+    display_name: str
+    model: str
+    status: Literal["ready", "busy", "offline"]
+    mutable: bool
+    capabilities: dict[str, bool] = Field(default_factory=dict)
     capability_set: dict[str, Any] = Field(default_factory=dict)
 
 

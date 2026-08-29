@@ -46,6 +46,8 @@ from ..schemas import (
     GatewayView,
     LoginRequest,
     OperationView,
+    ProfileCreate,
+    ProfileCreateView,
     ProfileView,
     PromptRequest,
     SearchResponse,
@@ -688,6 +690,7 @@ def public_capability_flags(
         "cronDelete": "cron.delete" in methods,
         "cronTrigger": "cron.trigger" in methods,
         "profiles": "profiles.list" in methods or "profiles" in features,
+        "profileCreate": "profiles.create" in methods,
         "config": bool(methods & {"config.get", "config.set", "models.list", "commands.catalog"}),
         "memory": any(value.startswith("memory.") for value in methods),
     }
@@ -874,6 +877,63 @@ async def list_profiles(
         )
         for row in rows
     ]
+
+
+@router.post("/profiles", response_model=ProfileCreateView, status_code=201)
+async def create_profile(
+    payload: ProfileCreate,
+    request: Request,
+    _: AuthSession = Depends(require_csrf),
+    __: str = Depends(require_idempotency),
+    user: User = Depends(current_admin),
+    db: Session = Depends(get_db),
+) -> ProfileCreateView:
+    app_services = services(request)
+    row = await ProfileService(app_services).create(db, user, payload)
+    trusted = trusted_gateway_source_sha(
+        db, app_services, row.gateway_id
+    ) is not None
+    observed_at = datetime.now(timezone.utc)
+    capability = fresh_profile_capabilities(
+        row,
+        now=observed_at,
+        ttl_seconds=app_services.settings.capability_ttl_seconds,
+    )
+    capability_set = public_capability_set(
+        capability,
+        profile_name=row.profile_name,
+        mutable_profiles=app_services.settings.mutable_profiles,
+        interactive_profiles=app_services.settings.interactive_profiles,
+        trusted_source_sha_configured=trusted,
+    )
+    health = profile_health_state(
+        row,
+        at=observed_at,
+        ttl_seconds=app_services.settings.upstream_health_ttl_seconds,
+    )
+    return ProfileCreateView(
+        id=row.id,
+        gateway_id=row.gateway_id,
+        technical_name=row.profile_name,
+        display_name=row.display_name,
+        model=row.model or "sin detectar",
+        status="ready" if health == "online" else "offline",
+        mutable=public_profile_mutable(
+            capability,
+            profile_name=row.profile_name,
+            mutable_profiles=app_services.settings.mutable_profiles,
+            interactive_profiles=app_services.settings.interactive_profiles,
+            trusted_source_sha_configured=trusted,
+        ),
+        capabilities=public_capability_flags(
+            capability,
+            profile_name=row.profile_name,
+            mutable_profiles=app_services.settings.mutable_profiles,
+            interactive_profiles=app_services.settings.interactive_profiles,
+            trusted_source_sha_configured=trusted,
+        ),
+        capability_set=capability_set,
+    )
 
 
 @router.post("/profiles/refresh", response_model=list[ProfileView])

@@ -47,7 +47,7 @@ does not serve Hermes' SPA. A 404 at `/` is not a liveness failure.
 | Turns | `prompt.submit`, `prompt.background`, `session.steer`, `session.interrupt` | submit/interrupt required for MVP |
 | Recovery | `session.events.since`, `session.events.stats` | replay preferred; history rehydrate is fallback |
 | User gates | `approval.respond`, `clarify.respond`, `sudo.respond`, `secret.respond` | optional, surfaced only after matching request event |
-| Discovery/admin | `profiles.list`, `commands.catalog`, `models.list`, `config.get`, `config.set`, `reload.mcp`, `reload.env` | optional |
+| Discovery/admin | `profiles.list`, `profiles.create`, `commands.catalog`, `models.list`, `config.get`, `config.set`, `reload.mcp`, `reload.env` | profile creation is mutation-gated; other methods optional |
 | Delegation | `delegation.status`, `subagent.interrupt`, spawn-tree operations | optional |
 
 Important response contracts:
@@ -62,6 +62,13 @@ Important response contracts:
   not carry it. Control correlates the sole active prompt by session plus fresh
   event sequence; durable-history recovery uses a pre-dispatch message-count
   boundary and one-way prompt digest.
+- `profiles.create` is enabled only after a successful `profiles.list` probe on
+  an exact audited version/SHA. Control creates a fresh profile without
+  `clone_from`, writes a bounded initial SOUL from the operator description and
+  requests Hermes' shared authentication mode so OAuth refresh state is not
+  forked. It discards upstream filesystem/credential diagnostics, serializes
+  creation per gateway, and reconciles an ambiguous response by listing
+  profiles rather than resending the mutation.
 - `session.events.since` returns `events`, `latest_seq`, `truncated`, `count`
   and `epoch`. Upstream buffers 512 events per session for at most 64 sessions.
 - `approval.request` supplies `request_id`, a redacted `command`, description,
