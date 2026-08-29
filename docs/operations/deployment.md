@@ -119,10 +119,12 @@ Set Control's allowed origin to the exact resulting `https://…ts.net` URL. Tes
 login, CSRF, WebSocket upgrade and logout from a second tailnet device.
 
 Production response headers must keep the existing same-origin policy and add
-only the voice exceptions: `microphone=(self)` in Permissions Policy and
-the exact `wss://api.elevenlabs.io` source in CSP `connect-src`. Do not add a
-wildcard `wss:`, broad `https:`, remote script source or iframe permission. Test
-these headers on the built FastAPI-served PWA, not only in Vite development.
+only the voice exceptions: `microphone=(self)` in Permissions Policy, the exact
+`wss://api.elevenlabs.io` source in CSP `connect-src`, and
+`media-src 'self' blob:` for same-origin voice notes plus the in-memory audio
+objects used by response playback. Do not add a wildcard `wss:`, broad `https:`,
+remote media/script source or iframe permission. Test these headers on the built
+FastAPI-served PWA, not only in Vite development.
 
 ## Container alternative
 

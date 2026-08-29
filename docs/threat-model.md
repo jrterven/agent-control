@@ -20,7 +20,7 @@ with host access.
 | Token mint abuse | Exhausted provider quota | authenticated owner, CSRF and Origin validation, per-owner rate limit, provider-side key scopes and quota |
 | TTS synthesis abuse | Character quota exhaustion or unintended text disclosure | explicit live opt-in or per-message tap, authenticated CSRF-bound proxy, 20,000-character ceiling, owner rate limit, fixed provider origin and no automatic history replay |
 | Microphone starts without informed action | Private speech leaves device unexpectedly | destination/retention notice visible before the enabled mic action, secure-context permission, explicit user gesture, visible active state and deterministic resource cleanup |
-| Broad CSP exception | Arbitrary external exfiltration | exact `wss://api.elevenlabs.io` `connect-src`, `microphone=(self)`, no wildcard scheme or remote script relaxation |
+| Broad CSP exception | Arbitrary external exfiltration | exact `wss://api.elevenlabs.io` `connect-src`, bounded `media-src 'self' blob:`, `microphone=(self)`, no wildcard scheme or remote script/media relaxation |
 | Malicious transcription event | Draft corruption, transcript disclosure or UI/resource exhaustion | reproducibly patched/pinned SDK, 65,536-UTF-16-unit textual limit before JSON parsing, no raw SDK console output, unknown-event rejection, partial/committed separation and no automatic agent submission |
 | CSRF/session theft | Unauthorized mutations | opaque HttpOnly Secure SameSite cookies, synchronizer token, Origin checks, rotation and expiry |
 | Gateway SSRF/DNS rebinding | Cloud metadata or LAN access | scheme/port policy, DNS resolution before connect and redirect, block metadata/link-local/multicast/unspecified; private destinations require explicit private/tunnel mode |
@@ -54,7 +54,9 @@ with host access.
 - Live TTS receives only a single-use token; the reusable key remains encrypted
   in Control. Navigation, disabling live reading and logout stop the socket and
   media pipeline. Historical TTS bodies, audio and full provider URLs are not
-  stored in SQLite, audit payloads or browser caches.
+  stored in SQLite, audit payloads or browser caches. CSP permits only
+  same-origin and in-memory `blob:` media; it does not permit remote media
+  origins.
 - The composer accepts only committed transcript text and never sends it to an
   agent automatically. Native keyboard dictation remains available without the
   BYOK integration.

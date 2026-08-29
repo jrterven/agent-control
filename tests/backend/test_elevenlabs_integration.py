@@ -674,12 +674,15 @@ def test_integration_test_endpoint_shares_the_owner_token_rate_limit(
         assert [row.outcome for row in rows] == ["success", "failure"]
 
 
-def test_security_headers_allow_only_official_scribe_socket_and_self_microphone(client):
+def test_security_headers_allow_only_required_voice_origins_and_self_microphone(client):
     response = client.get("/api/v1/health")
     assert response.headers["Permissions-Policy"] == (
         "camera=(), microphone=(self), geolocation=()"
     )
     csp = response.headers["Content-Security-Policy"]
     assert "connect-src 'self' wss://api.elevenlabs.io" in csp
+    assert "media-src 'self' blob:" in csp
     assert "script-src 'self'" in csp
     assert "https://api.elevenlabs.io" not in csp
+    assert "media-src *" not in csp
+    assert "media-src 'self' data:" not in csp

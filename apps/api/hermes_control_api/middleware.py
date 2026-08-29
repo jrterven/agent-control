@@ -349,7 +349,7 @@ class SecurityBoundaryMiddleware(BaseHTTPMiddleware):
             response.headers["Cache-Control"] = "public, max-age=3600"
         response.headers[
             "Content-Security-Policy"
-        ] = "default-src 'self'; connect-src 'self' wss://api.elevenlabs.io; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        ] = "default-src 'self'; connect-src 'self' wss://api.elevenlabs.io; media-src 'self' blob:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         return response
 
     @staticmethod
