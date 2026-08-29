@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 
 import hermes_client.provider as provider_module
-from hermes_client import HermesGatewayProvider, JsonRpcError, ProviderConnection
+from hermes_client import (
+    HermesAutomation,
+    HermesGatewayProvider,
+    JsonRpcError,
+    ProviderConnection,
+)
 
 
 AUDITED_0206_SHA = "9978706e9303dbf990d90e744b131361449d73b9"
@@ -377,7 +382,7 @@ async def test_resume_replays_official_pending_human_gates(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cron_writes_are_hidden_without_explicit_valid_profile_timezone(
+async def test_cron_writes_follow_audited_contract_when_hermes_uses_local_timezone(
     monkeypatch,
 ):
     provider = HermesGatewayProvider(
@@ -404,8 +409,75 @@ async def test_cron_writes_are_hidden_without_explicit_valid_profile_timezone(
         await provider.close()
 
     assert "cron.list" in capabilities.methods
-    assert {"cron.create", "cron.update", "cron.delete", "cron.trigger"}.isdisjoint(
+    assert {"cron.create", "cron.update", "cron.delete", "cron.trigger"}.issubset(
         capabilities.methods
+    )
+
+
+@pytest.mark.asyncio
+async def test_cron_create_and_update_use_hermes_local_timezone_when_config_is_empty(
+    monkeypatch,
+):
+    provider = HermesGatewayProvider(
+        _connection(trusted_source_sha=AUDITED_0206_SHA)
+    )
+    requests: list[tuple[str, str, dict]] = []
+
+    async def fake_request(client, method: str, path: str, **kwargs):
+        assert client is provider.http
+        requests.append((method, path, kwargs))
+        if path == "/api/config":
+            return {"timezone": ""}
+        if method == "POST" and path == "/api/cron/jobs":
+            return {
+                "id": "cron-local",
+                "name": "Local cron",
+                "schedule": {"kind": "cron", "expr": "0 9 * * *"},
+                "prompt": "Run locally",
+                "enabled": True,
+            }
+        if method == "PUT" and path == "/api/cron/jobs/cron-local":
+            return {
+                "id": "cron-local",
+                "name": "Updated local cron",
+                "schedule": {"kind": "cron", "expr": "30 9 * * *"},
+                "prompt": "Run locally",
+                "enabled": True,
+            }
+        raise AssertionError((method, path, kwargs))
+
+    monkeypatch.setattr(provider_module, "bounded_json_request", fake_request)
+    try:
+        created = await provider.create_automation(
+            HermesAutomation(
+                automation_id="",
+                name="Local cron",
+                schedule="0 9 * * *",
+                timezone="Hermes local",
+                enabled=True,
+                prompt="Run locally",
+            )
+        )
+        updated = await provider.update_automation(
+            created.automation_id,
+            {"name": "Updated local cron", "schedule": "30 9 * * *"},
+        )
+    finally:
+        await provider.close()
+
+    assert created.timezone == "Hermes local"
+    assert updated.timezone == "Hermes local"
+    assert any(
+        method == "POST"
+        and path == "/api/cron/jobs"
+        and kwargs["json"]["schedule"] == "0 9 * * *"
+        for method, path, kwargs in requests
+    )
+    assert any(
+        method == "PUT"
+        and path == "/api/cron/jobs/cron-local"
+        and kwargs["json"]["updates"]["schedule"] == "30 9 * * *"
+        for method, path, kwargs in requests
     )
 
 

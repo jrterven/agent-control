@@ -101,6 +101,13 @@ def validate_iana_timezone(value: str) -> str:
     return normalized
 
 
+def validate_automation_timezone(value: str) -> str:
+    normalized = value.strip()
+    if normalized == "Hermes local":
+        return normalized
+    return validate_iana_timezone(normalized)
+
+
 def validate_trusted_source_sha(value: str | None) -> str | None:
     """Normalize an operator-entered full commit SHA.
 
@@ -357,7 +364,7 @@ class AutomationCreate(ApiModel):
     profile_name: str
     name: str = Field(min_length=1, max_length=200)
     schedule: str = Field(min_length=1, max_length=200)
-    timezone: str = Field(default="UTC", min_length=1, max_length=100)
+    timezone: str = Field(default="Hermes local", min_length=1, max_length=100)
     prompt: str = Field(min_length=1, max_length=200_000)
     enabled: bool = True
 
@@ -369,7 +376,7 @@ class AutomationCreate(ApiModel):
     @field_validator("timezone")
     @classmethod
     def valid_timezone(cls, value: str) -> str:
-        return validate_iana_timezone(value)
+        return validate_automation_timezone(value)
 
 
 class AutomationUpdate(ApiModel):
@@ -387,7 +394,7 @@ class AutomationUpdate(ApiModel):
     @field_validator("timezone")
     @classmethod
     def valid_timezone(cls, value: str | None) -> str | None:
-        return validate_iana_timezone(value) if value is not None else None
+        return validate_automation_timezone(value) if value is not None else None
 
 
 class AutomationView(ApiModel):

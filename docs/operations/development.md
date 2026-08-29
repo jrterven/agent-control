@@ -104,7 +104,7 @@ HERMES_CONTROL_HERMES_DASHBOARD_TOKEN=<remote-session-token>
 HERMES_CONTROL_HERMES_API_URL=http://127.0.0.1:18642
 HERMES_CONTROL_HERMES_API_KEY=<control-dev-api-key>
 HERMES_CONTROL_HERMES_SOURCE_SHA=<independently-verified-40-hex-commit>
-HERMES_CONTROL_MUTABLE_PROFILES=control-dev
+HERMES_CONTROL_MUTABLE_PROFILES=default,jarvis,control-dev
 ```
 
 Voice-note playback requires Agent Control to have read-only filesystem access
@@ -138,7 +138,8 @@ remote mutation scripts.
 ## Safety rules
 
 - `default` is displayed as Newton and `jarvis` as Jarvis.
-- Capability probes against Newton/Jarvis must be read-only.
+- Automated capability probes against Newton/Jarvis must remain read-only even
+  though the interactive product runtime may expose their verified writes.
 - Any create, prompt, cron, config write, secret write, interrupt, archive or
   delete integration test refuses to run unless the profile string is exactly
   `control-dev` and a separate mutation opt-in is set.

@@ -100,10 +100,11 @@ def test_approval_and_clarification_routes_are_owner_bound_and_idempotent(
 
 @pytest.mark.parametrize("profile_name", ["default", "jarvis"])
 @pytest.mark.parametrize("kind", ["approvals", "clarifications"])
-def test_human_gate_routes_never_mutate_newton_or_jarvis(
+def test_human_gate_routes_respect_an_operator_read_only_override(
     authenticated, app, profile_name: str, kind: str
 ):
     client, csrf = authenticated
+    app.state.services.settings.mutable_profiles = ["control-dev"]
     app.state.services.settings.interactive_profiles = []
     with app.state.session_factory() as db:
         gateway = db.query(Gateway).one()

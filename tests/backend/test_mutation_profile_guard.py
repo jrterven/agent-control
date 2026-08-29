@@ -30,8 +30,12 @@ def test_trusted_source_sha_is_exact_and_normalized():
             Settings(environment="test", hermes_source_sha=invalid)
 
 
-def test_mutable_profile_allowlist_defaults_safe_and_parses_operator_value():
-    assert Settings(environment="test").mutable_profiles == ["control-dev"]
+def test_mutable_profile_allowlist_defaults_full_and_parses_operator_value():
+    assert Settings(environment="test").mutable_profiles == [
+        "default",
+        "jarvis",
+        "control-dev",
+    ]
     assert Settings(environment="test").interactive_profiles == [
         "default",
         "jarvis",
@@ -337,7 +341,7 @@ def test_write_only_trusted_sha_is_never_projected_when_upstream_reports_none(
 
 
 @pytest.mark.parametrize("profile_name", ["default", "jarvis"])
-def test_every_upstream_mutation_capability_is_rejected_outside_control_dev(
+def test_operator_can_restrict_every_upstream_mutation_to_control_dev(
     profile_name: str,
 ):
     for capability in UPSTREAM_MUTATION_CAPABILITIES:
@@ -535,6 +539,7 @@ def test_session_create_guard_runs_before_provider(
     authenticated, app, monkeypatch, profile_name: str
 ):
     client, csrf = authenticated
+    app.state.services.settings.mutable_profiles = ["control-dev"]
     app.state.services.settings.interactive_profiles = []
     forbidden = AsyncMock(side_effect=AssertionError("mutation reached provider"))
     monkeypatch.setattr(InMemoryHermesProvider, "create_session", forbidden)
@@ -555,20 +560,30 @@ def test_session_create_guard_runs_before_provider(
     forbidden.assert_not_awaited()
 
 
-def test_profile_refresh_never_announces_admin_writes_for_newton_or_jarvis(authenticated):
-    client, csrf = authenticated
-    gateway_id = client.get("/api/v1/gateways").json()[0]["id"]
+def test_bootstrap_announces_verified_admin_writes_for_newton_and_jarvis(
+    authenticated, app
+):
+    client, _ = authenticated
+    now = datetime.now(timezone.utc)
+    with app.state.session_factory() as db:
+        for profile_name in ("default", "jarvis"):
+            profile = db.query(ProfileRef).filter_by(profile_name=profile_name).one()
+            profile.status = "online"
+            profile.last_seen_at = now
+            profile.capabilities_checked_at = now
+            profile.capabilities = {
+                "protocol": "dashboard-jsonrpc",
+                "version": "0.20.5",
+                "methods": sorted(UPSTREAM_MUTATION_CAPABILITIES),
+                "features": [],
+            }
+        db.commit()
 
-    response = client.post(
-        "/api/v1/profiles/refresh",
-        params={"gatewayId": gateway_id},
-        headers=mutation_headers(csrf, "refresh-profile-write-boundary"),
-    )
-
-    assert response.status_code == 200, response.text
-    by_name = {item["profileName"]: item for item in response.json()}
+    by_name = {
+        item["technicalName"]: item
+        for item in client.get("/api/v1/bootstrap").json()["profiles"]
+    }
     for profile_name in ("default", "jarvis"):
         methods = set(by_name[profile_name]["capabilitySet"]["methods"])
-        assert methods.isdisjoint(
-            UPSTREAM_MUTATION_CAPABILITIES - INTERACTIVE_MUTATION_CAPABILITIES
-        )
+        assert UPSTREAM_MUTATION_CAPABILITIES.issubset(methods)
+        assert by_name[profile_name]["mutable"] is True

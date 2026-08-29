@@ -11,11 +11,11 @@
 - Capability availability is probed; version numbers alone do not enable UI.
   New or removed Hermes methods may temporarily appear unavailable.
 - Real Hermes mutations require an operator allowlist, an operator-verified
-  full SHA, and the exact audited provider capability. Newton (`default`) and
-  Jarvis may create/resume sessions and exchange messages when listed in
-  `HERMES_CONTROL_INTERACTIVE_PROFILES`. Configuration, secrets, cron and
-  deletion remain restricted to `HERMES_CONTROL_MUTABLE_PROFILES`, whose safe
-  default contains only `control-dev`.
+  full SHA, and the exact audited provider capability. Newton (`default`),
+  Jarvis and `control-dev` are in the default mutable allowlist so the UI can
+  expose their complete verified contract, including cron and administration.
+  Operators can still narrow `HERMES_CONTROL_MUTABLE_PROFILES` when deploying
+  a shared or less-trusted installation.
 - The audited Hermes memory endpoints are not profile-aware, so memory reads
   and writes are hidden for real 0.20.5/0.20.6 providers.
 - An event replay buffer can truncate. Control rehydrates durable history, but
@@ -31,6 +31,9 @@
 - Files and notes initially store references/metadata. Offline snapshots exclude
   attachments and require explicit opt-in.
 - Cron executions remain separate Hermes sessions and are not ordinary chats.
+- Hermes 0.20.5/0.20.6 cron schedules use the profile's configured timezone or,
+  when it is empty, the Hermes host's local timezone. The official cron route
+  does not support a different timezone per job.
 - The container option relies on Linux host networking; native systemd is the
   recommended deployment for the first host.
 - Tailscale ACLs, host compromise and Hermes tool behavior remain outside the

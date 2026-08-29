@@ -72,7 +72,11 @@ make test
 make build
 ```
 
-Remote integration is opt-in. Newton (`default`) and Jarvis (`jarvis`) are read-only targets; all mutations are rejected unless the exact selected profile is `control-dev`. See [remote test safety](docs/operations/remote-test-safety.md).
+Remote integration tests are opt-in. The product runtime gives Newton
+(`default`), Jarvis (`jarvis`) and `control-dev` their complete verified
+capabilities, while automated destructive test mutations remain hard-guarded
+to the exact `control-dev` profile. See
+[remote test safety](docs/operations/remote-test-safety.md).
 
 ## Repository map
 

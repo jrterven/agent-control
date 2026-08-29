@@ -283,7 +283,7 @@ async def test_control_dev_cron_crud(control_dev: RemoteMutationContext) -> None
     except Exception as exc:
         pytest.skip(f"control-dev config/timezone API is unavailable ({type(exc).__name__})")
     if not isinstance(timezone_name, str) or not timezone_name.strip():
-        pytest.skip("control-dev has no configured IANA timezone for cron mutation")
+        timezone_name = "Hermes local"
 
     name = f"{control_dev.run_id}-cron"
     created = await control_dev.provider.create_automation(

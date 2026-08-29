@@ -759,7 +759,6 @@ class HermesGatewayProvider:
             and str(version or "") == audited[0]
             and reported_revision_consistent
         )
-        cron_timezone_verified = False
         if rpc_available:
             for method in ("profiles.list", "session.list"):
                 try:
@@ -811,14 +810,6 @@ class HermesGatewayProvider:
                         path,
                         params=params,
                     )
-                    if method == "config.get" and isinstance(resource, Mapping):
-                        configured_timezone = resource.get("timezone")
-                        if isinstance(configured_timezone, str) and configured_timezone:
-                            try:
-                                ZoneInfo(configured_timezone)
-                                cron_timezone_verified = True
-                            except (ValueError, ZoneInfoNotFoundError):
-                                pass
                     methods.add(method)
                 except (httpx.HTTPError, ValueError):
                     # Administration modules are optional and independent. A
@@ -832,7 +823,14 @@ class HermesGatewayProvider:
             if audited_contract and audited is not None:
                 if "session.list" in methods:
                     methods.update(audited[1])
-                if "cron.list" in methods and cron_timezone_verified:
+                # The official Hermes cron contract uses the profile's
+                # configured timezone and falls back to the host's local zone
+                # when that value is empty. Its dashboard and Telegram clients
+                # can therefore create jobs without an explicit config value.
+                # A successful bounded cron inventory is the harmless probe for
+                # the audited CRUD routes; requiring a non-empty /api/config
+                # timezone here would impose a Control-only restriction.
+                if "cron.list" in methods:
                     methods.update(audited[2])
                 for read_method, write_methods in _ADMIN_WRITES_BY_READ.items():
                     if read_method in methods:
@@ -1479,7 +1477,7 @@ class HermesGatewayProvider:
             for row in rows
         ]
 
-    async def _configured_timezone(self, *, required: bool = False) -> str | None:
+    async def _configured_timezone(self) -> str | None:
         raw = await bounded_json_request(
             self.http,
             "GET",
@@ -1490,19 +1488,20 @@ class HermesGatewayProvider:
             raise UpstreamPayloadError("Hermes profile config must be an object")
         timezone_value = raw.get("timezone")
         if not isinstance(timezone_value, str) or not timezone_value.strip():
-            if not required:
-                return None
-            raise UpstreamPayloadError(
-                "Hermes profile timezone is unavailable; cron mutation is disabled"
-            )
+            return None
         return _bounded_text(
             timezone_value, label="profile timezone", max_length=100
         )
 
     async def _assert_automation_timezone(self, requested: str) -> str:
-        configured = await self._configured_timezone(required=True)
-        assert configured is not None
-        if requested != configured:
+        configured = await self._configured_timezone()
+        if configured is None:
+            if requested != "Hermes local":
+                raise ValueError(
+                    "Hermes uses its local timezone for cron; select Hermes local"
+                )
+            return requested
+        if requested not in {configured, "Hermes local"}:
             raise ValueError(
                 f"Hermes profile timezone is {configured}; per-job timezone {requested} is unsupported"
             )
@@ -1582,10 +1581,9 @@ class HermesGatewayProvider:
     async def update_automation(
         self, automation_id: str, changes: dict[str, Any]
     ) -> HermesAutomation:
-        timezone_name = await self._configured_timezone(required=True)
-        assert timezone_name is not None
+        timezone_name = await self._configured_timezone() or "Hermes local"
         requested_timezone = str(changes.get("timezone") or timezone_name)
-        if requested_timezone != timezone_name:
+        if requested_timezone not in {timezone_name, "Hermes local"}:
             raise ValueError(
                 f"Hermes profile timezone is {timezone_name}; per-job timezone "
                 f"{requested_timezone} is unsupported"

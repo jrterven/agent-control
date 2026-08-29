@@ -13,7 +13,9 @@ not update, reset, patch or check out the Hermes repository.
 4. Run an offline configuration/preflight command against production settings.
 5. Stop Control, switch `/opt/hermes-control/current`, start it and inspect
    migrations, liveness, readiness and realtime reconnection.
-6. Smoke-test Newton/Jarvis read-only and `control-dev` mutation paths.
+6. Smoke-test Newton/Jarvis with read-only probes and use `control-dev` for the
+   automated mutation path; runtime permissions are validated from the public
+   capability projection without mutating the user's normal profiles.
 
 For rollback, stop Control and switch back only if the earlier binary supports
 the migrated schema. Otherwise restore the pre-update database first. Never run

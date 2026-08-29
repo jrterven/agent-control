@@ -153,6 +153,18 @@ def test_cron_and_timezone_are_validated_before_any_mutation(authenticated):
     assert client.get("/api/v1/automations").json() == []
 
 
+def test_hermes_local_timezone_is_valid_for_native_cron(authenticated):
+    client, csrf = authenticated
+    response = client.post(
+        "/api/v1/automations",
+        headers=mutation_headers(csrf, "hermes-local-timezone"),
+        json=automation_payload(client, timezone="Hermes local"),
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["timezone"] == "Hermes local"
+
+
 def test_automation_lifecycle_runs_and_idempotent_replays(authenticated):
     client, csrf = authenticated
     headers = mutation_headers(csrf, "automation-create-once")

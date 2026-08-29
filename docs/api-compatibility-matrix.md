@@ -144,6 +144,7 @@ strong `API_SERVER_KEY`. For the initial deployment it runs only under
 8. Strip every write capability and reject every upstream mutation unless the
    technical profile is in the backend-only mutable allowlist, its gateway has
    a valid operator trust anchor, and the exact capability passed the audited
-   probe. The default allowlist is exactly `control-dev`; changing it is an
-   explicit operator action. The `8642` fallback and remote mutation test guard
-   remain restricted to exactly `control-dev` regardless of this allowlist.
+   probe. The default allowlist contains `default`, `jarvis` and `control-dev`;
+   an operator may narrow it explicitly. The `8642` fallback and destructive
+   remote mutation test guard remain restricted to exactly `control-dev`
+   regardless of this runtime allowlist.

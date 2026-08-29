@@ -57,15 +57,15 @@ class Settings(BaseSettings):
     default_profiles: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["default", "jarvis", "control-dev"]
     )
-    # Operator-side allowlist. A listed profile is still read-only until its
-    # gateway has a trusted full source SHA and the audited provider advertises
-    # the exact mutation capability.
+    # Operator-side allowlist. The three canonical profiles are fully usable by
+    # default; a listed profile still remains read-only until its gateway has a
+    # trusted full source SHA and the audited provider advertises the exact
+    # mutation capability.
     mutable_profiles: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["control-dev"]
+        default_factory=lambda: ["default", "jarvis", "control-dev"]
     )
-    # Conversation-only allowlist. These profiles may create/resume sessions,
-    # submit/interrupt prompts, and answer runtime questions, but do not gain
-    # administrative, cron, secret, configuration, or deletion capabilities.
+    # Conversation-only fallback allowlist for installations that deliberately
+    # remove a profile from mutable_profiles.
     interactive_profiles: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["default", "jarvis", "control-dev"]
     )

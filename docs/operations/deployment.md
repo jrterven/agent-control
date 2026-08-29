@@ -139,6 +139,7 @@ or a broad mount of `/home/hermes/.hermes`.
 - `9119`, `8642` and `8000` are loopback listeners only.
 - Tailscale Serve lists only the Control target.
 - Authentication cookies are Secure/HttpOnly/SameSite and CSP is present.
-- Newton/Jarvis probes remain read-only; a controlled prompt uses `control-dev`.
+- Automated Newton/Jarvis smoke probes remain read-only; destructive integration
+  test mutations still use `control-dev`, independently of runtime permissions.
 - Logs and rendered frontend assets contain no token, key or Hermes URL.
 - Backup timer is enabled and a restore drill has been completed.

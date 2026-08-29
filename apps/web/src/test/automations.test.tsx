@@ -43,7 +43,7 @@ describe("automation editor contract", () => {
       profileName: "default",
       name: "Resumen semanal",
       schedule: "30 8 * * FRI",
-      timezone: "America/Mexico_City",
+      timezone: "Hermes local",
       profileId: "",
       prompt: "Prepara el resumen semanal",
       enabled: false,
@@ -65,7 +65,7 @@ describe("automation editor contract", () => {
       profileName: "default",
       name: "Resumen semanal",
       schedule: "30 8 * * FRI",
-      timezone: "America/Mexico_City",
+      timezone: "Hermes local",
       prompt: "Prepara el resumen semanal",
       enabled: false,
     }, "csrf-memory-only"));
