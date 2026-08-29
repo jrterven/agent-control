@@ -60,6 +60,9 @@ flowchart TB
   y de proveedores de agentes son relativas al origen de Control. La única
   excepción es el WebSocket de dictado hacia el origen exacto de ElevenLabs,
   autorizado por CSP y solo mientras existe una captura iniciada por el usuario.
+  Un coordinador de actualización PWA mantiene el nuevo service worker en espera
+  hasta una acción explícita; dictado, streaming y borradores bloquean la recarga
+  y la selección actual se conserva solo durante ese relevo controlado.
 - **API Control:** autenticación, CSRF, autorización, metadatos, auditoría,
   idempotencia, validación SSRF y traducción de protocolos.
 - **Adaptadores de proveedor:** traducen las capacidades de cada runtime al

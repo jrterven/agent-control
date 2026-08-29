@@ -1,6 +1,7 @@
 import { CaretDown, List, Pulse, SidebarSimple } from "@phosphor-icons/react";
-import { IconButton, StatusDot } from "@hermes-control/ui";
+import { IconButton, StatusDot, cx } from "@hermes-control/ui";
 import { useTranslation } from "react-i18next";
+import { usePwaUpdateStore } from "../lib/pwaUpdate";
 import { useAppStore } from "../store/appStore";
 import { BrandMark } from "./BrandMark";
 
@@ -20,6 +21,7 @@ export function TopBar() {
   const setActivityOpen = useAppStore((state) => state.setActivityOpen);
   const leftOpen = useAppStore((state) => state.leftDrawerOpen);
   const activityOpen = useAppStore((state) => state.activityOpen);
+  const updateAvailable = usePwaUpdateStore((state) => state.status === "available");
   const demoMode = useAppStore((state) => state.demoMode);
   const profiles = useAppStore((state) => state.profiles);
   const workspaces = useAppStore((state) => state.workspaces);
@@ -40,8 +42,8 @@ export function TopBar() {
       <button className="workspace-switcher" type="button" onClick={() => setLeftOpen(true)}>
         <span>{workspace?.name ?? t("nav.noWorkspace")}</span><CaretDown size={16} />
       </button>
-      <IconButton className="top-bar__activity" label={t("nav.openActivityContext")} icon={<Pulse size={23} />} selected={activityOpen} aria-controls="activity-panel" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)} />
-      <IconButton className="top-bar__sidebar" label={t("nav.showContext")} icon={<SidebarSimple size={23} />} selected={activityOpen} aria-controls="activity-panel" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)} />
+      <IconButton className={cx("top-bar__activity", updateAvailable && "has-update")} label={t(updateAvailable ? "updates.activityLabel" : "nav.openActivityContext")} icon={<Pulse size={23} />} selected={activityOpen} aria-controls="activity-panel" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)} />
+      <IconButton className={cx("top-bar__sidebar", updateAvailable && "has-update")} label={t(updateAvailable ? "updates.activityLabel" : "nav.showContext")} icon={<SidebarSimple size={23} />} selected={activityOpen} aria-controls="activity-panel" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)} />
     </header>
   );
 }

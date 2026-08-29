@@ -148,6 +148,21 @@ describe("bootstrap selection reconciliation", () => {
     expect(useAppStore.getState().selectedSessionId).toBe("automation-session");
   });
 
+  it("restores a no-workspace conversation during the first bootstrap after an app update", () => {
+    useAppStore.setState({
+      bootstrapLoaded: false,
+      selectedGatewayId: "gateway-remote",
+      selectedProfileId: "profile-jarvis",
+      selectedWorkspaceId: "",
+      selectedSessionId: "automation-session",
+    });
+
+    useAppStore.getState().hydrateBootstrap(bootstrap);
+
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("");
+    expect(useAppStore.getState().selectedSessionId).toBe("automation-session");
+  });
+
   it("still selects the first workspace during the initial bootstrap", () => {
     useAppStore.getState().hydrateBootstrap(bootstrap);
 

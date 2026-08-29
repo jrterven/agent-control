@@ -17,6 +17,14 @@ not update, reset, patch or check out the Hermes repository.
    automated mutation path; runtime permissions are validated from the public
    capability projection without mutating the user's normal profiles.
 
+The production PWA uses a prompt-style service worker. It detects the new
+immutable frontend automatically but activates it only after the signed-in user
+chooses **Update now** (or **Update when finished**). Verify that the activity
+button shows the update indicator, **Settings** reports the installed semantic
+version, and activation is deferred while dictation, streaming or an unsent
+draft is active. After activation, confirm that the same Control conversation
+is selected and that no API response entered the service-worker cache.
+
 For rollback, stop Control and switch back only if the earlier binary supports
 the migrated schema. Otherwise restore the pre-update database first. Never run
 an Alembic downgrade against production without a migration-specific reviewed

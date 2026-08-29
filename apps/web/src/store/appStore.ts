@@ -179,11 +179,14 @@ export const useAppStore = create<AppState>((set) => ({
     // app has loaded. Preserve it during background refreshes so sessions
     // opened from automation runs are not silently replaced by a session in
     // the first workspace.
-    const selectedWorkspaceId = state.bootstrapLoaded && state.selectedWorkspaceId === ""
-      ? ""
-      : data.workspaces.some((item) => item.id === state.selectedWorkspaceId)
-        ? state.selectedWorkspaceId
-        : data.workspaces[0]?.id ?? "";
+    const requestedSession = data.sessions.find((item) => item.id === state.selectedSessionId && item.profileId === selectedProfileId);
+    const selectedWorkspaceId = requestedSession
+      ? requestedSession.workspaceId ?? ""
+      : state.bootstrapLoaded && state.selectedWorkspaceId === ""
+        ? ""
+        : data.workspaces.some((item) => item.id === state.selectedWorkspaceId)
+          ? state.selectedWorkspaceId
+          : data.workspaces[0]?.id ?? "";
     const selectedSessionId = data.sessions.some((item) => item.id === state.selectedSessionId && item.profileId === selectedProfileId && (!selectedWorkspaceId || item.workspaceId === selectedWorkspaceId)) ? state.selectedSessionId : data.sessions.find((item) => item.profileId === selectedProfileId && (!selectedWorkspaceId || item.workspaceId === selectedWorkspaceId))?.id ?? "";
     return { ...data, bootstrapLoaded: true, selectedGatewayId, selectedProfileId, selectedWorkspaceId, selectedSessionId };
   }),

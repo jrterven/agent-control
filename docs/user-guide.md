@@ -208,6 +208,18 @@ application shell, not API responses, and Background Sync never resends
 messages. **Clear local data** removes device-side preferences, drafts and
 cached presentation data without deleting provider conversations.
 
+The installed PWA checks for a new Agent Control release when it opens, when it
+returns to the foreground and periodically while it remains active. A cyan dot
+on the activity button announces an available release; open that panel and use
+**Update now**. **More → Settings → App updates** also shows the installed
+version and provides **Check for updates**.
+
+Agent Control never reloads in the middle of voice dictation, a streaming agent
+response or an unsent draft. In that case the action becomes **Update when
+finished** and activation waits for a safe moment. The selected gateway,
+workspace, agent and conversation are restored after the controlled reload;
+drafts remain in the existing encrypted/local draft store.
+
 ## Mobile installation with Tailscale Serve
 
 The recommended private mobile deployment keeps Hermes and Agent Control's

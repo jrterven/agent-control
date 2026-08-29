@@ -11,6 +11,7 @@ import { api } from "../lib/api";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
+import { usePwaUpdateStore } from "../lib/pwaUpdate";
 import type { ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageMedia } from "../types";
 import { BrandMark } from "./BrandMark";
 
@@ -350,6 +351,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
   const authState = useAppStore((state) => state.authState);
   const dictationConfigured = useAppStore((state) => state.features?.dictation.available === true);
   const draft = useSessionDraft(sessionId);
+  const setUpdateBlocker = usePwaUpdateStore((state) => state.setBlocker);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dictationSelectionRef = useRef<{ start: number; end: number } | null>(null);
   const insertCommitted = (transcript: string) => {
@@ -425,6 +427,16 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
   }, [authState, dictation.available]);
 
   useEffect(() => {
+    setUpdateBlocker("dictation", dictation.active);
+    return () => setUpdateBlocker("dictation", false);
+  }, [dictation.active, setUpdateBlocker]);
+
+  useEffect(() => {
+    setUpdateBlocker("draft", Boolean(value.trim()));
+    return () => setUpdateBlocker("draft", false);
+  }, [setUpdateBlocker, value]);
+
+  useEffect(() => {
     let active = true;
     dictationSelectionRef.current = null;
     setValue("");
@@ -461,9 +473,13 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
   const onSubmit = async () => {
     const next = value.trim();
     if (!next || streamingMessageId || offline || dictation.active) return;
+    // submitPrompt marks the session as streaming synchronously before its
+    // first await. Start it before clearing the draft so an update queued for
+    // a safe moment cannot slip into the hand-off between typing and sending.
+    const submission = submitPrompt(next);
     setValue("");
     await draft.clear();
-    await submitPrompt(next);
+    await submission;
   };
 
   return (

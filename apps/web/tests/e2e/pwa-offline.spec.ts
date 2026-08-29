@@ -61,6 +61,10 @@ test("arranca sin red desde el shell y conserva un borrador sin reenviarlo", asy
 
   await page.goto("/settings");
   await expect(page.getByRole("heading", { name: "Ajustes" })).toBeVisible();
+  await expect(page.getByText("Versión instalada")).toBeVisible();
+  await expect(page.getByText(/^v0\.1\.0(?:\+[a-f0-9]+)?$/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Buscar actualizaciones" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   const cacheSwitch = page.getByRole("switch", { name: "Caché cifrada del último workspace" });
   await cacheSwitch.click();
   await expect(cacheSwitch).toHaveAttribute("aria-checked", "true");

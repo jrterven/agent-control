@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
-  ArrowRight, CheckCircle, Clock, CloudCheck, Code,
+  ArrowClockwise, ArrowRight, CheckCircle, Clock, CloudCheck, Code,
   Database, DownloadSimple, FileText, FolderOpen, Gauge, GearSix, HardDrives,
   Key, Lightning, MagnifyingGlass, Plus, Robot, ShieldCheck, Translate,
   PencilSimple, Play, Pulse, SlidersHorizontal, TerminalWindow, Trash, UserCircle, WarningCircle,
@@ -24,6 +24,7 @@ import { AdminConfigScreen } from "../components/AdminConfigScreen";
 import { ElevenLabsIntegration } from "../components/ElevenLabsIntegration";
 import i18n from "../i18n";
 import { useLanguagePreference } from "../hooks/useLanguagePreference";
+import { APP_VERSION, checkForPwaUpdate, hasPwaUpdateBlockers, requestPwaUpdate, usePwaUpdateStore } from "../lib/pwaUpdate";
 
 export function PageHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
   return <header className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</header>;
@@ -789,6 +790,9 @@ export function SettingsScreen() {
   const csrfToken = useAppStore((state) => state.csrfToken);
   const userName = useAppStore((state) => state.userName);
   const resetPrivateState = useAppStore((state) => state.resetPrivateState);
+  const updateStatus = usePwaUpdateStore((state) => state.status);
+  const updateDeferred = usePwaUpdateStore((state) => state.deferred);
+  const updateBlockers = usePwaUpdateStore((state) => state.blockers);
   const [loggingOut, setLoggingOut] = useState(false);
   const setThemePreference = (next: ThemePreference) => { setTheme(next); void savePreference("theme", next); };
   const changeCache = (enabled: boolean) => {
@@ -802,7 +806,57 @@ export function SettingsScreen() {
     await clearPrivateCache().catch(() => undefined);
     resetPrivateState();
   };
-  return <div className="page-wrap"><PageHeader eyebrow={t("settingsPage.eyebrow")} title={t("settingsPage.title")} description={t("settingsPage.description")} /><div className="settings-layout"><Panel className="settings-section"><header><Translate /><div><strong>{t("settingsPage.language")}</strong><p>{t("settingsPage.languageDescription")}</p></div></header><label className="hc-field"><span>{t("settingsPage.languageLabel")}</span><select value={language} onChange={(event) => void changeLanguage(event.target.value as typeof language)}>{languageOptions.map((option) => <option key={option.code} value={option.code}>{option.nativeName}</option>)}</select></label></Panel><Panel className="settings-section"><header><SlidersHorizontal /><div><strong>{t("settingsPage.appearance")}</strong><p>{t("settingsPage.appearanceDescription")}</p></div></header><div className="theme-grid">{(["dark", "light", "auto"] as ThemePreference[]).map((option) => <button type="button" key={option} className={theme === option ? "is-active" : ""} onClick={() => setThemePreference(option)}><span className={`theme-preview theme-preview--${option}`}><i /><i /><i /></span><strong>{option === "dark" ? t("settingsPage.dark") : option === "light" ? t("settingsPage.light") : t("settingsPage.auto")}</strong></button>)}</div></Panel><ElevenLabsIntegration /><Panel className="settings-section"><header><Database /><div><strong>{t("settingsPage.offline")}</strong><p>{t("settingsPage.offlineDescription")}</p></div></header><Switch checked={cacheEnabled} onChange={changeCache} label={t("settingsPage.encryptedCache")} description={t("settingsPage.cacheLimits")} /><Button variant="ghost" onClick={() => void clearPrivateCache()}>{t("settingsPage.clearLocal")}</Button></Panel><Panel className="settings-section"><header><UserCircle /><div><strong>{t("settingsPage.session")}</strong><p>{t("settingsPage.cookieAuth", { user: userName })}</p></div></header><Button variant="danger" disabled={loggingOut} onClick={() => void logout()}>{loggingOut ? t("settingsPage.loggingOut") : t("settingsPage.logout")}</Button></Panel></div></div>;
+  const updateAvailable = updateStatus === "available";
+  const updateBlocked = hasPwaUpdateBlockers(updateBlockers);
+  const updateMessage = updateDeferred
+    ? "updates.deferred"
+    : updateStatus === "checking"
+      ? "updates.checking"
+      : updateStatus === "current"
+        ? "updates.current"
+        : updateStatus === "available"
+          ? "updates.available"
+          : updateStatus === "applying"
+            ? "updates.applying"
+            : updateStatus === "error"
+              ? "updates.error"
+              : "updates.idle";
+  const updateButton = updateStatus === "checking"
+    ? "updates.checking"
+    : updateStatus === "applying"
+      ? "updates.applying"
+      : updateAvailable
+        ? updateBlocked ? "updates.updateWhenReady" : "updates.updateNow"
+        : "updates.checkNow";
+  const handleUpdate = () => updateAvailable ? requestPwaUpdate() : checkForPwaUpdate();
+
+  return <div className="page-wrap">
+    <PageHeader eyebrow={t("settingsPage.eyebrow")} title={t("settingsPage.title")} description={t("settingsPage.description")} />
+    <div className="settings-layout">
+      <Panel className="settings-section">
+        <header><Translate /><div><strong>{t("settingsPage.language")}</strong><p>{t("settingsPage.languageDescription")}</p></div></header>
+        <label className="hc-field"><span>{t("settingsPage.languageLabel")}</span><select value={language} onChange={(event) => void changeLanguage(event.target.value as typeof language)}>{languageOptions.map((option) => <option key={option.code} value={option.code}>{option.nativeName}</option>)}</select></label>
+      </Panel>
+      <Panel className="settings-section">
+        <header><SlidersHorizontal /><div><strong>{t("settingsPage.appearance")}</strong><p>{t("settingsPage.appearanceDescription")}</p></div></header>
+        <div className="theme-grid">{(["dark", "light", "auto"] as ThemePreference[]).map((option) => <button type="button" key={option} className={theme === option ? "is-active" : ""} onClick={() => setThemePreference(option)}><span className={`theme-preview theme-preview--${option}`}><i /><i /><i /></span><strong>{option === "dark" ? t("settingsPage.dark") : option === "light" ? t("settingsPage.light") : t("settingsPage.auto")}</strong></button>)}</div>
+      </Panel>
+      <Panel className="settings-section update-settings">
+        <header><ArrowClockwise /><div><strong>{t("updates.settingsTitle")}</strong><p>{t("updates.settingsDescription")}</p></div></header>
+        <div className="update-settings__row">
+          <span><strong>{t("updates.installedVersion")}</strong><Badge>v{APP_VERSION}</Badge><small role="status" aria-live="polite">{t(updateMessage)}</small></span>
+          <Button
+            disabled={updateStatus === "checking" || updateStatus === "applying" || updateDeferred}
+            leadingIcon={<ArrowClockwise className={updateStatus === "checking" || updateStatus === "applying" ? "spin" : undefined} />}
+            onClick={() => void handleUpdate()}
+          >{t(updateButton)}</Button>
+        </div>
+      </Panel>
+      <ElevenLabsIntegration />
+      <Panel className="settings-section"><header><Database /><div><strong>{t("settingsPage.offline")}</strong><p>{t("settingsPage.offlineDescription")}</p></div></header><Switch checked={cacheEnabled} onChange={changeCache} label={t("settingsPage.encryptedCache")} description={t("settingsPage.cacheLimits")} /><Button variant="ghost" onClick={() => void clearPrivateCache()}>{t("settingsPage.clearLocal")}</Button></Panel>
+      <Panel className="settings-section"><header><UserCircle /><div><strong>{t("settingsPage.session")}</strong><p>{t("settingsPage.cookieAuth", { user: userName })}</p></div></header><Button variant="danger" disabled={loggingOut} onClick={() => void logout()}>{loggingOut ? t("settingsPage.loggingOut") : t("settingsPage.logout")}</Button></Panel>
+    </div>
+  </div>;
 }
 
 export function MoreScreen() {
@@ -815,7 +869,7 @@ export function MoreScreen() {
     { to: "/admin", title: t("morePage.security"), description: t("morePage.securityDescription"), icon: ShieldCheck },
     { to: "/settings", title: t("morePage.preferences"), description: t("morePage.preferencesDescription"), icon: SlidersHorizontal },
   ] as const;
-  return <div className="page-wrap"><PageHeader eyebrow={t("morePage.eyebrow")} title={t("morePage.title")} description={t("morePage.description")} /><div className="more-grid">{moreItems.map(({ to, title, description, icon: Icon }) => <Link key={to} to={to}><span><Icon weight="duotone" /></span><div><strong>{title}</strong><small>{description}</small></div><ArrowRight /></Link>)}</div><Panel className="about-panel"><BrandMark size="md" /><div><strong>Agent Control</strong><p>{t("morePage.about")}</p></div><Badge>v0.1.0</Badge></Panel></div>;
+  return <div className="page-wrap"><PageHeader eyebrow={t("morePage.eyebrow")} title={t("morePage.title")} description={t("morePage.description")} /><div className="more-grid">{moreItems.map(({ to, title, description, icon: Icon }) => <Link key={to} to={to}><span><Icon weight="duotone" /></span><div><strong>{title}</strong><small>{description}</small></div><ArrowRight /></Link>)}</div><Panel className="about-panel"><BrandMark size="md" /><div><strong>Agent Control</strong><p>{t("morePage.about")}</p></div><Badge>v{APP_VERSION}</Badge></Panel></div>;
 }
 
 export function AdminScreen() {

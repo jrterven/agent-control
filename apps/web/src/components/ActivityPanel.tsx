@@ -1,10 +1,11 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Archive, CaretDown, CheckCircle, Clock, DownloadSimple, Gauge, Pulse, Robot, Trash, WarningCircle, Wrench, X } from "@phosphor-icons/react";
+import { Archive, ArrowClockwise, CaretDown, CheckCircle, Clock, DownloadSimple, Gauge, Pulse, Robot, Trash, WarningCircle, Wrench, X } from "@phosphor-icons/react";
 import { Badge, Button, IconButton, StatusDot, Switch, cx } from "@hermes-control/ui";
 import { api } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
+import { hasPwaUpdateBlockers, requestPwaUpdate, usePwaUpdateStore } from "../lib/pwaUpdate";
 
 export function ActivityPanel() {
   const { t, i18n } = useTranslation();
@@ -33,10 +34,15 @@ export function ActivityPanel() {
   const authState = useAppStore((state) => state.authState);
   const csrfToken = useAppStore((state) => state.csrfToken);
   const connection = useAppStore((state) => state.connection);
+  const updateStatus = usePwaUpdateStore((state) => state.status);
+  const updateDeferred = usePwaUpdateStore((state) => state.deferred);
+  const updateBlockers = usePwaUpdateStore((state) => state.blockers);
   const removeSession = useAppStore((state) => state.removeSession);
   const hydrateBootstrap = useAppStore((state) => state.hydrateBootstrap);
   const setConnection = useAppStore((state) => state.setConnection);
   const workspace = workspaces.find((item) => item.id === workspaceId);
+  const updateBlocked = hasPwaUpdateBlockers(updateBlockers);
+  const showUpdate = updateStatus === "available" || updateStatus === "applying";
   // No selected session must remain "sin sesión". Falling back to sessions[0]
   // can expose context from a different profile or workspace in this panel.
   const session = sessions.find((item) => item.id === sessionId);
@@ -172,6 +178,22 @@ export function ActivityPanel() {
           <div><span className="eyebrow">{t("activity.activeContext")}</span><h2>{t("activity.sessionDetails")}</h2></div>
           <IconButton className="activity-close" label={t("activity.close")} icon={<X size={20} />} onClick={() => close(false)} />
         </header>
+
+        {showUpdate ? <section className="app-update-card" aria-labelledby="app-update-title">
+          <span className="app-update-card__icon"><ArrowClockwise weight="bold" /></span>
+          <div>
+            <strong id="app-update-title">{t(updateDeferred ? "updates.waitingTitle" : "updates.availableTitle")}</strong>
+            <p>{t(updateDeferred ? "updates.waitingBody" : "updates.availableBody")}</p>
+            <Button
+              size="sm"
+              disabled={updateStatus === "applying" || updateDeferred}
+              leadingIcon={<ArrowClockwise />}
+              onClick={() => void requestPwaUpdate()}
+            >
+              {t(updateStatus === "applying" ? "updates.applying" : updateBlocked ? "updates.updateWhenReady" : "updates.updateNow")}
+            </Button>
+          </div>
+        </section> : null}
 
         <section className="context-card">
           <div className="context-card__agent"><span className="agent-initial">{profile?.displayName[0] ?? "?"}</span><span><strong>{profile?.displayName ?? t("activity.noAgent")}</strong><small>{profile?.model ?? t("activity.undetected")}</small></span><Badge tone={profile?.status === "ready" ? "positive" : "warning"}>{t(profile?.status === "ready" ? "activity.ready" : "activity.unavailable")}</Badge></div>
