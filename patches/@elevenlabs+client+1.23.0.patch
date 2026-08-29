@@ -1,0 +1,67 @@
+diff --git a/node_modules/@elevenlabs/client/dist/scribe/connection.js b/node_modules/@elevenlabs/client/dist/scribe/connection.js
+index 414afb0..b536fbd 100644
+--- a/node_modules/@elevenlabs/client/dist/scribe/connection.js
++++ b/node_modules/@elevenlabs/client/dist/scribe/connection.js
+@@ -205,6 +205,14 @@ export class RealtimeConnection {
+         }
+         this.websocket.addEventListener("message", (event) => {
+             try {
++                // Agent Control hardening: reject binary or oversized server
++                // frames before parsing so untrusted payloads cannot be logged,
++                // retained, or expanded into oversized transcript events.
++                if (typeof event.data !== "string" || event.data.length > 65536) {
++                    this._emitError(new Error("Invalid WebSocket message"));
++                    this.close();
++                    return;
++                }
+                 const data = JSON.parse(event.data);
+                 switch (data.message_type) {
+                     case "session_started":
+@@ -285,12 +293,11 @@ export class RealtimeConnection {
+                         this.eventEmitter.emit(RealtimeEvents.ERROR, data);
+                         break;
+                     default:
+-                        console.warn("Unknown message type:", data);
++                        break;
+                 }
+             }
+             catch (error) {
+-                console.error("Failed to parse WebSocket message:", error, event.data);
+-                this._emitError(new Error(`Failed to parse message: ${error}`));
++                this._emitError(new Error("Failed to parse WebSocket message"));
+             }
+         });
+         this.websocket.addEventListener("error", (error) => {
+@@ -298,7 +305,6 @@ export class RealtimeConnection {
+             // app-initiated close() is expected, not a failure.
+             if (this._closed)
+                 return;
+-            console.error("WebSocket error:", error);
+             this._emitError(new Error("WebSocket error"));
+         });
+         this.websocket.addEventListener("close", (event) => {
+@@ -309,11 +315,9 @@ export class RealtimeConnection {
+             // An app-initiated close is expected. Closing a still-connecting socket
+             // yields code 1006, which would otherwise log/emit as an unexpected error.
+             if (!appInitiated) {
+-                console.log(`WebSocket closed: code=${event.code}, reason="${event.reason}", wasClean=${event.wasClean}`);
+                 // Emit error if close was not clean or had an error code
+                 if (!event.wasClean || (event.code !== 1000 && event.code !== 1005)) {
+-                    const errorMessage = `WebSocket closed unexpectedly: ${event.code} - ${event.reason || "No reason provided"}`;
+-                    console.error(errorMessage);
++                    const errorMessage = `WebSocket closed unexpectedly: ${event.code}`;
+                     this._emitError(new Error(errorMessage));
+                 }
+             }
+diff --git a/node_modules/@elevenlabs/client/dist/scribe/scribe.js b/node_modules/@elevenlabs/client/dist/scribe/scribe.js
+index 93624aa..bdcb4c9 100644
+--- a/node_modules/@elevenlabs/client/dist/scribe/scribe.js
++++ b/node_modules/@elevenlabs/client/dist/scribe/scribe.js
+@@ -171,7 +171,6 @@ export class ScribeRealtime {
+             }
+         }
+         catch (error) {
+-            console.error("Failed to start microphone streaming:", error);
+             connection._emitError(error);
+             // A microphone-mode session that never acquired a microphone can never
+             // send audio, so the socket is stranded: it holds a session open that

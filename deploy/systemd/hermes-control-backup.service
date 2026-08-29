@@ -1,0 +1,16 @@
+[Unit]
+Description=Create an online SQLite backup for Hermes Control
+Documentation=file:/opt/hermes-control/current/docs/operations/backup-restore.md
+
+[Service]
+Type=oneshot
+User=hermes-control
+Group=hermes-control
+EnvironmentFile=/etc/hermes-control/control.env
+ExecStart=/opt/hermes-control/current/deploy/bin/backup-sqlite.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/hermes-control /var/backups/hermes-control

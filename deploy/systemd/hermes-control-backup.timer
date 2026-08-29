@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Hermes Control SQLite backup
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+Persistent=true
+RandomizedDelaySec=15m
+Unit=hermes-control-backup.service
+
+[Install]
+WantedBy=timers.target

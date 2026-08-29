@@ -1,0 +1,17 @@
+.git
+.gitignore
+.venv
+.venv-*
+**/.pytest_cache
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/dist
+**/coverage
+**/*.db
+**/*.db-shm
+**/*.db-wal
+design
+docs
+tests
+apps/mock-hermes

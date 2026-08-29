@@ -1,0 +1,32 @@
+name: hermes-control
+
+services:
+  control:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: hermes-control:local
+    restart: unless-stopped
+    # Match the owner of the host data directory. The entrypoint refuses to
+    # migrate/start when this identity cannot write the bind mount.
+    user: "${HERMES_CONTROL_UID:-10001}:${HERMES_CONTROL_GID:-10001}"
+    # Linux-only, deliberate: Control must reach Hermes on host loopback while
+    # Hermes ports remain unpublished. The application still binds 127.0.0.1.
+    network_mode: host
+    env_file:
+      - ${HERMES_CONTROL_ENV_FILE:-/etc/hermes-control/control.env}
+    environment:
+      HERMES_CONTROL_DATABASE_URL: sqlite:////var/lib/hermes-control/control.db
+      HERMES_CONTROL_DATA_DIR: /var/lib/hermes-control
+      HERMES_CONTROL_HERMES_DASHBOARD_URL: http://127.0.0.1:9119
+      HERMES_CONTROL_HERMES_DASHBOARD_WS: ws://127.0.0.1:9119/api/ws
+      HERMES_CONTROL_HERMES_API_URL: http://127.0.0.1:8642
+    volumes:
+      - /var/lib/hermes-control:/var/lib/hermes-control
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

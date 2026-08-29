@@ -1,0 +1,44 @@
+[Unit]
+Description=Hermes Control web application
+Documentation=file:/opt/hermes-control/current/docs/operations/deployment.md
+Wants=network-online.target tailscaled.service
+After=network-online.target tailscaled.service hermes-serve.service
+
+[Service]
+Type=simple
+User=hermes-control
+Group=hermes-control
+WorkingDirectory=/opt/hermes-control/current
+Environment=PYTHONUNBUFFERED=1
+Environment=HERMES_CONTROL_ENVIRONMENT=production
+Environment=HERMES_CONTROL_CREATE_SCHEMA_ON_START=false
+Environment=HERMES_CONTROL_STATIC_DIR=/opt/hermes-control/current/apps/api/static
+EnvironmentFile=/etc/hermes-control/control.env
+ExecStartPre=/opt/hermes-control/current/.venv/bin/alembic -c apps/api/alembic.ini upgrade head
+ExecStart=/opt/hermes-control/current/.venv/bin/uvicorn hermes_control_api.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-proxy-headers --ws-max-size 4096
+Restart=on-failure
+RestartSec=3s
+TimeoutStartSec=90s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/hermes-control
+
+[Install]
+WantedBy=multi-user.target
