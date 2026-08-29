@@ -5,7 +5,9 @@ COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
 COPY packages/ui/package.json packages/ui/package.json
 COPY packages/shared-types/package.json packages/shared-types/package.json
-RUN npm ci --ignore-scripts
+COPY patches patches
+RUN npm ci --ignore-scripts \
+    && ./node_modules/.bin/patch-package --error-on-fail
 COPY apps/web apps/web
 COPY packages/ui packages/ui
 COPY packages/shared-types packages/shared-types

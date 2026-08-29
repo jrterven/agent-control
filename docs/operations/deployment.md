@@ -17,6 +17,18 @@ truth for profiles, conversations, sessions and cron.
 Do not add firewall openings, Docker port publishing, Tailscale Funnel, or
 Tailscale Serve entries for `9119`/`8642`.
 
+BYOK dictation adds outbound traffic only. FastAPI needs HTTPS egress to the
+fixed `https://api.elevenlabs.io` origin to mint a single-use token, and each
+participating browser needs WSS egress to
+`wss://api.elevenlabs.io/v1/speech-to-text/realtime` for its audio stream. Audio
+does not traverse Tailscale Serve or Control, and no new inbound listener or
+Serve route is permitted.
+
+The official provider handshake carries the single-use token in the WSS query.
+Do not enable browser/proxy telemetry that records complete WebSocket URLs, and
+redact that URL from support captures. This narrow exception does not permit the
+token in a Control URL, application log, audit event or persistent browser store.
+
 ## Prepare Control
 
 1. Create a dedicated `hermes-control` system user with no login shell.
@@ -45,6 +57,12 @@ Tailscale Serve entries for `9119`/`8642`.
    automation-route watcher health and TTL-bounded cached upstream status) on
    loopback. `upstream=stale` means no recent Hermes observation; it must not be
    interpreted as proof that Hermes is online or offline.
+
+Do not put an ElevenLabs API key in `control.env`, a `VITE_*` variable, the
+release bundle or a service unit. Each authenticated user configures their own
+key through the write-only integration setting; Control stores only its
+AES-GCM ciphertext in SQLite. Restrict the provider key to the required Scribe
+scope and an appropriate account quota before saving it.
 
 The unit runs the same idempotent Alembic upgrade before every start. It invokes
 Uvicorn with `--ws-max-size 4096`, one worker and `--no-proxy-headers`.
@@ -99,6 +117,12 @@ deliberately rather than running `tailscale serve reset`.
 Set Control's allowed origin to the exact resulting `https://…ts.net` URL. Test
 login, CSRF, WebSocket upgrade and logout from a second tailnet device.
 
+Production response headers must keep the existing same-origin policy and add
+only the dictation exceptions: `microphone=(self)` in Permissions Policy and
+the exact `wss://api.elevenlabs.io` source in CSP `connect-src`. Do not add a
+wildcard `wss:`, broad `https:`, remote script source or iframe permission. Test
+these headers on the built FastAPI-served PWA, not only in Vite development.
+
 ## Container alternative
 
 `deploy/docker/compose.yml` runs only Hermes Control using Linux host networking.
@@ -142,4 +166,21 @@ or a broad mount of `/home/hermes/.hermes`.
 - Automated Newton/Jarvis smoke probes remain read-only; destructive integration
   test mutations still use `control-dev`, independently of runtime permissions.
 - Logs and rendered frontend assets contain no token, key or Hermes URL.
+- The ElevenLabs read view exposes only configuration presence. Its API key is
+  absent from the built bundle, browser storage, network responses, logs and
+  audit payloads; a single-use token response is `no-store` and absent from the
+  idempotency table.
+- The production artifact was built after a clean install that applied
+  `patches/@elevenlabs+client+1.23.0.patch`; Scribe text messages over 65,536
+  JavaScript UTF-16 code units, malformed messages and unknown events are handled
+  without raw console output. This is a pre-JSON textual bound after frame
+  receipt, not a network-byte limit.
+- On a real mobile device, the ElevenLabs destination/retention notice is visible
+  before the enabled mic action; dictation then starts only after the user's
+  gesture and browser permission. The UI discloses direct processing/retention,
+  shows capture state, inserts only committed text into the unsent draft and
+  never sends it automatically.
+- Stop, background, navigation and logout release the microphone and WSS. A
+  later start mints a fresh token. With the integration disabled or unavailable,
+  native operating-system keyboard dictation still works as the fallback.
 - Backup timer is enabled and a restore drill has been completed.

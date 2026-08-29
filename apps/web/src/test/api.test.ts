@@ -20,6 +20,37 @@ describe("browser API boundary", () => {
     expect(init.credentials).toBe("same-origin");
   });
 
+  it("keeps the owner ElevenLabs key write-only and issues non-replayable Scribe tokens", async () => {
+    const presence = { configured: true, provider: "elevenlabs", modelId: "scribe_v2_realtime" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(presence), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(presence), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, provider: "elevenlabs", modelId: "scribe_v2_realtime" }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ token: "single-use", expiresAt: "2026-08-29T12:15:00Z", modelId: "scribe_v2_realtime" }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.elevenLabsIntegration();
+    await api.saveElevenLabsKey("sk_backend_only", "csrf-memory-only");
+    await api.testElevenLabsIntegration("csrf-memory-only");
+    await api.createTranscriptionToken({ sessionId: "session-a" }, "csrf-memory-only");
+    await api.deleteElevenLabsKey("csrf-memory-only");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/integrations/elevenlabs");
+    const [keyPath, keyInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(keyPath).toBe("/api/v1/integrations/elevenlabs/key");
+    expect(JSON.parse(String(keyInit.body))).toEqual({ apiKey: "sk_backend_only" });
+    expect(keyInit.headers).toEqual(expect.objectContaining({ "Idempotency-Key": expect.any(String), "X-CSRF-Token": "csrf-memory-only" }));
+
+    const [tokenPath, tokenInit] = fetchMock.mock.calls[3] as [string, RequestInit];
+    expect(tokenPath).toBe("/api/v1/realtime/transcription-token");
+    expect(JSON.parse(String(tokenInit.body))).toEqual({ sessionId: "session-a" });
+    expect(tokenInit.headers).toEqual(expect.objectContaining({ "X-CSRF-Token": "csrf-memory-only" }));
+    expect(tokenInit.headers).not.toEqual(expect.objectContaining({ "Idempotency-Key": expect.anything() }));
+    expect(fetchMock.mock.calls[4][0]).toBe("/api/v1/integrations/elevenlabs/key");
+    expect((fetchMock.mock.calls[4][1] as RequestInit).method).toBe("DELETE");
+  });
+
   it("responds to official approval and clarification gates through same-origin Control routes", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ requestId: "approval/1", resolved: 1, status: "resolved" }), { status: 200, headers: { "Content-Type": "application/json" } }))

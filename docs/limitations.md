@@ -34,6 +34,25 @@
   status that reasoning occurred.
 - Files and notes initially store references/metadata. Offline snapshots exclude
   attachments and require explicit opt-in.
+- BYOK dictation currently uses ElevenLabs Scribe and needs public Internet
+  access from both the Control backend (HTTPS token mint) and the browser
+  (`wss://api.elevenlabs.io`). It may be unavailable while the tailnet-hosted
+  agent interface and native keyboard dictation still work.
+- Realtime microphone capture depends on secure-context browser support,
+  permission and mobile lifecycle behavior. Native operating-system keyboard
+  dictation is the supported fallback when capture is unavailable or the user
+  has not configured ElevenLabs.
+- Audio travels directly from the device to ElevenLabs. Control cannot audit
+  the stream, revoke an already-issued single-use token, guarantee zero
+  retention or enforce stream duration after issuance. It rate-limits token
+  minting and closes local resources, while provider quotas and retention remain
+  governed by the owner's ElevenLabs account and terms.
+- The official Scribe handshake includes the single-use token in the provider
+  WSS query. The app does not persist or log that URL, but browser extensions,
+  device diagnostics or external telemetry capable of recording complete
+  WebSocket URLs remain outside Control's enforcement boundary.
+- Dictation only edits the unsent composer draft. It never submits a prompt,
+  chooses an agent or creates a Hermes/OpenClaw session automatically.
 - Cron executions remain separate Hermes sessions and are not ordinary chats.
 - Hermes 0.20.5/0.20.6 cron schedules use the profile's configured timezone or,
   when it is empty, the Hermes host's local timezone. The official cron route

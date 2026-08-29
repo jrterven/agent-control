@@ -30,7 +30,7 @@ test("expone un manifiesto instalable, registra el service worker y no cachea AP
   const manifest = await page.evaluate(async (href) => fetch(String(href)).then((response) => response.json()), manifestHref);
   expect(manifest).toMatchObject({
     name: "Agent Control",
-    short_name: "Control",
+    short_name: "Agent Control",
     display: "standalone",
     start_url: "/chats",
     scope: "/",

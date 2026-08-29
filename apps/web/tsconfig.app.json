@@ -18,6 +18,9 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
+      "@elevenlabs/scribe-core": ["../../node_modules/@elevenlabs/client/dist/scribe/index.d.ts"],
+      "@elevenlabs/scribe-registry": ["../../node_modules/@elevenlabs/client/dist/scribe/microphone.d.ts"],
+      "@elevenlabs/scribe-web-microphone": ["../../node_modules/@elevenlabs/client/dist/platform/web/scribeMicrophone.d.ts"],
       "@hermes-control/shared-types": ["../../packages/shared-types/src/index.ts"],
       "@hermes-control/ui": ["../../packages/ui/src/index.tsx"],
       "@hermes-control/ui/styles.css": ["../../packages/ui/src/styles.css"]

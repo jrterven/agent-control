@@ -51,6 +51,47 @@ make dev
 For a fresh database, `make api` applies every Alembic revision before opening
 the loopback API listener. Re-running it does not reapply current revisions.
 
+## BYOK dictation workflow
+
+The ElevenLabs key is user-owned Control data, not a Hermes credential. Enter
+it only through the authenticated write-only integration setting; never add it
+to `.env`, `VITE_*`, test fixtures, command history or browser persistence.
+Automated backend tests must inject a fake ElevenLabs HTTP transport and must
+not spend a real account's quota.
+
+Token issuance defaults can be adjusted in the backend-only environment:
+
+```dotenv
+HERMES_CONTROL_TRANSCRIPTION_TOKEN_RATE_LIMIT=10
+HERMES_CONTROL_TRANSCRIPTION_TOKEN_RATE_WINDOW_SECONDS=60
+```
+
+These settings limit minting per authenticated owner; they do not control a
+direct provider stream after a token has been issued. Browser microphone access
+requires a secure context. Desktop `localhost` is suitable for local checks;
+test another physical device through the HTTPS Tailscale Serve origin rather
+than a plain LAN HTTP address.
+
+The web client may contact only
+`wss://api.elevenlabs.io/v1/speech-to-text/realtime` during an explicit capture.
+The official protocol appends the single-use token to that WSS query. Do not
+copy a full socket URL into issues, screenshots, console captures or telemetry.
+The destination/retention notice must be visible before the mic action becomes
+available. If public egress or permission is unavailable, verify that the
+composer remains editable and that native keyboard dictation can still be used.
+Never make a transcription event submit a prompt automatically; partial events
+remain visual and only committed events may edit the draft.
+
+`npm install` runs `patch-package` and must apply
+`patches/@elevenlabs+client+1.23.0.patch` cleanly to the pinned SDK. Treat a patch
+failure as a dependency-review failure, not as permission to remove the patch.
+The hardened client rejects inbound text messages over 65,536 JavaScript UTF-16
+code units before JSON parsing and removes raw payload, close-reason and
+microphone-error console output. This bounds text parsing after the frame is
+received; it does not claim a 65,536-byte network-frame limit. Exercise
+oversized, malformed, unknown, partial and committed events in the frontend
+tests without using the live provider.
+
 ## Remote tunnel workflow
 
 For the remote Hermes Control preview, keep this supervisor running in a

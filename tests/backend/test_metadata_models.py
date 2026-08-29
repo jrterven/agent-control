@@ -19,6 +19,7 @@ from hermes_control_api.models import (
     SessionTag,
     Tag,
     User,
+    UserIntegration,
 )
 from hermes_control_api.security import SecretVault
 
@@ -41,6 +42,7 @@ APPLICATION_TABLES = {
     "session_tags",
     "tags",
     "users",
+    "user_integrations",
     "workspaces",
 }
 
@@ -115,6 +117,11 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     }
     assert "trusted_source_sha_ciphertext" in credential_columns
     assert "trusted_source_sha" not in credential_columns
+    integration_columns = {
+        column["name"] for column in schema.get_columns("user_integrations")
+    }
+    assert "api_key_ciphertext" in integration_columns
+    assert "api_key" not in integration_columns
 
     session_tag_fks = {
         fk["name"]: (tuple(fk["constrained_columns"]), tuple(fk["referred_columns"]))
@@ -165,7 +172,7 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0007_control_managed_profiles"
+        ).scalar_one() == "0008_user_integrations"
     engine.dispose()
 
     downgrade = subprocess.run(
@@ -219,6 +226,26 @@ def test_metadata_constraints_enforce_owner_isolation_encryption_and_cascade():
         )
         db.add_all([owner, other, gateway])
         db.flush()
+        integration_envelope = SecretVault(b"d" * 32).encrypt(
+            "owner-only-key",
+            aad=f"user-integration:{owner.id}:elevenlabs:api-key",
+        )
+        db.add(
+            UserIntegration(
+                owner_id=owner.id,
+                provider="elevenlabs",
+                api_key_ciphertext=integration_envelope,
+            )
+        )
+        db.commit()
+        _expect_integrity_error(
+            db,
+            UserIntegration(
+                owner_id=other.id,
+                provider="elevenlabs",
+                api_key_ciphertext="plaintext-key",
+            ),
+        )
         session = SessionLink(
             owner_id=owner.id,
             gateway_id=gateway.id,

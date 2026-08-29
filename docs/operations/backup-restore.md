@@ -26,8 +26,9 @@ are independently verified.
 
 Back up `HERMES_CONTROL_VAULT_KEY_B64` in an access-controlled secret manager. Never
 put it in the database archive, source repository, container image, systemd unit
-or CI logs. Losing it makes stored gateway credentials unrecoverable; exposing it
-together with the database defeats encryption at rest.
+or CI logs. Losing it makes stored gateway and owner-scoped integration
+credentials unrecoverable; exposing it together with the database defeats
+encryption at rest.
 
 ## Restore drill
 
@@ -60,11 +61,18 @@ checks pass.
 6. The script atomically replaces `control.db` and moves stale sidecars only
    after the quarantine copy exists.
 7. Start Control, let Alembic migrate forward, then verify login, gateway
-   credential decryption, session routing and audit continuity.
+   credential decryption, owner-scoped integration presence/decryption, session
+   routing and audit continuity. A read check must never reveal the integration
+   key; run an external provider test only with the owner's explicit intent.
 8. If any check fails, stop Control and atomically restore the quarantined set.
 
 Do not restore Hermes `state.db` from a Control backup: Control does not own or
 back up Hermes internal data.
+
+Single-use transcription tokens, microphone audio and provider events are not
+backup data because Control never persists them. A restored encrypted
+ElevenLabs key remains bound to its original owner ID and can be decrypted only
+with the matching external vault key.
 
 The automated regression in `tests/backend/test_backup_restore_scripts.py`
 performs this drill against temporary databases and proves the restored data,

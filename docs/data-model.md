@@ -4,6 +4,7 @@
 erDiagram
     USER ||--o{ AUTH_SESSION : opens
     USER ||--o{ GATEWAY : owns
+    USER ||--o{ USER_INTEGRATION : configures
     GATEWAY ||--|| GATEWAY_CREDENTIAL : protects
     GATEWAY ||--o{ PROFILE_REF : exposes
     USER ||--o{ WORKSPACE : owns
@@ -26,6 +27,17 @@ erDiagram
   metadata operation and never edits Hermes internals.
 - Gateway credentials are separate AES-GCM records with random nonces and AAD
   containing gateway ID plus field name. Read APIs return presence only.
+- `USER_INTEGRATION` is unique by `(owner_id, provider)`. For ElevenLabs it
+  stores only the encrypted API key and timestamps; AAD binds owner ID,
+  provider and field name so ciphertext cannot be moved between users or uses.
+  Reads expose `configured`, provider and model metadata, never the key.
+- A transcription integration is independent from `GATEWAY`, `PROFILE_REF`,
+  `SESSION_LINK` and every Hermes/OpenClaw object. The optional language hint
+  affects only the subsequent browser/provider handshake.
+- Single-use transcription tokens are not rows or durable metadata. They are
+  excluded from idempotency response storage, audit payloads, offline snapshots
+  and browser persistence. Control stores neither microphone audio nor the
+  provider's partial transcript events.
 - `PROFILE_REF.last_seen_at` records route connectivity, while
   `capabilities_checked_at` independently bounds capability trust. Heartbeats
   can never prolong a capability assertion. Gateway health is a fail-closed
@@ -52,3 +64,8 @@ erDiagram
   reconciled.
 - Offline browser snapshot: opt-in, seven days, 200 items or 10 MB maximum,
   cleared at logout; attachments are excluded.
+- Owner-scoped integration credentials: retained until that owner replaces or
+  deletes them. Database backups contain only ciphertext and require the
+  separately held vault key for recovery.
+- Transcription tokens and microphone audio: no Control retention. Provider
+  processing and retention follow the owner's ElevenLabs account and terms.

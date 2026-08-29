@@ -155,3 +155,29 @@ strong `API_SERVER_KEY`. For the initial deployment it runs only under
    an operator may narrow it explicitly. The `8642` fallback and destructive
    remote mutation test guard remain restricted to exactly `control-dev`
    regardless of this runtime allowlist.
+
+## Integración de transcripción fuera de la matriz Hermes
+
+ElevenLabs Scribe no es una capacidad de Hermes ni de OpenClaw y no participa
+en la negociación por gateway, perfil, versión o SHA. Es una integración BYOK
+propia del usuario autenticado. Su contrato Control es deliberadamente pequeño:
+
+| Operación Control | Contrato | Seguridad y persistencia |
+|---|---|---|
+| `GET /api/v1/integrations/elevenlabs` | devuelve `{configured, provider: "elevenlabs", modelId: "scribe_v2_realtime"}` | autenticado y owner-scoped; nunca devuelve la API key |
+| `PUT /api/v1/integrations/elevenlabs/key` | recibe `{apiKey}` y devuelve la vista neutral | autenticación, CSRF e `Idempotency-Key`; cifra antes de persistir |
+| `POST /api/v1/integrations/elevenlabs/test` | devuelve `{ok: true, provider, modelId}` cuando la credencial es aceptada | autenticación, CSRF e `Idempotency-Key`; no devuelve credenciales ni tokens |
+| `DELETE /api/v1/integrations/elevenlabs/key` | elimina la credencial del owner y devuelve `204` | autenticación, CSRF e `Idempotency-Key` |
+| `POST /api/v1/realtime/transcription-token` | recibe opcionalmente `{sessionId?, languageCode?}` y devuelve `{token, expiresAt, modelId}` | autenticado, owner-scoped, CSRF y rate limit; ambos campos son hints validados no reenviados, persistidos ni auditados; sin `Idempotency-Key`, caché ni persistencia de respuesta |
+
+Control usa la API key únicamente desde el backend para solicitar el token
+oficial single-use. El token se consume desde memoria en una conexión directa a
+`wss://api.elevenlabs.io/v1/speech-to-text/realtime`; el protocolo oficial lo
+incluye como query de esa URL. Control no captura, persiste ni registra la URL
+completa. El token no se convierte en ticket de Control, no entra en
+`NormalizedEvent` y no se reintenta/reproduce. Un cierre o fallo exige otra
+acción explícita del usuario y un token nuevo.
+
+La transcripción confirmada puede insertarse en el borrador activo, pero nunca
+se envía automáticamente ni crea una sesión. Cambiar de Hermes a OpenClaw no
+cambia, comparte ni migra esta integración owner-scoped.

@@ -106,11 +106,16 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):
+        normalized_path = request.url.path.rstrip("/") or "/"
         if (
-            request.method not in {"POST", "PATCH", "DELETE"}
+            request.method not in {"POST", "PUT", "PATCH", "DELETE"}
             or not request.url.path.startswith("/api/v1/")
             or request.url.path.startswith("/api/v1/auth/")
-            or request.url.path == "/api/v1/realtime/tickets"
+            or normalized_path
+            in {
+                "/api/v1/realtime/tickets",
+                "/api/v1/realtime/transcription-token",
+            }
         ):
             return await call_next(request)
         key = request.headers.get("Idempotency-Key", "").strip()
@@ -324,7 +329,9 @@ class SecurityBoundaryMiddleware(BaseHTTPMiddleware):
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(self), geolocation=()"
+        )
         path = request.url.path
         if path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
@@ -336,7 +343,7 @@ class SecurityBoundaryMiddleware(BaseHTTPMiddleware):
             response.headers["Cache-Control"] = "public, max-age=3600"
         response.headers[
             "Content-Security-Policy"
-        ] = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        ] = "default-src 'self'; connect-src 'self' wss://api.elevenlabs.io; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         return response
 
     @staticmethod

@@ -6,6 +6,7 @@ import type {
   ChatMessage,
   ClarificationRequest,
   ConnectionState,
+  ControlFeatures,
   Gateway,
   Profile,
   SessionSummary,
@@ -39,6 +40,7 @@ type AppState = {
   workspaces: Workspace[];
   sessions: SessionSummary[];
   automations: Automation[];
+  features?: ControlFeatures;
   sessionUsageById: Record<string, SessionUsage>;
   approvalsBySession: Record<string, ApprovalRequest[]>;
   clarificationsBySession: Record<string, ClarificationRequest[]>;
@@ -93,6 +95,7 @@ const emptyPrivateState = {
   workspaces: [] as Workspace[],
   sessions: [] as SessionSummary[],
   automations: [] as Automation[],
+  features: undefined as ControlFeatures | undefined,
   sessionUsageById: {} as Record<string, SessionUsage>,
   approvalsBySession: {} as Record<string, ApprovalRequest[]>,
   clarificationsBySession: {} as Record<string, ClarificationRequest[]>,

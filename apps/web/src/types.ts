@@ -105,6 +105,16 @@ export type MessageMedia = {
   mediaType: string;
 };
 
+export type DictationFeature = {
+  available: boolean;
+  provider: "elevenlabs";
+  modelId: "scribe_v2_realtime";
+};
+
+export type ControlFeatures = {
+  dictation: DictationFeature;
+};
+
 export type ChatMessage = {
   id: string;
   sessionId: string;
@@ -219,4 +229,5 @@ export type BootstrapData = {
   workspaces: Workspace[];
   sessions: SessionSummary[];
   automations: Automation[];
+  features?: ControlFeatures;
 };

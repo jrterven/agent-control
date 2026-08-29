@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import shutil
 import sqlite3
@@ -7,6 +8,13 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
+from hermes_control_api.database import Base
+from hermes_control_api.integrations import UserIntegrationService
+from hermes_control_api.models import User, UserIntegration
+from hermes_control_api.security import SecretVault
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -45,6 +53,99 @@ def test_online_backup_is_integral_private_and_restorable(tmp_path):
         assert connection.execute("SELECT value FROM marker").fetchone() == (
             "online-backup",
         )
+
+
+@pytest.mark.skipif(shutil.which("sqlite3") is None, reason="sqlite3 CLI unavailable")
+def test_user_integration_ciphertext_restores_with_separate_owner_bound_vault_key(
+    tmp_path,
+):
+    source = tmp_path / "live-control.db"
+    destination = tmp_path / "restored-control.db"
+    backups = tmp_path / "database-backups"
+    quarantine = tmp_path / "restore-quarantine"
+    external_key_path = tmp_path / "external-secret-store" / "vault-key.b64"
+    external_key_path.parent.mkdir(mode=0o700)
+    vault_key = b"v" * 32
+    external_key_path.write_text(
+        base64.urlsafe_b64encode(vault_key).decode("ascii"),
+        encoding="ascii",
+    )
+    external_key_path.chmod(0o600)
+    owner_id = "11111111-1111-4111-8111-111111111111"
+    api_key = "sk_backup_restore_1234567890_private"
+    aad = f"user-integration:{owner_id}:elevenlabs:api-key"
+    vault = SecretVault(vault_key)
+    ciphertext = vault.encrypt(api_key, aad=aad)
+    assert ciphertext is not None
+
+    engine = create_engine(f"sqlite:///{source}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        db.add(
+            User(
+                id=owner_id,
+                username="backup-owner",
+                password_hash="not-used-by-this-restore-drill",
+                is_admin=True,
+            )
+        )
+        db.add(
+            UserIntegration(
+                owner_id=owner_id,
+                provider="elevenlabs",
+                api_key_ciphertext=ciphertext,
+            )
+        )
+        db.commit()
+    engine.dispose()
+
+    backup_result = subprocess.run(
+        ["bash", str(BACKUP)],
+        env={
+            **os.environ,
+            "HERMES_CONTROL_DATABASE_PATH": str(source),
+            "HERMES_CONTROL_DATABASE_URL": f"sqlite:///{source}",
+            "HERMES_CONTROL_BACKUP_DIR": str(backups),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    artifact = Path(backup_result.stdout.strip())
+    artifact_bytes = artifact.read_bytes()
+    assert api_key.encode() not in artifact_bytes
+    assert base64.urlsafe_b64encode(vault_key) not in artifact_bytes
+    assert external_key_path.parent != artifact.parent
+
+    subprocess.run(
+        [
+            "bash",
+            str(RESTORE),
+            "--control-stopped",
+            str(artifact),
+            str(destination),
+            str(quarantine),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    restored_key = base64.urlsafe_b64decode(external_key_path.read_text(encoding="ascii"))
+    restored_vault = SecretVault(restored_key)
+    restored_engine = create_engine(f"sqlite:///{destination}")
+    with Session(restored_engine) as db:
+        owner = db.get(User, owner_id)
+        row = db.scalar(select(UserIntegration))
+        assert owner is not None and row is not None
+        assert row.api_key_ciphertext == ciphertext
+        assert UserIntegrationService(restored_vault).api_key(db, owner) == api_key
+        with pytest.raises(ValueError):
+            restored_vault.decrypt(
+                row.api_key_ciphertext,
+                aad="user-integration:another-owner:elevenlabs:api-key",
+            )
+    restored_engine.dispose()
 
 
 @pytest.mark.skipif(shutil.which("sqlite3") is None, reason="sqlite3 CLI unavailable")

@@ -27,12 +27,18 @@ export default defineConfig({
         navigateFallback: "/index.html",
         navigateFallbackDenylist: [/^\/api\//, /^\/ws\//],
         cleanupOutdatedCaches: true,
+        // Realtime dictation cannot work offline. Keep its large, lazy SDK out
+        // of the install-time PWA cache; normal HTTP caching applies on demand.
+        globIgnores: ["**/vendor-scribe-*.js"],
         runtimeCaching: []
       }
     })
   ],
   resolve: {
     alias: [
+      { find: "@elevenlabs/scribe-core", replacement: fileURLToPath(new URL("../../node_modules/@elevenlabs/client/dist/scribe/index.js", import.meta.url)) },
+      { find: "@elevenlabs/scribe-registry", replacement: fileURLToPath(new URL("../../node_modules/@elevenlabs/client/dist/scribe/microphone.js", import.meta.url)) },
+      { find: "@elevenlabs/scribe-web-microphone", replacement: fileURLToPath(new URL("../../node_modules/@elevenlabs/client/dist/platform/web/scribeMicrophone.js", import.meta.url)) },
       { find: "@hermes-control/ui/styles.css", replacement: fileURLToPath(new URL("../../packages/ui/src/styles.css", import.meta.url)) },
       { find: "@hermes-control/ui", replacement: fileURLToPath(new URL("../../packages/ui/src/index.tsx", import.meta.url)) },
       { find: "@", replacement: fileURLToPath(new URL("./src", import.meta.url)) }
@@ -50,6 +56,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
+          "vendor-scribe": ["./src/lib/elevenlabsScribeClient.ts"],
           "vendor-react": ["react", "react-dom", "zustand"],
           "vendor-router": ["@tanstack/react-router", "@tanstack/react-query", "@tanstack/react-virtual"],
           "vendor-markdown": ["react-markdown", "remark-gfm", "rehype-sanitize"],

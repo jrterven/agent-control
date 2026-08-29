@@ -48,6 +48,30 @@ class User(Base, Timestamped):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class UserIntegration(Base, Timestamped):
+    """Owner-scoped, write-only credential for an external integration."""
+
+    __tablename__ = "user_integrations"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "provider",
+            name="uq_user_integrations_owner_provider",
+        ),
+        CheckConstraint(
+            "api_key_ciphertext LIKE 'v1.%'",
+            name="ck_user_integrations_encrypted_api_key",
+        ),
+        Index("ix_user_integrations_owner_provider", "owner_id", "provider"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    api_key_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)

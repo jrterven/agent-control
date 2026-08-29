@@ -8,6 +8,7 @@
     "packages/shared-types"
   ],
   "scripts": {
+    "postinstall": "patch-package --error-on-fail",
     "dev": "npm run dev --workspace @hermes-control/web",
     "build": "npm run build --workspace @hermes-control/web",
     "test": "npm run test --workspace @hermes-control/web",
@@ -23,6 +24,7 @@
     "node": ">=20"
   },
   "devDependencies": {
-    "@playwright/test": "^1.61.1"
+    "@playwright/test": "^1.61.1",
+    "patch-package": "^8.0.1"
   }
 }

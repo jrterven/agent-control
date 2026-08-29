@@ -1,4 +1,4 @@
-import { Check, Checks, PaperPlaneTilt, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle } from "@phosphor-icons/react";
+import { Check, Checks, Microphone, PaperPlaneTilt, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -8,7 +8,9 @@ import remarkGfm from "remark-gfm";
 import { Badge, Button, IconButton } from "@hermes-control/ui";
 import { createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
 import { api } from "../lib/api";
+import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useAppStore } from "../store/appStore";
+import { useScribeDictation } from "../hooks/useScribeDictation";
 import type { ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageMedia } from "../types";
 import { BrandMark } from "./BrandMark";
 
@@ -325,12 +327,85 @@ function VoiceNote({
   );
 }
 
+export function insertTranscriptAtSelection(value: string, transcript: string, selectionStart: number, selectionEnd: number) {
+  const start = Math.max(0, Math.min(selectionStart, value.length));
+  const end = Math.max(start, Math.min(selectionEnd, value.length));
+  const text = transcript.trim();
+  if (!text) return { value, caret: start };
+  const before = value.slice(0, start);
+  const after = value.slice(end);
+  const prefix = before && !/\s$/.test(before) && !/^[,.;:!?)]/.test(text) ? " " : "";
+  const suffix = after && !/^\s/.test(after) && !/^[,.;:!?)]/.test(after) ? " " : "";
+  const insertion = `${prefix}${text}${suffix}`;
+  return { value: `${before}${insertion}${after}`, caret: before.length + insertion.length };
+}
+
 function Composer({ agentName, sessionId, canInterrupt, offline = false }: { agentName: string; sessionId: string; canInterrupt: boolean; offline?: boolean }) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
+  const [dictationConsent, setDictationConsent] = useState(false);
+  const [consentOpen, setConsentOpen] = useState(false);
   const streamingMessageId = useAppStore((state) => state.streamingBySession[sessionId]);
+  const csrfToken = useAppStore((state) => state.csrfToken);
+  const authState = useAppStore((state) => state.authState);
+  const dictationConfigured = useAppStore((state) => state.features?.dictation.available === true);
   const draft = useSessionDraft(sessionId);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const insertCommitted = (transcript: string) => {
+    setValue((current) => {
+      const textarea = textareaRef.current;
+      const result = insertTranscriptAtSelection(
+        current,
+        transcript,
+        textarea?.selectionStart ?? current.length,
+        textarea?.selectionEnd ?? current.length,
+      );
+      draft.save(result.value);
+      window.requestAnimationFrame(() => {
+        const activeTextarea = textareaRef.current;
+        if (!activeTextarea) return;
+        activeTextarea.focus();
+        activeTextarea.setSelectionRange(result.caret, result.caret);
+      });
+      return result.value;
+    });
+  };
+  const dictation = useScribeDictation({
+    enabled: dictationConfigured && authState === "authenticated" && !offline && !streamingMessageId,
+    sessionId,
+    csrfToken,
+    onCommitted: insertCommitted,
+  });
+  const consentDialog = useOverlayDialog<HTMLDivElement>({
+    open: consentOpen,
+    onClose: () => setConsentOpen(false),
+    mediaQuery: "(min-width: 0px)",
+  });
+
+  const beginDictation = () => {
+    if (!dictationConsent) {
+      setConsentOpen(true);
+      return;
+    }
+    void dictation.start();
+  };
+
+  const acceptDictation = () => {
+    setDictationConsent(true);
+    setConsentOpen(false);
+    // This remains inside the explicit consent button gesture. The hook asks
+    // for a fresh token and microphone only now, never when opening the modal.
+    void dictation.start();
+  };
+
+  useEffect(() => {
+    if (authState !== "authenticated") {
+      setConsentOpen(false);
+      setDictationConsent(false);
+    } else if (!dictation.available) {
+      setConsentOpen(false);
+    }
+  }, [authState, dictation.available]);
 
   useEffect(() => {
     let active = true;
@@ -356,7 +431,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
 
   const onSubmit = async () => {
     const next = value.trim();
-    if (!next || streamingMessageId || offline) return;
+    if (!next || streamingMessageId || offline || dictation.active) return;
     setValue("");
     await draft.clear();
     await submitPrompt(next);
@@ -376,12 +451,37 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
             if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void onSubmit(); }
           }}
         />
+        {dictation.active || dictation.issue ? <div className={`dictation-state${dictation.issue ? " dictation-state--error" : ""}`} role={dictation.issue ? "alert" : "status"} aria-live={dictation.issue ? "assertive" : "polite"}>
+          <span>{dictation.issue ? t(`dictation.${dictation.issue}`) : dictation.phase === "connecting" ? t("dictation.connecting") : dictation.phase === "stopping" ? t("dictation.stopping") : t("dictation.listening")}</span>
+          {dictation.partial ? <em>{t("dictation.provisional", { text: dictation.partial })}</em> : null}
+          {!dictation.issue ? <small>{t("dictation.disclosure")}</small> : null}
+        </div> : null}
         <div className="composer__actions">
           <span />
-          {offline ? <Badge tone="warning">{t("chat.offlineDraft")}</Badge> : streamingMessageId ? (canInterrupt ? <Button variant="danger" size="sm" leadingIcon={<Stop weight="fill" />} onClick={() => void stopPrompt()}>{t("chat.stop")}</Button> : <Badge tone="info">{t("chat.running")}</Badge>) : <IconButton className="send-button" label={t("chat.sendMessage")} disabled={!value.trim()} icon={<PaperPlaneTilt size={22} weight="fill" />} onClick={() => void onSubmit()} />}
+          {offline ? <Badge tone="warning">{t("chat.offlineDraft")}</Badge> : streamingMessageId ? (canInterrupt ? <Button variant="danger" size="sm" leadingIcon={<Stop weight="fill" />} onClick={() => void stopPrompt()}>{t("chat.stop")}</Button> : <Badge tone="info">{t("chat.running")}</Badge>) : <>
+            {dictation.available ? <IconButton className="dictation-button" selected={dictation.active} label={t(dictation.active ? "dictation.stop" : "dictation.start")} icon={dictation.active ? <Stop size={20} weight="fill" /> : <Microphone size={21} weight="fill" />} onClick={() => { if (dictation.active) dictation.stop(); else beginDictation(); }} /> : null}
+            <IconButton className="send-button" label={t("chat.sendMessage")} disabled={!value.trim() || dictation.active} icon={<PaperPlaneTilt size={22} weight="fill" />} onClick={() => void onSubmit()} />
+          </>}
         </div>
       </div>
       <p className="composer-note">{t(offline ? "chat.offlineDraftNote" : "chat.disclaimer")}</p>
+      {consentOpen ? <div ref={consentDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="dictation-consent-title" aria-describedby="dictation-consent-description">
+        <button className="modal-scrim" aria-label={t("dictation.consentClose")} onClick={() => setConsentOpen(false)} />
+        <div className="hc-panel form-modal dictation-consent">
+          <span className="eyebrow">ElevenLabs · Scribe v2 Realtime</span>
+          <h2 id="dictation-consent-title">{t("dictation.consentTitle")}</h2>
+          <p id="dictation-consent-description">{t("dictation.consentDescription")}</p>
+          <ul className="dictation-consent__points">
+            <li><Microphone aria-hidden="true" /><span>{t("dictation.consentAudio")}</span></li>
+            <li><WarningCircle aria-hidden="true" /><span>{t("dictation.consentRetention")}</span></li>
+            <li><Check aria-hidden="true" /><span>{t("dictation.consentDraft")}</span></li>
+          </ul>
+          <div className="dictation-consent__actions">
+            <Button type="button" variant="ghost" onClick={() => setConsentOpen(false)}>{t("dictation.consentCancel")}</Button>
+            <Button type="button" variant="primary" leadingIcon={<Microphone />} onClick={acceptDictation}>{t("dictation.consentAccept")}</Button>
+          </div>
+        </div>
+      </div> : null}
     </div>
   );
 }

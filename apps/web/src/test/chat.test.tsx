@@ -8,6 +8,35 @@ import { automations, gateways, initialMessages, profiles, sessions, workspaces 
 import { api } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 
+const chatScribeMock = vi.hoisted(() => ({
+  connect: vi.fn(() => ({ on: vi.fn(), close: vi.fn(), mute: vi.fn(), commit: vi.fn() })),
+}));
+
+vi.mock("../lib/elevenlabsScribeClient", () => ({
+  Scribe: { connect: chatScribeMock.connect },
+  CommitStrategy: { VAD: "vad" },
+  RealtimeEvents: {
+    SESSION_STARTED: "session_started",
+    PARTIAL_TRANSCRIPT: "partial_transcript",
+    COMMITTED_TRANSCRIPT: "committed_transcript",
+    AUTH_ERROR: "auth_error",
+    QUOTA_EXCEEDED: "quota_exceeded",
+    RATE_LIMITED: "rate_limited",
+    RESOURCE_EXHAUSTED: "resource_exhausted",
+    ERROR: "error",
+    CLOSE: "close",
+  },
+}));
+
+function enableBrowserAudio() {
+  Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
+  Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
+  Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn() } });
+  Object.defineProperty(window, "AudioContext", { configurable: true, value: class AudioContext {} });
+  Object.defineProperty(window, "AudioWorkletNode", { configurable: true, value: class AudioWorkletNode {} });
+  Object.defineProperty(window, "WebSocket", { configurable: true, value: class WebSocket {} });
+}
+
 describe("mobile-first chat", () => {
   beforeEach(() => {
     useAppStore.setState({
@@ -25,6 +54,7 @@ describe("mobile-first chat", () => {
       automations,
       messages: initialMessages,
       streamingBySession: {},
+      features: undefined,
     });
   });
 
@@ -71,6 +101,48 @@ describe("mobile-first chat", () => {
     await waitFor(() => expect(composer.style.overflowY).toBe("auto"));
     expect(Number.parseFloat(composer.style.height)).toBeGreaterThanOrEqual(130);
     expect(Number.parseFloat(composer.style.height)).toBeLessThanOrEqual(160);
+  });
+
+  it("shows the microphone only when the current user configured dictation and the browser supports it", () => {
+    enableBrowserAudio();
+
+    const first = render(<ChatView />);
+    expect(screen.queryByRole("button", { name: "Dictar por voz" })).not.toBeInTheDocument();
+    first.unmount();
+
+    useAppStore.setState({
+      features: {
+        dictation: { available: true, provider: "elevenlabs", modelId: "scribe_v2_realtime" },
+      },
+    });
+    render(<ChatView />);
+    expect(screen.getByRole("button", { name: "Dictar por voz" })).toBeVisible();
+  });
+
+  it("requires explicit first-use consent before requesting a token or microphone", async () => {
+    enableBrowserAudio();
+    useAppStore.setState({
+      features: {
+        dictation: { available: true, provider: "elevenlabs", modelId: "scribe_v2_realtime" },
+      },
+    });
+    const token = vi.spyOn(api, "createTranscriptionToken").mockResolvedValue({
+      token: "single-use-token",
+      expiresAt: "2026-08-29T12:15:00Z",
+      modelId: "scribe_v2_realtime",
+    });
+    const user = userEvent.setup();
+    render(<ChatView />);
+
+    await user.click(screen.getByRole("button", { name: "Dictar por voz" }));
+    expect(screen.getByRole("dialog", { name: "Activar dictado por voz" })).toBeVisible();
+    expect(screen.getByText(/nunca se envía automáticamente al agente/i)).toBeVisible();
+    expect(token).not.toHaveBeenCalled();
+    expect(chatScribeMock.connect).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Aceptar y activar micrófono" }));
+    await waitFor(() => expect(token).toHaveBeenCalledWith({ sessionId: "session-papers" }, "csrf-memory-only"));
+    await waitFor(() => expect(chatScribeMock.connect).toHaveBeenCalledTimes(1));
   });
 
   it("streams a demo response and offers an explicit stop action", async () => {

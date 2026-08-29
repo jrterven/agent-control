@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import logging
+from io import StringIO
 
 import pytest
 
 from hermes_client import EndpointPolicy, EventNormalizer, UnsafeEndpointError, resolve_endpoint, validate_endpoint
 from hermes_client.provider import _PinnedNetworkBackend
 from hermes_control_api.security import SecretVault, hash_password, verify_password
-from hermes_control_api.main import RedactingLogFilter
+from hermes_control_api.main import RedactingLogFilter, configure_redacted_logging
 
 
 @pytest.mark.asyncio
@@ -409,3 +410,51 @@ def test_log_filter_redacts_entire_authorization_bearer_value():
     rendered = record.getMessage()
     assert "supersecretvalue" not in rendered
     assert "[REDACTED]" in rendered
+
+
+@pytest.mark.parametrize(
+    "credential",
+    (
+        "sk_plausibleElevenLabsCredential123",
+        "sk-plausible-provider-credential-123",
+        "sutkn_singleUseRealtimeToken123",
+    ),
+)
+def test_log_filter_redacts_plausible_standalone_credentials(credential):
+    record = logging.LogRecord(
+        "httpx",
+        logging.DEBUG,
+        __file__,
+        1,
+        "provider returned %s while streaming",
+        (credential,),
+        None,
+    )
+    assert RedactingLogFilter().filter(record)
+    rendered = record.getMessage()
+    assert credential not in rendered
+    assert "[REDACTED]" in rendered
+
+
+def test_configured_handler_filter_redacts_child_logger_without_breaking_format():
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    logger = logging.getLogger("hermes_control.provider")
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    logger.handlers = [handler]
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    try:
+        configure_redacted_logging()
+        logger.info("upstream returned %s", "sutkn_handlerSecret123456")
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+    rendered = stream.getvalue()
+    assert "sutkn_handlerSecret123456" not in rendered
+    assert rendered == "INFO upstream returned [REDACTED]\n"

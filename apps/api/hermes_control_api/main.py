@@ -23,6 +23,11 @@ from .api import router
 from .config import Settings, get_settings
 from .database import Base, build_engine, build_session_factory
 from .eventing import EventHub
+from .integrations import (
+    ElevenLabsScribeClient,
+    IntegrationError,
+    TranscriptionTokenLimiter,
+)
 from .middleware import BodySizeLimitMiddleware, IdempotencyMiddleware, SecurityBoundaryMiddleware
 from .models import Automation, Gateway
 from .providers import build_provider_pool
@@ -42,7 +47,12 @@ from .services import (
 
 
 _LOG_SECRET = re.compile(
-    r"(?i)authorization\s*[:=]\s*Bearer\s+[A-Za-z0-9._~+/=-]+|Bearer\s+[A-Za-z0-9._~+/=-]+|(authorization|api[_-]?key|token|ticket|secret|password)\s*[:=]\s*[^\s,;&]+|sk-(?:proj-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}"
+    r"(?i)authorization\s*[:=]\s*Bearer\s+[A-Za-z0-9._~+/=-]+"
+    r"|Bearer\s+[A-Za-z0-9._~+/=-]+"
+    r"|(authorization|api[_-]?key|token|ticket|secret|password)\s*[:=]\s*[^\s,;&]+"
+    r"|(?<![A-Za-z0-9._~-])(?:sk[-_][A-Za-z0-9][A-Za-z0-9._~-]{11,}"
+    r"|sutkn_[A-Za-z0-9][A-Za-z0-9._~-]{7,})(?![A-Za-z0-9._~-])"
+    r"|gh[pousr]_[A-Za-z0-9]{20,}"
 )
 
 
@@ -72,10 +82,28 @@ class RedactingLogFilter(logging.Filter):
 
 
 def configure_redacted_logging() -> None:
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "hermes_control"):
+    names = (
+        "uvicorn",
+        "uvicorn.error",
+        "uvicorn.access",
+        "hermes_control",
+        "hermes_control.provider",
+        "hermes_control.supervision",
+        "httpx",
+        "httpcore",
+    )
+    handlers: set[logging.Handler] = set(logging.getLogger().handlers)
+    for name in names:
         logger = logging.getLogger(name)
         if not any(isinstance(item, RedactingLogFilter) for item in logger.filters):
             logger.addFilter(RedactingLogFilter())
+        handlers.update(logger.handlers)
+    # Filters on ancestor loggers do not run for propagated child records.
+    # Applying the same structure-preserving filter to installed handlers
+    # closes that gap without changing Uvicorn's logger hierarchy or format.
+    for handler in handlers:
+        if not any(isinstance(item, RedactingLogFilter) for item in handler.filters):
+            handler.addFilter(RedactingLogFilter())
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -250,6 +278,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.services = service_container
+    app.state.elevenlabs_scribe_client = ElevenLabsScribeClient()
+    app.state.transcription_token_limiter = TranscriptionTokenLimiter(
+        limit=settings.transcription_token_rate_limit,
+        window_seconds=settings.transcription_token_rate_window_seconds,
+    )
     app.state.automation_route_health = automation_route_health
     app.state.capability_refresh_health = capability_refresh_health
     app.add_middleware(IdempotencyMiddleware)
@@ -258,7 +291,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-CSRF-Token", "Idempotency-Key", "X-Confirm-Delete"],
     )
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_bytes)
@@ -271,6 +304,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.exception_handler(ConflictError)
     async def conflict(request: Request, exc: ConflictError):
         return error_response(request, 409, "CONFLICT", str(exc))
+
+    @app.exception_handler(IntegrationError)
+    async def integration_error(request: Request, exc: IntegrationError):
+        response = error_response(
+            request,
+            exc.status_code,
+            exc.code,
+            exc.public_message,
+            retryable=exc.retryable,
+        )
+        if exc.retry_after is not None:
+            response.headers["Retry-After"] = str(exc.retry_after)
+        return response
 
     @app.exception_handler(RouteMismatchError)
     async def route_mismatch(request: Request, exc: RouteMismatchError):

@@ -5,7 +5,16 @@
 Agent Control es el único mediador entre el navegador y los proveedores de
 agentes. Hermes es el primer adaptador implementado; OpenClaw podrá añadirse
 detrás del mismo límite. El navegador no recibe direcciones, tokens, claves ni
-tramas nativas de ningún proveedor.
+tramas nativas de ningún proveedor de agentes.
+
+El dictado BYOK es una excepción estrecha y separada de ese límite: después de
+una acción explícita del usuario, Control puede entregar al navegador un token
+de transcripción de un solo uso. El navegador envía audio directamente a
+ElevenLabs por el único origen WebSocket permitido. La API key de larga duración
+permanece cifrada en el backend y esta integración nunca se vincula a Hermes,
+OpenClaw, un gateway, un perfil o una sesión de agente.
+La decisión y sus límites están formalizados en
+[ADR 0006](adr/0006-owner-scoped-realtime-transcription.md).
 
 ```mermaid
 flowchart LR
@@ -15,6 +24,8 @@ flowchart LR
     C --> E[Normalizador y event hub]
     E --> B
     C --> PA[Adaptador de proveedor]
+    C -->|API key owner-scoped\nsolo para acuñar token| STT[ElevenLabs API]
+    B -.->|audio WSS + token single-use| STT
     PA -->|REST + JSON-RPC WS\nperfil explícito| H[Hermes serve\n127.0.0.1:9119]
     PA -.->|HTTP/SSE fallback| F[Hermes API server\n127.0.0.1:8642]
     PA -. futuro .-> O[OpenClaw]
@@ -45,8 +56,10 @@ flowchart TB
 
 ## Componentes
 
-- **Web:** presentación, borradores y caché offline opcional. Todas sus URLs de
-  datos son relativas al origen de Control.
+- **Web:** presentación, borradores y caché offline opcional. Las URLs de Control
+  y de proveedores de agentes son relativas al origen de Control. La única
+  excepción es el WebSocket de dictado hacia el origen exacto de ElevenLabs,
+  autorizado por CSP y solo mientras existe una captura iniciada por el usuario.
 - **API Control:** autenticación, CSRF, autorización, metadatos, auditoría,
   idempotencia, validación SSRF y traducción de protocolos.
 - **Adaptadores de proveedor:** traducen las capacidades de cada runtime al
@@ -59,6 +72,52 @@ flowchart TB
   Hermes ni duplica el transcript completo.
 - **Mock Hermes:** doble determinista en memoria para desarrollar sin el equipo
   remoto y para ensayar errores no seguros contra agentes reales.
+- **Integración de transcripción:** credencial BYOK propia de cada usuario,
+  cifrada por Control y usada únicamente para solicitar tokens de un solo uso.
+  No es un adaptador de agente y no participa en el routing de sesiones.
+
+## Dictado BYOK
+
+```mermaid
+sequenceDiagram
+    participant UI as Browser/PWA
+    participant C as Control
+    participant EL as ElevenLabs
+    UI->>C: POST /api/v1/realtime/transcription-token
+    Note over UI,C: cookie + Origin + CSRF; rate limit; no Idempotency-Key
+    C->>C: decrypt owner-scoped API key in memory
+    C->>EL: request single-use Scribe token
+    EL-->>C: token
+    C-->>UI: token + expiresAt + modelId (Cache-Control: no-store)
+    UI->>EL: WSS /v1/speech-to-text/realtime?token=<single-use>
+    UI-->>EL: microphone audio
+    EL-->>UI: partial/committed transcript events
+    UI->>UI: place committed text in the unsent draft
+```
+
+El token vive solo en memoria, no entra en SQLite, IndexedDB, `localStorage`,
+logs, auditoría, caché del service worker ni el ledger de idempotencia. El
+protocolo oficial lo transporta inevitablemente como query del WSS; Control no
+registra ni persiste esa URL completa y cualquier diagnóstico o telemetría del
+navegador debe omitirla o redactarla. Cada captura necesita un token nuevo; no se
+reusa para reconectar. La PWA cierra el flujo al detener, navegar, ocultar la
+aplicación, cerrar sesión o fallar el permiso del micrófono.
+
+El audio viaja del dispositivo a ElevenLabs y no atraviesa Control. Antes de
+activar el micrófono la interfaz informa este destino y que la retención se rige
+por la cuenta y las condiciones de ElevenLabs; Control no promete retención
+cero. Solo texto confirmado se incorpora al borrador y nunca se envía
+automáticamente al agente. El dictado nativo del teclado del sistema operativo
+permanece como alternativa cuando BYOK, el navegador o la red no están
+disponibles.
+
+El cliente Scribe fijado en el lockfile se endurece mediante el patch reproducible
+versionado bajo `patches/`, aplicado por `patch-package` en `npm install`. Antes de
+parsear eventos, rechaza mensajes de texto mayores de 65,536 unidades UTF-16 de
+JavaScript; este es un límite textual después de recibir el frame, no un límite
+de bytes en la red. Tampoco imprime payloads, motivos de cierre ni errores crudos
+a la consola. Los eventos parciales existen solo en presentación: únicamente
+`COMMITTED_TRANSCRIPT` puede editar el borrador.
 
 ## Identidad y reanudación
 
@@ -117,5 +176,7 @@ declared the observation stale. The independent automation-route watcher likewis
 
 See [data model](data-model.md) for the logical schema. Hermes owns messages,
 profiles, runtime state and cron execution transcripts. Control owns users,
-authentication, gateway configuration, encrypted credentials, workspaces,
-routing references, local presentation metadata, audit and idempotency state.
+authentication, gateway configuration, encrypted credentials, owner-scoped
+transcription integrations, workspaces, routing references, local presentation
+metadata, audit and idempotency state. Single-use transcription tokens and
+microphone audio are deliberately excluded from persistent Control state.

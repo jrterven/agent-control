@@ -42,6 +42,18 @@ export type ProfileCreateInput = {
   description: string;
 };
 
+export type ElevenLabsIntegrationView = {
+  configured: boolean;
+  provider: "elevenlabs";
+  modelId: "scribe_v2_realtime";
+};
+
+export type TranscriptionTokenView = {
+  token: string;
+  expiresAt: string;
+  modelId: "scribe_v2_realtime";
+};
+
 export type AutomationCreateInput = {
   gatewayId: string;
   profileName: string;
@@ -300,6 +312,25 @@ export const api = {
     },
   ),
   createRealtimeTicket: (csrfToken?: string) => request<{ ticket: string; expiresAt: string }>("/realtime/tickets", { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID(), ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) } }),
+  elevenLabsIntegration: () => request<ElevenLabsIntegrationView>("/integrations/elevenlabs"),
+  saveElevenLabsKey: (apiKey: string, csrfToken?: string) => request<ElevenLabsIntegrationView>("/integrations/elevenlabs/key", {
+    method: "PUT",
+    headers: mutationHeaders(csrfToken),
+    body: JSON.stringify({ apiKey }),
+  }),
+  testElevenLabsIntegration: (csrfToken?: string) => request<{ ok: true; provider: "elevenlabs"; modelId: "scribe_v2_realtime" }>("/integrations/elevenlabs/test", {
+    method: "POST",
+    headers: mutationHeaders(csrfToken),
+  }),
+  deleteElevenLabsKey: (csrfToken?: string) => request<void>("/integrations/elevenlabs/key", {
+    method: "DELETE",
+    headers: mutationHeaders(csrfToken),
+  }),
+  createTranscriptionToken: (payload: { sessionId?: string | null; languageCode?: string | null } = {}, csrfToken?: string) => request<TranscriptionTokenView>("/realtime/transcription-token", {
+    method: "POST",
+    headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
+    body: JSON.stringify(payload),
+  }),
   createAutomation: (payload: AutomationCreateInput, csrfToken?: string) => request<AutomationWire>("/automations", { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID(), ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) }, body: JSON.stringify(payload) }).then(automationFromWire),
   syncAutomations: (gatewayId: string, profileName: string, csrfToken?: string) => request<AutomationWire[]>(`/automations/sync?gatewayId=${encodeURIComponent(gatewayId)}&profileName=${encodeURIComponent(profileName)}`, {
     method: "POST",

@@ -4,6 +4,8 @@ import { loadPreference, savePreference } from "./lib/db";
 import { baseTranslations } from "./locales/base";
 import { adminResources } from "./locales/admin";
 import { chatResources } from "./locales/chat";
+import { dictationResources } from "./locales/dictation";
+import { integrationResources } from "./locales/integrations";
 import { navigationResources } from "./locales/navigation";
 import { screenResources } from "./locales/screens";
 import { runtimeResources } from "./locales/runtime";
@@ -26,6 +28,7 @@ export const LANGUAGE_OPTIONS: ReadonlyArray<{
 ];
 
 const supportedLanguageSet = new Set<string>(SUPPORTED_LANGUAGES);
+const asResource = (value: unknown): Record<string, unknown> => value as Record<string, unknown>;
 
 export function normalizeSupportedLanguage(value: string | null | undefined): SupportedLanguage | undefined {
   if (!value) return undefined;
@@ -61,14 +64,17 @@ const i18nInitialization = i18n.use(initReactI18next).init({
   load: "languageOnly",
   interpolation: { escapeValue: false },
   resources: Object.fromEntries(
-    SUPPORTED_LANGUAGES.map((language) => [language, { translation: {
-      ...baseTranslations[language],
-      ...adminResources[language],
-      ...navigationResources[language],
-      ...chatResources[language],
-      ...screenResources[language],
-      ...runtimeResources[language],
-    } }]),
+    SUPPORTED_LANGUAGES.map((language) => [language, { translation: Object.assign(
+      {},
+      asResource(baseTranslations[language]),
+      asResource(adminResources[language]),
+      asResource(navigationResources[language]),
+      asResource(chatResources[language]),
+      asResource(dictationResources[language]),
+      asResource(integrationResources[language]),
+      asResource(screenResources[language]),
+      asResource(runtimeResources[language]),
+    ) }]),
   ),
 });
 applyDocumentLanguage(DEFAULT_LANGUAGE);
