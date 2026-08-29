@@ -326,6 +326,17 @@ class SessionSyncRequest(ApiModel):
 class SessionUpdate(ApiModel):
     workspace_id: str | None = None
     archived: bool | None = None
+    display_title: str | None = Field(default=None, min_length=1, max_length=300)
+
+    @field_validator("display_title")
+    @classmethod
+    def normalize_display_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("Display title cannot be empty")
+        return normalized
 
 
 class SessionView(ApiModel):

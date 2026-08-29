@@ -159,14 +159,21 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .workspace-editor form > div:last-child { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .workspace-editor form > div:last-child > span { display: flex; gap: 8px; }
 .session-list { min-height: 0; overflow-y: auto; }
-.session-list button { min-height: 58px; display: flex; gap: 8px; border: 0; border-radius: 9px; padding: 8px; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
-.session-list button:hover, .session-list button.is-active { color: var(--text); background: var(--surface-2); }
+.session-list__row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: center; border-radius: 9px; color: var(--muted); }
+.session-list__row:hover, .session-list__row.is-active { color: var(--text); background: var(--surface-2); }
+.session-list .session-list__select { min-width: 0; min-height: 58px; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 9px; padding: 8px; color: inherit; background: transparent; text-align: left; cursor: pointer; }
+.session-list .session-list__more { width: 44px; height: 44px; color: var(--muted); opacity: .78; }
+.session-list__row:hover .session-list__more, .session-list__more[aria-expanded="true"] { color: var(--text); opacity: 1; }
 .session-list__body { min-width: 0; flex: 1; display: grid; gap: 2px; }
 .session-list__body strong, .session-list__body small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .session-list__body strong { color: inherit; font-size: 12px; font-weight: 680; }
 .session-list__body small { color: var(--muted); font-size: 10px; }
 .session-list__meta { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; font-size: 9px; }
 .session-list__meta i { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); }
+.session-list__menu { grid-column: 1 / -1; display: grid; gap: 2px; margin: 0 5px 5px; padding: 5px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-elevated); box-shadow: var(--shadow); }
+.session-list .session-list__menu button { min-height: 44px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 8px; padding: 0 10px; color: var(--text); background: transparent; font-weight: 670; text-align: left; cursor: pointer; }
+.session-list .session-list__menu button:hover, .session-list .session-list__menu button:focus-visible { background: var(--surface-2); }
+.session-list .session-list__menu button.is-danger { color: var(--danger-text); }
 .sidebar-footer { padding: 10px 12px 14px; border-top: 1px solid var(--border); }
 .sidebar-footer > .hc-button { width: 100%; }
 .sidebar-footer > div { display: flex; gap: 4px; margin-top: 8px; }

@@ -324,6 +324,11 @@ export const api = {
     headers: mutationHeaders(csrfToken),
     body: JSON.stringify({ archived: true }),
   }).then((row) => sessionFromWire(row)),
+  renameSession: (sessionId: string, displayTitle: string, csrfToken?: string) => request<SessionWire>(`/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    headers: mutationHeaders(csrfToken),
+    body: JSON.stringify({ displayTitle }),
+  }).then((row) => sessionFromWire(row)),
   deleteSessionFromHermes: (sessionId: string, storedSessionId: string, csrfToken?: string) => request<void>(`/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
     headers: {

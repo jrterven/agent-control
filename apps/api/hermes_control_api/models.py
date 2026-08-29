@@ -188,6 +188,10 @@ class SessionLink(Base, Timestamped):
     runtime_session_id: Mapped[str | None] = mapped_column(String(255))
     runtime_generation: Mapped[str | None] = mapped_column(String(96))
     title: Mapped[str | None] = mapped_column(String(300))
+    # Owner-selected label used only by Agent Control. ``title`` remains the
+    # canonical value reported by Hermes and continues to be refreshed during
+    # synchronization.
+    display_title: Mapped[str | None] = mapped_column(String(300))
     status: Mapped[str] = mapped_column(String(30), default="idle")
     # Hermes 0.20.5/0.20.6 does not persist an RPC-created session until its
     # first prompt. This marker is the sole authority for treating that one

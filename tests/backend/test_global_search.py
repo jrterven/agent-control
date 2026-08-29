@@ -95,3 +95,23 @@ def test_global_search_validates_query_and_searches_local_metadata(authenticated
     )
     assert response.status_code == 200
     assert response.json()["items"][0]["targetId"] == workspace.json()["id"]
+
+
+def test_global_search_uses_the_owner_selected_session_label(authenticated):
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "canonical-session-title")
+    renamed = client.patch(
+        f"/api/v1/sessions/{session['id']}",
+        headers=mutation_headers(csrf, "search-session-display-title"),
+        json={"displayTitle": "Proyecto Boreal"},
+    )
+    assert renamed.status_code == 200, renamed.text
+
+    response = client.get(
+        "/api/v1/search", params={"q": "boreal", "kind": "session"}
+    )
+
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["targetId"] == session["id"]
+    assert item["title"] == "Proyecto Boreal"

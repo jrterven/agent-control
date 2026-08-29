@@ -161,6 +161,9 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     assert "initial_history_pending" in {
         column["name"] for column in schema.get_columns("session_links")
     }
+    assert "display_title" in {
+        column["name"] for column in schema.get_columns("session_links")
+    }
     assert "capabilities_checked_at" in {
         column["name"] for column in schema.get_columns("profile_refs")
     }
@@ -173,7 +176,7 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0010_elevenlabs_tts_model"
+        ).scalar_one() == "0011_session_display_title"
     engine.dispose()
 
     downgrade = subprocess.run(

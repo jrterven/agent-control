@@ -62,6 +62,7 @@ type AppState = {
   setOfflineCacheEnabled: (enabled: boolean) => void;
   hydrateBootstrap: (data: BootstrapData) => void;
   addSession: (session: SessionSummary) => void;
+  updateSession: (sessionId: string, update: Partial<SessionSummary>) => void;
   removeSession: (sessionId: string) => void;
   setSessionUsage: (sessionId: string, usage?: SessionUsage) => void;
   upsertApproval: (request: ApprovalRequest) => void;
@@ -191,6 +192,9 @@ export const useAppStore = create<AppState>((set) => ({
     return { ...data, bootstrapLoaded: true, selectedGatewayId, selectedProfileId, selectedWorkspaceId, selectedSessionId };
   }),
   addSession: (session) => set((state) => ({ sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)], selectedSessionId: session.id, leftDrawerOpen: false })),
+  updateSession: (sessionId, update) => set((state) => ({
+    sessions: state.sessions.map((session) => session.id === sessionId ? { ...session, ...update, id: session.id } : session),
+  })),
   removeSession: (sessionId) => set((state) => {
     const removed = state.sessions.find((session) => session.id === sessionId);
     const sessions = state.sessions.filter((session) => session.id !== sessionId);

@@ -71,8 +71,16 @@ During a conversation Agent Control can:
 - keep drafts on the device and optionally cache a bounded encrypted snapshot;
 - show context use, tools, subagents and recent activity in the pulse panel or
   mobile context sheet;
+- open the three-dot menu beside any conversation to give it a local friendly
+  name or begin a permanent deletion;
 - export a sanitized conversation, archive it normally, or perform a separately
   confirmed provider deletion when the capability is verified.
+
+Renaming changes only the label shown and searched by Agent Control. Hermes
+keeps its canonical session title and history untouched. Permanent deletion is
+shown only when the provider contract confirms `session.delete`; it requires
+typing the exact persistent session ID so an accidental mobile tap cannot erase
+the wrong conversation.
 
 The empty composer starts at one line, grows line by line up to six visible
 lines, and then scrolls. Tool execution detail is kept in the activity panel so
