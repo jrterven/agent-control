@@ -122,6 +122,7 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     }
     assert "api_key_ciphertext" in integration_columns
     assert "api_key" not in integration_columns
+    assert {"tts_voice_id", "tts_voice_name"} <= integration_columns
 
     session_tag_fks = {
         fk["name"]: (tuple(fk["constrained_columns"]), tuple(fk["referred_columns"]))
@@ -172,7 +173,7 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0008_user_integrations"
+        ).scalar_one() == "0009_elevenlabs_tts_voice"
     engine.dispose()
 
     downgrade = subprocess.run(

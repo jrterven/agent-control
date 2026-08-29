@@ -29,6 +29,7 @@ from ..eventing import SubscriptionLimitError
 from ..gateway_health import gateway_health_state, profile_health_state
 from ..integrations import (
     ELEVENLABS_PROVIDER,
+    ELEVENLABS_TTS_MODEL_ID,
     SCRIBE_REALTIME_MODEL_ID,
     UserIntegrationService,
 )
@@ -452,9 +453,9 @@ def bootstrap(
     """Mobile-shell projection; canonical resources remain independently addressable."""
     gateways = list(db.scalars(select(Gateway).order_by(Gateway.created_at)).all())
     app_services = services(request)
-    dictation_available = UserIntegrationService(
+    integration_configuration = UserIntegrationService(
         app_services.vault
-    ).is_configured(db, user)
+    ).configuration(db, user)
     mutable_profiles = app_services.settings.mutable_profiles
     interactive_profiles = app_services.settings.interactive_profiles
     capability_observed_at = datetime.now(timezone.utc)
@@ -532,10 +533,17 @@ def bootstrap(
     return {
         "features": {
             "dictation": {
-                "available": dictation_available,
+                "available": integration_configuration["configured"],
                 "provider": ELEVENLABS_PROVIDER,
                 "modelId": SCRIBE_REALTIME_MODEL_ID,
-            }
+            },
+            "speech": {
+                "available": integration_configuration["speech_available"],
+                "provider": ELEVENLABS_PROVIDER,
+                "modelId": ELEVENLABS_TTS_MODEL_ID,
+                "voiceId": integration_configuration["voice_id"],
+                "voiceName": integration_configuration["voice_name"],
+            },
         },
         "gateways": [
             {

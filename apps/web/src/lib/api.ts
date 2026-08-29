@@ -46,12 +46,31 @@ export type ElevenLabsIntegrationView = {
   configured: boolean;
   provider: "elevenlabs";
   modelId: "scribe_v2_realtime";
+  ttsModelId?: "eleven_flash_v2_5";
+  voiceId?: string | null;
+  voiceName?: string | null;
+  speechAvailable?: boolean;
+};
+
+export type ElevenLabsVoice = {
+  id: string;
+  name: string;
+  category?: string | null;
+  labels: Record<string, string>;
 };
 
 export type TranscriptionTokenView = {
   token: string;
   expiresAt: string;
   modelId: "scribe_v2_realtime";
+};
+
+export type SpeechTokenView = {
+  token: string;
+  expiresAt: string;
+  modelId: "eleven_flash_v2_5";
+  voiceId: string;
+  voiceName: string;
 };
 
 export type AutomationCreateInput = {
@@ -217,6 +236,26 @@ async function requestBlob(path: string): Promise<{ blob: Blob; filename?: strin
   return { blob: await response.blob(), filename };
 }
 
+async function requestSpeechStream(text: string, csrfToken?: string, signal?: AbortSignal): Promise<Response> {
+  const response = await fetch("/api/v1/integrations/elevenlabs/speech", {
+    method: "POST",
+    credentials: "same-origin",
+    signal,
+    headers: {
+      "Accept": "audio/mpeg",
+      "Content-Type": "application/json",
+      ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
+    },
+    body: JSON.stringify({ text }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({ message: "Speech playback failed" }));
+    if (response.status === 401) window.dispatchEvent(new Event("hermes-control:unauthorized"));
+    throw new ApiError(response.status, String(body.message ?? "Speech playback failed"), typeof body.code === "string" ? body.code : undefined);
+  }
+  return response;
+}
+
 function adminProfilePath(gatewayId: string, profileName: string, suffix: string) {
   return `/admin/gateways/${encodeURIComponent(gatewayId)}/profiles/${encodeURIComponent(profileName)}/${suffix}`;
 }
@@ -331,6 +370,18 @@ export const api = {
     headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
     body: JSON.stringify(payload),
   }),
+  elevenLabsVoices: () => request<{ items: ElevenLabsVoice[] }>("/integrations/elevenlabs/voices"),
+  saveElevenLabsVoice: (voiceId: string, csrfToken?: string) => request<ElevenLabsIntegrationView>("/integrations/elevenlabs/voice", {
+    method: "PUT",
+    headers: mutationHeaders(csrfToken),
+    body: JSON.stringify({ voiceId }),
+  }),
+  createSpeechToken: (payload: { sessionId?: string | null } = {}, csrfToken?: string) => request<SpeechTokenView>("/realtime/speech-token", {
+    method: "POST",
+    headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
+    body: JSON.stringify(payload),
+  }),
+  streamSpeech: (text: string, csrfToken?: string, signal?: AbortSignal) => requestSpeechStream(text, csrfToken, signal),
   createAutomation: (payload: AutomationCreateInput, csrfToken?: string) => request<AutomationWire>("/automations", { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID(), ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) }, body: JSON.stringify(payload) }).then(automationFromWire),
   syncAutomations: (gatewayId: string, profileName: string, csrfToken?: string) => request<AutomationWire[]>(`/automations/sync?gatewayId=${encodeURIComponent(gatewayId)}&profileName=${encodeURIComponent(profileName)}`, {
     method: "POST",

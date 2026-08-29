@@ -70,6 +70,11 @@ class UserIntegration(Base, Timestamped):
     )
     provider: Mapped[str] = mapped_column(String(40), nullable=False)
     api_key_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    # TTS preferences are deliberately non-secret.  Keeping them beside the
+    # owner-scoped credential means a shared installation never leaks one
+    # user's selected voice into another user's chat.
+    tts_voice_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    tts_voice_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
 class AuthSession(Base):

@@ -21,8 +21,8 @@ The production PWA uses a prompt-style service worker. It detects the new
 immutable frontend automatically but activates it only after the signed-in user
 chooses **Update now** (or **Update when finished**). Verify that the activity
 button shows the update indicator, **Settings** reports the installed semantic
-version, and activation is deferred while dictation, streaming or an unsent
-draft is active. After activation, confirm that the same Control conversation
+version, and activation is deferred while dictation, speech playback, streaming
+or an unsent draft is active. After activation, confirm that the same Control conversation
 is selected and that no API response entered the service-worker cache.
 
 For rollback, stop Control and switch back only if the earlier binary supports

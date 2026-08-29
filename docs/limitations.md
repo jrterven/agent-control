@@ -53,6 +53,14 @@
   WebSocket URLs remain outside Control's enforcement boundary.
 - Dictation only edits the unsent composer draft. It never submits a prompt,
   chooses an agent or creates a Hermes/OpenClaw session automatically.
+- Spoken responses require a selected ElevenLabs voice and consume the owner's
+  character quota. Live playback depends on MediaSource-compatible MP3
+  streaming and mobile autoplay policy; when incremental playback is not
+  supported, the response remains readable and on-demand playback can be
+  retried after an explicit tap.
+- The voice selector reads at most the first 500 voices exposed by the account.
+  Replacing a key intentionally clears the selected voice until it is verified
+  against the replacement account.
 - Cron executions remain separate Hermes sessions and are not ordinary chats.
 - Hermes 0.20.5/0.20.6 cron schedules use the profile's configured timezone or,
   when it is empty, the Hermes host's local timezone. The official cron route

@@ -1,11 +1,11 @@
-import { CheckCircle, Key, Microphone, Trash, WarningCircle } from "@phosphor-icons/react";
+import { CheckCircle, Key, Microphone, SpeakerHigh, Trash, WarningCircle } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge, Button, Field, Panel } from "@hermes-control/ui";
-import { api, type ElevenLabsIntegrationView } from "../lib/api";
+import { api, type ElevenLabsIntegrationView, type ElevenLabsVoice } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 
-type Action = "load" | "save" | "test" | "delete" | "";
+type Action = "load" | "save" | "test" | "voice" | "delete" | "";
 
 export function ElevenLabsIntegration() {
   const { t } = useTranslation();
@@ -15,6 +15,9 @@ export function ElevenLabsIntegration() {
   const hydrateBootstrap = useAppStore((state) => state.hydrateBootstrap);
   const [view, setView] = useState<ElevenLabsIntegrationView | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [voices, setVoices] = useState<ElevenLabsVoice[]>([]);
+  const [voiceId, setVoiceId] = useState("");
+  const [voicesLoading, setVoicesLoading] = useState(false);
   const [action, setAction] = useState<Action>("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -32,6 +35,25 @@ export function ElevenLabsIntegration() {
       .finally(() => { if (active) setAction(""); });
     return () => { active = false; };
   }, [demoMode, offline, t]);
+
+  useEffect(() => {
+    if (!view?.configured || offline || demoMode) {
+      setVoices([]);
+      setVoiceId("");
+      return;
+    }
+    let active = true;
+    setVoicesLoading(true);
+    void api.elevenLabsVoices()
+      .then(({ items }) => {
+        if (!active) return;
+        setVoices(items);
+        setVoiceId(view.voiceId ?? "");
+      })
+      .catch(() => { if (active) setError(t("integrations.voicesError")); })
+      .finally(() => { if (active) setVoicesLoading(false); });
+    return () => { active = false; };
+  }, [demoMode, offline, t, view?.configured]);
 
   const refreshFeatures = async () => {
     const bootstrap = await api.bootstrap();
@@ -69,6 +91,23 @@ export function ElevenLabsIntegration() {
       setNotice(t("integrations.testPassed"));
     } catch {
       setError(t("integrations.testFailed"));
+    } finally {
+      setAction("");
+    }
+  };
+
+  const saveVoice = async () => {
+    if (!voiceId || blocked) return;
+    setAction("voice");
+    setNotice("");
+    setError("");
+    try {
+      const integration = await api.saveElevenLabsVoice(voiceId, csrfToken);
+      setView(integration);
+      setNotice(t("integrations.voiceSaved", { voice: integration.voiceName ?? voiceId }));
+      await refreshFeatures();
+    } catch {
+      setError(t("integrations.voiceSaveError"));
     } finally {
       setAction("");
     }
@@ -123,6 +162,22 @@ export function ElevenLabsIntegration() {
         onChange={(event) => setApiKey(event.target.value)}
       />
       <p className="integration-settings__privacy"><WarningCircle /> {t("integrations.audioDisclosure")}</p>
+      {view?.configured ? <div className="integration-settings__voice">
+        <div className="integration-settings__voice-heading"><SpeakerHigh weight="fill" /><span><strong>{t("integrations.voice")}</strong><small>{t("integrations.voiceHint")}</small></span></div>
+        <div className="integration-settings__voice-controls">
+          <select
+            aria-label={t("integrations.voice")}
+            value={voiceId}
+            disabled={blocked || voicesLoading}
+            onChange={(event) => setVoiceId(event.target.value)}
+          >
+            <option value="">{voicesLoading ? t("integrations.loadingVoices") : t("integrations.chooseVoice")}</option>
+            {voices.map((voice) => <option key={voice.id} value={voice.id}>{voice.name}{voice.category ? ` · ${voice.category}` : ""}</option>)}
+          </select>
+          <Button variant="secondary" disabled={blocked || voicesLoading || !voiceId || voiceId === view.voiceId} onClick={() => void saveVoice()}>{action === "voice" ? t("integrations.savingVoice") : t("integrations.saveVoice")}</Button>
+        </div>
+        {view.voiceName ? <small className="integration-settings__voice-current"><CheckCircle weight="fill" /> {t("integrations.currentVoice", { voice: view.voiceName })}</small> : <small className="form-hint">{t("integrations.voiceRequired")}</small>}
+      </div> : null}
       {!view?.configured && action !== "load" ? <p className="form-hint"><Microphone /> {t("integrations.nativeFallback")}</p> : null}
       {notice ? <p className="integration-settings__notice" role="status" aria-live="polite"><CheckCircle weight="fill" /> {notice}</p> : null}
       {error ? <p className="form-error" role="alert"><WarningCircle weight="fill" /> {error}</p> : null}

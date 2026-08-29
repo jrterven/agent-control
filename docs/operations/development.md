@@ -64,6 +64,8 @@ Token issuance defaults can be adjusted in the backend-only environment:
 ```dotenv
 HERMES_CONTROL_TRANSCRIPTION_TOKEN_RATE_LIMIT=10
 HERMES_CONTROL_TRANSCRIPTION_TOKEN_RATE_WINDOW_SECONDS=60
+HERMES_CONTROL_SPEECH_RATE_LIMIT=30
+HERMES_CONTROL_SPEECH_RATE_WINDOW_SECONDS=60
 ```
 
 These settings limit minting per authenticated owner; they do not control a
@@ -85,6 +87,13 @@ While a provisional transcript is active the composer is read-only, preventing
 manual edits from racing the provider event stream. The committed transcript
 replaces that preview, restores normal editing and follows the same one-to-six
 line autosizing behavior as typed text.
+
+Response playback uses the same backend-only key. Voice discovery and
+historical MP3 generation travel from FastAPI to the fixed ElevenLabs HTTPS
+origin. Live TTS uses a backend-minted `tts_websocket` single-use token and the
+browser connects only to
+`wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input`. Mock both
+contracts in automated tests; never synthesize test fixtures with a real key.
 
 `npm install` runs `patch-package` and must apply
 `patches/@elevenlabs+client+1.23.0.patch` cleanly to the pinned SDK. Treat a patch

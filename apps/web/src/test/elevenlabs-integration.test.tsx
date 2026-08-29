@@ -7,7 +7,7 @@ import { api } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 
 const integration = { configured: false, provider: "elevenlabs" as const, modelId: "scribe_v2_realtime" as const };
-const configuredIntegration = { ...integration, configured: true };
+const configuredIntegration = { ...integration, configured: true, ttsModelId: "eleven_flash_v2_5" as const, speechAvailable: false, voiceId: null, voiceName: null };
 const bootstrap = {
   gateways: [], profiles: [], workspaces: [], sessions: [], automations: [],
   features: { dictation: { available: true, provider: "elevenlabs" as const, modelId: "scribe_v2_realtime" as const } },
@@ -27,6 +27,15 @@ describe("owner-scoped ElevenLabs integration", () => {
     const save = vi.spyOn(api, "saveElevenLabsKey").mockResolvedValue(configuredIntegration);
     const test = vi.spyOn(api, "testElevenLabsIntegration").mockResolvedValue({ ok: true, provider: "elevenlabs", modelId: "scribe_v2_realtime" });
     const remove = vi.spyOn(api, "deleteElevenLabsKey").mockResolvedValue(undefined);
+    const voices = vi.spyOn(api, "elevenLabsVoices").mockResolvedValue({ items: [
+      { id: "voice-aria", name: "Aria", category: "premade", labels: {} },
+    ] });
+    const saveVoice = vi.spyOn(api, "saveElevenLabsVoice").mockResolvedValue({
+      ...configuredIntegration,
+      speechAvailable: true,
+      voiceId: "voice-aria",
+      voiceName: "Aria",
+    });
     const localStorageWrite = vi.spyOn(Storage.prototype, "setItem");
     const user = userEvent.setup();
     render(<ElevenLabsIntegration />);
@@ -40,6 +49,13 @@ describe("owner-scoped ElevenLabs integration", () => {
     expect(JSON.stringify(useAppStore.getState())).not.toContain("sk_private_user_value");
     expect(localStorageWrite).not.toHaveBeenCalled();
 
+    const voice = await screen.findByRole("combobox", { name: "Voz para respuestas" });
+    await waitFor(() => expect(voices).toHaveBeenCalled());
+    await user.selectOptions(voice, "voice-aria");
+    await user.click(screen.getByRole("button", { name: "Usar esta voz" }));
+    await waitFor(() => expect(saveVoice).toHaveBeenCalledWith("voice-aria", "csrf-memory"));
+    expect(await screen.findByText("Voz activa: Aria")).toBeVisible();
+
     await user.click(screen.getByRole("button", { name: "Probar conexión" }));
     await waitFor(() => expect(test).toHaveBeenCalledWith("csrf-memory"));
     expect(await screen.findByText("Conexión verificada correctamente.")).toBeVisible();
@@ -48,7 +64,7 @@ describe("owner-scoped ElevenLabs integration", () => {
     const confirmation = screen.getByRole("group", { name: /Eliminar tu clave de ElevenLabs/ });
     await user.click(within(confirmation).getByRole("button", { name: "Eliminar" }));
     await waitFor(() => expect(remove).toHaveBeenCalledWith("csrf-memory"));
-    expect(await screen.findByText("Clave eliminada. El dictado quedó desactivado.")).toBeVisible();
+    expect(await screen.findByText("Clave eliminada. El dictado y la lectura quedaron desactivados.")).toBeVisible();
   });
 
   it("clears a rejected key from the field and never exposes it in an error", async () => {

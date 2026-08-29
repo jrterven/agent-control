@@ -94,6 +94,10 @@ def test_owner_can_store_write_only_key_and_bootstrap_exposes_neutral_capability
         "configured": False,
         "provider": "elevenlabs",
         "modelId": "scribe_v2_realtime",
+        "ttsModelId": "eleven_flash_v2_5",
+        "voiceId": None,
+        "voiceName": None,
+        "speechAvailable": False,
     }
 
     stored = _put_key(client, csrf, secret)
@@ -102,6 +106,10 @@ def test_owner_can_store_write_only_key_and_bootstrap_exposes_neutral_capability
         "configured": True,
         "provider": "elevenlabs",
         "modelId": "scribe_v2_realtime",
+        "ttsModelId": "eleven_flash_v2_5",
+        "voiceId": None,
+        "voiceName": None,
+        "speechAvailable": False,
     }
     assert secret not in stored.text
 
@@ -130,6 +138,13 @@ def test_owner_can_store_write_only_key_and_bootstrap_exposes_neutral_capability
         "available": True,
         "provider": "elevenlabs",
         "modelId": "scribe_v2_realtime",
+    }
+    assert bootstrap.json()["features"]["speech"] == {
+        "available": False,
+        "provider": "elevenlabs",
+        "modelId": "eleven_flash_v2_5",
+        "voiceId": None,
+        "voiceName": None,
     }
     assert secret not in bootstrap.text
 

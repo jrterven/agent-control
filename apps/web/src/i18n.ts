@@ -10,6 +10,7 @@ import { navigationResources } from "./locales/navigation";
 import { screenResources } from "./locales/screens";
 import { runtimeResources } from "./locales/runtime";
 import { updateResources } from "./locales/updates";
+import { speechResources } from "./locales/speech";
 
 export const SUPPORTED_LANGUAGES = ["en", "es", "fr", "de", "pt"] as const;
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
@@ -76,6 +77,7 @@ const i18nInitialization = i18n.use(initReactI18next).init({
       asResource(screenResources[language]),
       asResource(runtimeResources[language]),
       asResource(updateResources[language]),
+      asResource(speechResources[language]),
     ) }]),
   ),
 });

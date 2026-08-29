@@ -121,6 +121,31 @@ If no ElevenLabs key is configured, the app hides its own microphone control.
 The dictation button in the phone's native keyboard remains the no-cost
 fallback and does not require an Agent Control integration.
 
+## Listen to agent responses with ElevenLabs
+
+The same write-only ElevenLabs key can synthesize agent responses:
+
+1. Open **More → Settings → Integrations** and choose a voice from the catalog
+   available to your ElevenLabs account.
+2. In a chat, enable **Listen to responses live** to hear new answers while the
+   agent is still generating them. This preference is local to the device and
+   defaults to off.
+3. To hear an older answer, press the speaker below that answer. The inline
+   player provides play/pause, stop and 0.75×–2× speed controls.
+
+Live reading uses the provider's TTS WebSocket and a fresh, short-lived,
+single-use `tts_websocket` token. Agent Control sends incremental answer text;
+audio chunks return directly to the PWA and begin playing as they arrive.
+Historical playback sends the selected answer to an authenticated Control
+endpoint, which streams the resulting MP3 without disclosing the reusable key.
+Only visible assistant text is synthesized: code blocks, URLs and private
+`MEDIA:` paths are removed from the spoken form.
+
+Changing the API key clears the selected voice because the replacement key may
+belong to another ElevenLabs workspace. Select a voice again to re-enable
+playback. Audio synthesis consumes the quota and follows the retention settings
+of the owner's ElevenLabs account.
+
 ## Agents
 
 The **Agents** screen lists profiles discovered through the selected gateway.

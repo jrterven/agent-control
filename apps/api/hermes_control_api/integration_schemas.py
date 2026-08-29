@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 
 from .schemas import ApiModel
 
@@ -12,6 +12,10 @@ class ElevenLabsIntegrationView(ApiModel):
     configured: bool
     provider: Literal["elevenlabs"] = "elevenlabs"
     model_id: Literal["scribe_v2_realtime"] = "scribe_v2_realtime"
+    tts_model_id: Literal["eleven_flash_v2_5"] = "eleven_flash_v2_5"
+    voice_id: str | None = None
+    voice_name: str | None = None
+    speech_available: bool = False
 
 
 class ElevenLabsKeyMutation(ApiModel):
@@ -41,3 +45,44 @@ class TranscriptionTokenView(ApiModel):
     token: str
     expires_at: datetime
     model_id: Literal["scribe_v2_realtime"] = "scribe_v2_realtime"
+
+
+class ElevenLabsVoiceView(ApiModel):
+    id: str
+    name: str
+    category: str | None = None
+    labels: dict[str, str] = Field(default_factory=dict)
+
+
+class ElevenLabsVoiceListView(ApiModel):
+    items: list[ElevenLabsVoiceView]
+
+
+class ElevenLabsVoiceMutation(ApiModel):
+    voice_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class SpeechTokenRequest(ApiModel):
+    session_id: str | None = Field(default=None, min_length=1, max_length=255)
+
+
+class SpeechTokenView(ApiModel):
+    token: str
+    expires_at: datetime
+    model_id: Literal["eleven_flash_v2_5"] = "eleven_flash_v2_5"
+    voice_id: str
+    voice_name: str
+
+
+class SpeechRequest(ApiModel):
+    # The response is already visible to the authenticated user. It is sent
+    # only after an explicit playback action and is never persisted or audited.
+    text: str = Field(min_length=1, max_length=20_000)
+
+    @field_validator("text")
+    @classmethod
+    def meaningful_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Speech text cannot be empty")
+        return normalized

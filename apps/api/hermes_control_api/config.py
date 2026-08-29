@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     realtime_ticket_ttl_seconds: int = 30
     transcription_token_rate_limit: int = Field(default=10, ge=1, le=120)
     transcription_token_rate_window_seconds: int = Field(default=60, ge=10, le=3_600)
+    speech_rate_limit: int = Field(default=30, ge=1, le=240)
+    speech_rate_window_seconds: int = Field(default=60, ge=10, le=3_600)
     capability_ttl_seconds: int = Field(default=60, ge=5, le=3_600)
     capability_refresh_seconds: int = Field(default=30, ge=5, le=1_800)
     vault_key_b64: str | None = None

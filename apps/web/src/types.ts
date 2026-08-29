@@ -111,8 +111,19 @@ export type DictationFeature = {
   modelId: "scribe_v2_realtime";
 };
 
+export type SpeechFeature = {
+  available: boolean;
+  provider: "elevenlabs";
+  modelId: "eleven_flash_v2_5";
+  voiceId?: string | null;
+  voiceName?: string | null;
+};
+
 export type ControlFeatures = {
   dictation: DictationFeature;
+  // Optional while an encrypted offline snapshot from a pre-TTS build is
+  // being replaced by a fresh bootstrap response.
+  speech?: SpeechFeature;
 };
 
 export type ChatMessage = {

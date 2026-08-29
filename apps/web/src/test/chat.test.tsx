@@ -6,6 +6,7 @@ import i18n from "../i18n";
 import { ChatView } from "../components/ChatView";
 import { automations, gateways, initialMessages, profiles, sessions, workspaces } from "../data";
 import { api } from "../lib/api";
+import { textForSpeech } from "../hooks/useSpeechPlayback";
 import { useAppStore } from "../store/appStore";
 
 const chatScribeMock = vi.hoisted(() => {
@@ -137,6 +138,28 @@ describe("mobile-first chat", () => {
     });
     render(<ChatView />);
     expect(screen.getByRole("button", { name: "Dictar por voz" })).toBeVisible();
+  });
+
+  it("shows live listening and a speaker on completed responses only after a voice is selected", () => {
+    const first = render(<ChatView />);
+    expect(screen.queryByRole("checkbox", { name: "Escuchar respuestas en vivo" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Escuchar esta respuesta" })).not.toBeInTheDocument();
+    first.unmount();
+
+    useAppStore.setState({
+      features: {
+        dictation: { available: false, provider: "elevenlabs", modelId: "scribe_v2_realtime" },
+        speech: { available: true, provider: "elevenlabs", modelId: "eleven_flash_v2_5", voiceId: "voice-aria", voiceName: "Aria" },
+      },
+    });
+    render(<ChatView />);
+    expect(screen.getByRole("checkbox", { name: "Escuchar respuestas en vivo" })).toBeVisible();
+    expect(screen.getAllByRole("button", { name: "Escuchar esta respuesta" }).length).toBeGreaterThan(0);
+  });
+
+  it("turns Markdown into bounded, speakable response text", () => {
+    expect(textForSpeech("## Informe\n**Listo** [detalle](https://example.com)\n```sh\nsecret\n```\nMEDIA:[private](/tmp/a.mp3)"))
+      .toBe("Informe Listo detalle");
   });
 
   it("requires explicit first-use consent before requesting a token or microphone", async () => {
