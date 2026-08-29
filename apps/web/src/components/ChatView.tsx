@@ -1,11 +1,11 @@
-import { CaretDown, Check, Checks, PaperPlaneTilt, Question, ShieldWarning, Stop, WarningCircle, Wrench } from "@phosphor-icons/react";
+import { CaretDown, Check, Checks, PaperPlaneTilt, Plus, Question, ShieldWarning, Stop, WarningCircle, Wrench } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { Badge, Button, IconButton } from "@hermes-control/ui";
-import { respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
+import { createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
 import { useAppStore } from "../store/appStore";
 import type { ApprovalChoice, ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest } from "../types";
 import { BrandMark } from "./BrandMark";
@@ -373,6 +373,25 @@ export function ChatView() {
     && profile.capabilitySet?.methods.includes("clarify.respond") === true;
   const waitingForResponse = approvals.length > 0 || clarifications.length > 0;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [creatingSession, setCreatingSession] = useState(false);
+  const canCreateSession = !session && (
+    demoMode
+    || (
+      authState === "authenticated"
+      && profile?.mutable === true
+      && profile.capabilities?.sessions === true
+    )
+  );
+
+  const createChat = async () => {
+    if (!canCreateSession || creatingSession) return;
+    setCreatingSession(true);
+    try {
+      await createChatForCurrentContext();
+    } finally {
+      setCreatingSession(false);
+    }
+  };
 
   useEffect(() => {
     const viewport = scrollRef.current;
@@ -385,7 +404,7 @@ export function ChatView() {
       <div className="message-scroll" ref={scrollRef}>
         <div className="date-divider"><span>28 de agosto de 2026</span></div>
         <div className="message-list">
-          {visibleMessages.length ? visibleMessages.map((message) => <Message key={message.id} message={message} agentName={profile?.displayName ?? "Agente"} />) : <div className="empty-chat"><BrandMark size="lg" label="Agent Control" /><h2>{session ? `Inicia una conversación con ${profile?.displayName ?? "tu agente"}` : profile?.mutable ? `Crea un chat con ${profile.displayName}` : `${profile?.displayName ?? "Este agente"} está en modo solo lectura`}</h2><p>{session ? "El contexto de esta sesión permanecerá aislado del resto de agentes." : profile?.mutable ? "Usa “Nuevo chat” para iniciar una conversación dentro de este workspace." : "La protección actual no permite crear conversaciones ni enviar mensajes. Selecciona el entorno de pruebas para escribir."}</p></div>}
+          {visibleMessages.length ? visibleMessages.map((message) => <Message key={message.id} message={message} agentName={profile?.displayName ?? "Agente"} />) : <div className="empty-chat"><BrandMark size="lg" label="Agent Control" /><h2>{session ? `Inicia una conversación con ${profile?.displayName ?? "tu agente"}` : profile?.mutable ? `Crea un chat con ${profile.displayName}` : `${profile?.displayName ?? "Este agente"} está en modo solo lectura`}</h2><p>{session ? "El contexto de esta sesión permanecerá aislado del resto de agentes." : profile?.mutable ? "Inicia una conversación dentro de este workspace." : "La protección actual no permite crear conversaciones ni enviar mensajes. Selecciona el entorno de pruebas para escribir."}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{creatingSession ? "Creando…" : "Nuevo chat"}</Button> : null}</div>}
           <InteractionCards approvals={approvals} clarifications={clarifications} offline={offline} canApprove={canApprove} canClarify={canClarify} />
           {streamingMessageId ? waitingForResponse
             ? <p className="typing-state typing-state--waiting" role="status"><WarningCircle /><span>{profile?.displayName ?? "Hermes"} espera tu respuesta</span></p>

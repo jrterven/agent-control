@@ -651,6 +651,37 @@ export function useSessionHistory() {
   }, [authState, bootstrapLoaded, demoMode, sessionId]);
 }
 
+export async function createChatForCurrentContext() {
+  const state = useAppStore.getState();
+  const profile = state.profiles.find((item) => item.id === state.selectedProfileId);
+  if (state.demoMode) {
+    const session = state.sessions.find((item) => (
+      item.profileId === state.selectedProfileId
+      && (item.workspaceId ?? "") === state.selectedWorkspaceId
+    ));
+    if (session) state.selectSession(session.id);
+    return session;
+  }
+  if (
+    state.authState !== "authenticated"
+    || !profile?.mutable
+    || !profile.capabilities?.sessions
+  ) return undefined;
+
+  try {
+    const session = await api.createSession(
+      profile.id,
+      state.selectedWorkspaceId || undefined,
+      state.csrfToken,
+    );
+    useAppStore.getState().addSession(session);
+    return session;
+  } catch (error) {
+    useAppStore.getState().setConnection("degraded");
+    throw error;
+  }
+}
+
 export function useThemePreference() {
   const theme = useAppStore((state) => state.theme);
   const setTheme = useAppStore((state) => state.setTheme);

@@ -3,6 +3,7 @@ import { Archive, CaretDown, ChatTeardropText, DotsThree, GearSix, Lightning, Ma
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Badge, Button, IconButton, StatusDot, cx } from "@hermes-control/ui";
 import { api } from "../lib/api";
+import { createChatForCurrentContext } from "../hooks";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useAppStore } from "../store/appStore";
 import { BrandMark } from "./BrandMark";
@@ -29,7 +30,6 @@ export function LeftSidebar() {
   const csrfToken = useAppStore((state) => state.csrfToken);
   const demoMode = useAppStore((state) => state.demoMode);
   const authState = useAppStore((state) => state.authState);
-  const addSession = useAppStore((state) => state.addSession);
   const unassignedSessions = sessions.filter((session) => !session.workspaceId);
   const hydrateBootstrap = useAppStore((state) => state.hydrateBootstrap);
   const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
@@ -99,20 +99,6 @@ export function LeftSidebar() {
       setWorkspaceBusy(false);
     }
   };
-  const createChat = async () => {
-    if (demoMode) {
-      const session = sessions.find((item) => item.profileId === selectedProfileId) ?? sessions[0];
-      if (session) selectSession(session.id);
-      return;
-    }
-    if (!selectedProfileId || !canCreateSession) return;
-    try {
-      addSession(await api.createSession(selectedProfileId, selectedWorkspaceId || undefined, csrfToken));
-    } catch {
-      useAppStore.getState().setConnection("degraded");
-    }
-  };
-
   return (
     <>
       <button className={cx("scrim scrim--left", open && "is-visible")} aria-label="Cerrar navegación" onClick={() => close(false)} />
@@ -193,7 +179,7 @@ export function LeftSidebar() {
         </div>
 
         <div className="sidebar-footer">
-          {canCreateSession ? <Button variant="primary" leadingIcon={<Plus size={18} />} onClick={() => void createChat()}>Nuevo chat</Button> : null}
+          {canCreateSession ? <Button variant="primary" leadingIcon={<Plus size={18} />} onClick={() => void createChatForCurrentContext().catch(() => undefined)}>Nuevo chat</Button> : null}
           <div>
             <Link to="/chats" className={pathname === "/chats" ? "is-active" : ""}><Archive size={19} /> Chats</Link>
             <Link to="/settings" className={pathname === "/settings" ? "is-active" : ""}><GearSix size={19} /> Ajustes</Link>

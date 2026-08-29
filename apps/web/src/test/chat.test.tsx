@@ -1,16 +1,18 @@
 import axe from "axe-core";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../i18n";
 import { ChatView } from "../components/ChatView";
 import { automations, gateways, initialMessages, profiles, sessions, workspaces } from "../data";
+import { api } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 
 describe("mobile-first chat", () => {
   beforeEach(() => {
     useAppStore.setState({
       authState: "authenticated",
+      csrfToken: "csrf-memory-only",
       demoMode: true,
       selectedProfileId: "profile-newton",
       selectedSessionId: "session-papers",
@@ -25,6 +27,8 @@ describe("mobile-first chat", () => {
       streamingBySession: {},
     });
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   it("renders the approved conversation hierarchy and expandable tools", async () => {
     const user = userEvent.setup();
@@ -59,5 +63,43 @@ describe("mobile-first chat", () => {
     expect(screen.getByText("Para escribir, selecciona el entorno de pruebas.")).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Memoria de agentes · agosto" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("offers a primary new-chat action in the empty conversation and uses the active workspace", async () => {
+    const user = userEvent.setup();
+    const writableProfile = {
+      ...profiles[0],
+      mutable: true,
+      capabilities: { ...gateways[0].capabilities, sessions: true },
+    };
+    const createdSession = {
+      ...sessions[0],
+      id: "session-created-from-empty-state",
+      profileId: writableProfile.id,
+      workspaceId: "workspace-papers",
+      title: "Nuevo chat",
+    };
+    useAppStore.setState({
+      demoMode: false,
+      selectedProfileId: writableProfile.id,
+      selectedSessionId: "",
+      selectedWorkspaceId: "workspace-papers",
+      profiles: [writableProfile],
+      sessions: [],
+      messages: [],
+    });
+    const createSession = vi.spyOn(api, "createSession").mockResolvedValue(createdSession);
+
+    render(<ChatView />);
+    const action = screen.getByRole("button", { name: "Nuevo chat" });
+    expect(action).toBeVisible();
+    await user.click(action);
+
+    await waitFor(() => expect(createSession).toHaveBeenCalledWith(
+      writableProfile.id,
+      "workspace-papers",
+      "csrf-memory-only",
+    ));
+    expect(useAppStore.getState().selectedSessionId).toBe(createdSession.id);
   });
 });
