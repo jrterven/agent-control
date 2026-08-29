@@ -178,8 +178,10 @@ or a broad mount of `/home/hermes/.hermes`.
 - On a real mobile device, the ElevenLabs destination/retention notice is visible
   before the enabled mic action; dictation then starts only after the user's
   gesture and browser permission. The UI discloses direct processing/retention,
-  shows capture state, inserts only committed text into the unsent draft and
-  never sends it automatically.
+  previews provisional text directly inside the protected composer, inserts
+  only committed text into the editable unsent draft and never sends it
+  automatically. Typed and committed text grow the composer from one to six
+  visible lines before internal scrolling begins.
 - Stop, background, navigation and logout release the microphone and WSS. A
   later start mints a fresh token. With the integration disabled or unavailable,
   native operating-system keyboard dictation still works as the fallback.

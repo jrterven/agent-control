@@ -92,7 +92,8 @@ sequenceDiagram
     UI->>EL: WSS /v1/speech-to-text/realtime?token=<single-use>
     UI-->>EL: microphone audio
     EL-->>UI: partial/committed transcript events
-    UI->>UI: place committed text in the unsent draft
+    UI->>UI: preview partial text inside the composer (ephemeral)
+    UI->>UI: replace preview with committed unsent draft text
 ```
 
 El token vive solo en memoria, no entra en SQLite, IndexedDB, `localStorage`,
@@ -106,10 +107,13 @@ aplicación, cerrar sesión o fallar el permiso del micrófono.
 El audio viaja del dispositivo a ElevenLabs y no atraviesa Control. Antes de
 activar el micrófono la interfaz informa este destino y que la retención se rige
 por la cuenta y las condiciones de ElevenLabs; Control no promete retención
-cero. Solo texto confirmado se incorpora al borrador y nunca se envía
-automáticamente al agente. El dictado nativo del teclado del sistema operativo
-permanece como alternativa cuando BYOK, el navegador o la red no están
-disponibles.
+cero. El texto provisional se presenta directamente dentro del compositor, no
+se persiste y mantiene el editor protegido frente a cambios manuales mientras
+la captura está activa. Solo el texto confirmado sustituye esa vista, se
+incorpora al borrador editable y nunca se envía automáticamente al agente. El
+compositor parte de un renglón, crece hasta seis y después desplaza su contenido.
+El dictado nativo del teclado del sistema operativo permanece como alternativa
+cuando BYOK, el navegador o la red no están disponibles.
 
 El cliente Scribe fijado en el lockfile se endurece mediante el patch reproducible
 versionado bajo `patches/`, aplicado por `patch-package` en `npm install`. Antes de

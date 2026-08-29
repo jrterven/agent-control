@@ -80,7 +80,11 @@ The destination/retention notice must be visible before the mic action becomes
 available. If public egress or permission is unavailable, verify that the
 composer remains editable and that native keyboard dictation can still be used.
 Never make a transcription event submit a prompt automatically; partial events
-remain visual and only committed events may edit the draft.
+remain visual inside the composer and only committed events may edit the draft.
+While a provisional transcript is active the composer is read-only, preventing
+manual edits from racing the provider event stream. The committed transcript
+replaces that preview, restores normal editing and follows the same one-to-six
+line autosizing behavior as typed text.
 
 `npm install` runs `patch-package` and must apply
 `patches/@elevenlabs+client+1.23.0.patch` cleanly to the pinned SDK. Treat a patch
