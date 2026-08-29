@@ -18,12 +18,13 @@ import { createAndProvisionGateway } from "../lib/gatewayProvisioning";
 import { buildSearchResults } from "../lib/search";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useAppStore } from "../store/appStore";
-import type { Automation, AutomationRun, Gateway, Profile, SearchResult, ThemePreference } from "../types";
+import type { Automation, AutomationRun, Gateway, Profile, SearchResult, SessionSummary, ThemePreference } from "../types";
 import { BrandMark } from "../components/BrandMark";
 import { AdminConfigScreen } from "../components/AdminConfigScreen";
 import { ElevenLabsIntegration } from "../components/ElevenLabsIntegration";
 import i18n from "../i18n";
 import { useLanguagePreference } from "../hooks/useLanguagePreference";
+import { submitPrompt } from "../hooks";
 import { APP_VERSION, checkForPwaUpdate, hasPwaUpdateBlockers, requestPwaUpdate, usePwaUpdateStore } from "../lib/pwaUpdate";
 
 export function PageHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
@@ -90,6 +91,12 @@ type AgentCreateValues = {
   description: string;
 };
 
+const MAX_AGENT_BRIEF_CHARACTERS = 200_000;
+
+function normalizeAgentTechnicalName(value: string) {
+  return value.trim().toLowerCase().replace(/[\s_]+/g, "-").replace(/-+/g, "-");
+}
+
 const emptyAgentCreateValues: AgentCreateValues = {
   technicalName: "",
   displayName: "",
@@ -109,6 +116,7 @@ export function AgentsScreen() {
   const hydrateBootstrap = useAppStore((state) => state.hydrateBootstrap);
   const [creatorOpen, setCreatorOpen] = useState(false);
   const [createError, setCreateError] = useState("");
+  const [pendingSetup, setPendingSetup] = useState<{ profile: Profile; session?: SessionSummary } | null>(null);
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
   const sourceProfile = selectedProfile ?? profiles.find((profile) => (
     profile.gatewayId === selectedGatewayId && profile.capabilities?.profileCreate
@@ -127,12 +135,18 @@ export function AgentsScreen() {
       .max(64, t("agentsPage.validationTechnicalName"))
       .regex(/^[a-z][a-z0-9-]*$/, t("agentsPage.validationTechnicalName"))
       .refine(
-        (value) => !profiles.some((profile) => profile.gatewayId === targetGatewayId && profile.technicalName.toLowerCase() === value.toLowerCase()),
+        (value) => !profiles.some((profile) => (
+          profile.gatewayId === targetGatewayId
+          && profile.technicalName.toLowerCase() === value.toLowerCase()
+          && profile.id !== pendingSetup?.profile.id
+        )),
         t("agentsPage.duplicateTechnicalName"),
       ),
     displayName: z.string().trim().min(2, t("agentsPage.validationDisplayName")).max(80, t("agentsPage.validationDisplayName")),
-    description: z.string().trim().min(10, t("agentsPage.validationDescription")).max(4_000, t("agentsPage.validationDescription")),
-  }), [profiles, t, targetGatewayId]);
+    description: z.string().trim()
+      .min(10, t("agentsPage.validationDescription"))
+      .max(MAX_AGENT_BRIEF_CHARACTERS, t("agentsPage.validationDescriptionTooLong")),
+  }), [pendingSetup?.profile.id, profiles, t, targetGatewayId]);
   const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<AgentCreateValues>({
     resolver: zodResolver(agentCreateSchema),
     defaultValues: emptyAgentCreateValues,
@@ -140,11 +154,13 @@ export function AgentsScreen() {
   const closeCreator = () => {
     setCreatorOpen(false);
     setCreateError("");
+    setPendingSetup(null);
     reset(emptyAgentCreateValues);
   };
   const creatorDialog = useOverlayDialog<HTMLDivElement>({ open: creatorOpen, onClose: closeCreator, mediaQuery: "(min-width: 0px)" });
   const openCreator = () => {
     setCreateError("");
+    setPendingSetup(null);
     reset(emptyAgentCreateValues);
     setCreatorOpen(true);
   };
@@ -155,12 +171,15 @@ export function AgentsScreen() {
     }
     setCreateError("");
     try {
-      const created = await api.createProfile({
+      const created = pendingSetup?.profile ?? await api.createProfile({
         gatewayId: targetGatewayId,
         technicalName: values.technicalName,
         displayName: values.displayName,
         description: values.description,
       }, csrfToken);
+      if (!pendingSetup) setPendingSetup({ profile: created });
+      const setupSession = pendingSetup?.session ?? await api.createSession(created.id, undefined, csrfToken);
+      setPendingSetup({ profile: created, session: setupSession });
       const bootstrap = await api.bootstrap();
       const refreshedProfile = bootstrap.profiles.find((profile) => (
         profile.id === created.id
@@ -172,12 +191,23 @@ export function AgentsScreen() {
         profiles: [...bootstrap.profiles.filter((profile) => profile.id !== created.id), created],
       });
       selectProfile(activeProfile.id);
+      useAppStore.getState().addSession(setupSession);
+      useAppStore.getState().selectSession(setupSession.id);
+      const setupPrompt = t("agentsPage.setupPrompt", {
+        displayName: values.displayName.trim(),
+        brief: values.description.trim(),
+      });
       closeCreator();
-      void navigate({ to: "/chats" });
+      await navigate({ to: "/chats" });
+      await submitPrompt(setupPrompt);
     } catch (error) {
-      setCreateError(error instanceof Error ? error.message : t("agentsPage.createError"));
+      const fallback = pendingSetup
+        ? t("agentsPage.setupError")
+        : t("agentsPage.createError");
+      setCreateError(error instanceof Error ? error.message : fallback);
     }
   });
+  const technicalNameField = register("technicalName");
   return (
     <div className="page-wrap">
       <PageHeader eyebrow={t("agentsPage.eyebrow")} title={t("agentsPage.title")} description={t("agentsPage.description")} />
@@ -203,15 +233,18 @@ export function AgentsScreen() {
           <h2 id="agent-creator-title">{t("agentsPage.creatorTitle")}</h2>
           <p id="agent-creator-description">{t("agentsPage.creatorDescription")}</p>
           <form onSubmit={createAgent} noValidate>
-            <Field label={t("agentsPage.technicalName")} aria-label={t("agentsPage.technicalName")} hint={t("agentsPage.technicalNameHint")} autoCapitalize="none" autoCorrect="off" spellCheck={false} error={errors.technicalName?.message} {...register("technicalName")} />
-            <Field label={t("agentsPage.displayName")} aria-label={t("agentsPage.displayName")} autoComplete="off" error={errors.displayName?.message} {...register("displayName")} />
+            <Field label={t("agentsPage.technicalName")} aria-label={t("agentsPage.technicalName")} hint={t("agentsPage.technicalNameHint")} autoCapitalize="none" autoCorrect="off" spellCheck={false} error={errors.technicalName?.message} disabled={Boolean(pendingSetup)} {...technicalNameField} onChange={(event) => {
+              event.currentTarget.value = normalizeAgentTechnicalName(event.currentTarget.value);
+              void technicalNameField.onChange(event);
+            }} />
+            <Field label={t("agentsPage.displayName")} aria-label={t("agentsPage.displayName")} autoComplete="off" error={errors.displayName?.message} disabled={Boolean(pendingSetup)} {...register("displayName")} />
             <label className="hc-field">
               <span className="hc-field__label">{t("agentsPage.agentDescription")}</span>
               <textarea rows={6} aria-label={t("agentsPage.agentDescription")} placeholder={t("agentsPage.agentDescriptionPlaceholder")} aria-invalid={Boolean(errors.description)} {...register("description")} />
               {errors.description?.message ? <span className="hc-field__error">{errors.description.message}</span> : <span className="hc-field__hint">{t("agentsPage.agentDescriptionHint")}</span>}
             </label>
             {createError ? <p className="form-error" role="alert"><WarningCircle /> {createError}</p> : null}
-            <div><Button type="button" variant="ghost" onClick={closeCreator}>{t("agentsPage.cancel")}</Button><Button type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? t("agentsPage.creating") : t("agentsPage.createAndUse")}</Button></div>
+            <div><Button type="button" variant="ghost" onClick={closeCreator}>{t("agentsPage.cancel")}</Button><Button type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? t("agentsPage.creating") : pendingSetup ? t("agentsPage.retrySetup") : t("agentsPage.createAndUse")}</Button></div>
           </form>
         </Panel>
       </div> : null}

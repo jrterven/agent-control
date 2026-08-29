@@ -253,7 +253,6 @@ class HermesProvider(Protocol):
         *,
         name: str,
         display_name: str,
-        description: str,
     ) -> HermesProfile: ...
     async def list_sessions(self) -> list[HermesSession]: ...
     async def search_sessions(
@@ -963,24 +962,22 @@ class HermesGatewayProvider:
         *,
         name: str,
         display_name: str,
-        description: str,
     ) -> HermesProfile:
         """Create one official Hermes profile without exposing its host path.
 
         This mutation is deliberately sent once. A missing reply is ambiguous
         and must be reconciled by the caller through ``profiles.list`` rather
-        than retried automatically.
+        than retried automatically. The operator's setup brief is deliberately
+        absent: Hermes creates its standard fresh profile first, then Control
+        submits the brief through a visible session for the agent to analyze.
         """
 
         await self._ensure_connected()
-        soul = f"# {display_name}\n\nYou are {display_name}.\n\n{description.strip()}\n"
         try:
             raw = await self.rpc.request(
                 "profiles.create",
                 {
                     "name": name,
-                    "description": description,
-                    "soul": soul,
                     "mirror_credentials": True,
                     # Hermes' shared global auth fallback avoids forking
                     # renewable OAuth token state into another auth.json.
@@ -999,10 +996,10 @@ class HermesGatewayProvider:
         if returned_name != name:
             raise UpstreamPayloadError("Hermes returned a different profile identity")
         mirrored = raw.get("mirrored")
-        setup_ready = bool(raw.get("soul_written")) and isinstance(
-            mirrored, Mapping
-        ) and mirrored.get("auth") == "shared" and bool(
-            raw.get("model_set") or mirrored.get("model_inherited")
+        setup_ready = (
+            isinstance(mirrored, Mapping)
+            and mirrored.get("auth") == "shared"
+            and bool(raw.get("model_set") or mirrored.get("model_inherited"))
         )
         # Hermes also returns filesystem and credential-mirroring diagnostics.
         # They are intentionally discarded at this trust boundary.
@@ -2458,7 +2455,6 @@ class InMemoryHermesProvider:
         *,
         name: str,
         display_name: str,
-        description: str,
     ) -> HermesProfile:
         if name == self.connection.profile_name or name in self._created_profiles:
             raise JsonRpcError(4062, "profile already exists")

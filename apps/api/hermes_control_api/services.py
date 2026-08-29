@@ -1036,7 +1036,6 @@ class ProfileService:
                 created_profile = await provider.create_profile(
                     name=payload.technical_name,
                     display_name=payload.display_name,
-                    description=payload.description,
                 )
             except JsonRpcError as exc:
                 if exc.code == 4062:

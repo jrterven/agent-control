@@ -64,11 +64,13 @@ Important response contracts:
   boundary and one-way prompt digest.
 - `profiles.create` is enabled only after a successful `profiles.list` probe on
   an exact audited version/SHA. Control creates a fresh profile without
-  `clone_from`, writes a bounded initial SOUL from the operator description and
-  requests Hermes' shared authentication mode so OAuth refresh state is not
-  forked. It discards upstream filesystem/credential diagnostics, serializes
-  creation per gateway, and reconciles an ambiguous response by listing
-  profiles rather than resending the mutation.
+  `clone_from`, `description`, or `soul`, and requests Hermes' shared
+  authentication mode so OAuth refresh state is not forked. The operator's
+  long setup brief is then submitted in a visible session to the new profile so
+  Hermes can analyze it and decide what to persist; Control never copies the
+  brief directly into `SOUL.md`. It discards upstream filesystem/credential
+  diagnostics, serializes creation per gateway, and reconciles an ambiguous
+  response by listing profiles rather than resending the mutation.
 - `session.events.since` returns `events`, `latest_seq`, `truncated`, `count`
   and `epoch`. Upstream buffers 512 events per session for at most 64 sessions.
 - `approval.request` supplies `request_id`, a redacted `command`, description,

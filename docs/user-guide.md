@@ -166,20 +166,27 @@ hidden rather than failing optimistically.
 
 Use **Create agent** at the bottom of the Agents screen. Provide:
 
-- a lowercase technical profile name used for routing;
+- a technical profile name used for routing (the form normalizes capitals,
+  spaces and underscores to lowercase hyphens);
 - a friendly display name;
-- a plain-language description of the agent's role and behavior.
+- a plain-language setup brief describing the agent's role, rules and behavior.
+  Long prompts are supported up to a broad transport-safety boundary.
 
 <p align="center">
   <img src="assets/screenshots/mobile-new-agent.jpg" alt="Create an agent dialog" width="330">
 </p>
 
-The backend asks the provider to create a fresh isolated profile, writes the
-generated agent instructions through the audited administration contract and
-makes the new profile selectable when discovery confirms it. New profiles
-start with empty memory and history and use the gateway-managed inference
-authentication pool. A Telegram bot or channel is not created automatically;
-channel setup remains a separate provider administration task.
+The backend first asks the provider to create a fresh isolated profile without
+sending the brief as `description` or `soul`. Agent Control then opens a visible
+setup chat with that new profile and submits the brief with bounded safety
+instructions. Hermes analyzes the request and decides what identity, working
+rules and configuration to persist; Agent Control never copies the text
+directly into `SOUL.md`. Any approval or clarification remains visible in that
+conversation.
+
+New profiles start with empty memory and history and use the gateway-managed
+inference authentication pool. A Telegram bot or channel is not created
+automatically; channel setup remains a separate provider administration task.
 
 ## Configuration and agent functions
 
