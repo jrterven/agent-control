@@ -499,6 +499,88 @@ def test_session_export_is_hermes_backed_bounded_and_sanitized(authenticated, ap
     assert "resultado visible" in rendered
 
 
+def test_session_voice_note_is_history_bound_path_safe_and_range_capable(
+    authenticated, app, tmp_path
+):
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "voice-note-session")
+    profiles_root = tmp_path / "profiles"
+    audio_root = profiles_root / "control-dev" / "cache" / "audio"
+    audio_root.mkdir(parents=True)
+    voice_note = audio_root / "tts_test.mp3"
+    voice_bytes = b"ID3" + bytes(range(64))
+    voice_note.write_bytes(voice_bytes)
+    outside = tmp_path / "outside.mp3"
+    outside.write_bytes(b"must-never-be-served")
+    escaped_link = audio_root / "escaped.mp3"
+    escaped_link.symlink_to(outside)
+    app.state.services.settings.hermes_media_root = str(profiles_root)
+
+    async def seed_voice_history():
+        with app.state.session_factory() as db:
+            row = db.get(SessionLink, session["id"])
+            from hermes_control_api.services import GatewayService
+
+            connection = await GatewayService(app.state.services).connection(
+                db, row.gateway_id, row.profile_name
+            )
+        provider = await app.state.services.provider_pool.get(connection)
+        provider._messages[row.stored_session_id] = [
+            {
+                "id": "voice-message",
+                "role": "assistant",
+                "content": f"Nota de voz\nMEDIA:{voice_note}",
+            },
+            {
+                "id": "escaped-message",
+                "role": "assistant",
+                "content": f"No reproducir\nMEDIA:{escaped_link}",
+            },
+        ]
+
+    client.portal.call(seed_voice_history)
+    history = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert history.status_code == 200, history.text
+    items = history.json()["items"]
+    voice = items[0]
+    escaped = items[1]
+    assert voice["content"] == "Nota de voz"
+    assert str(voice_note) not in history.text
+    assert voice["controlMedia"] == [
+        {
+            "id": voice["controlMedia"][0]["id"],
+            "kind": "audio",
+            "mediaType": "audio/mpeg",
+        }
+    ]
+    media_id = voice["controlMedia"][0]["id"]
+    assert len(media_id) == 32
+    assert "controlMedia" not in escaped
+
+    response = client.get(
+        f"/api/v1/sessions/{session['id']}/media/{media_id}"
+    )
+    assert response.status_code == 200, response.text
+    assert response.content == voice_bytes
+    assert response.headers["content-type"].startswith("audio/mpeg")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["content-disposition"] == 'inline; filename="voice-note.mp3"'
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+    ranged = client.get(
+        f"/api/v1/sessions/{session['id']}/media/{media_id}",
+        headers={"Range": "bytes=0-3"},
+    )
+    assert ranged.status_code == 206
+    assert ranged.content == voice_bytes[:4]
+    assert ranged.headers["content-range"] == f"bytes 0-3/{len(voice_bytes)}"
+
+    missing = client.get(
+        f"/api/v1/sessions/{session['id']}/media/{'0' * 32}"
+    )
+    assert missing.status_code == 404
+
+
 def test_realtime_binding_requires_all_ids_to_match_and_resets_epoch(authenticated):
     client, csrf = authenticated
     first = create_session(client, csrf, "control-dev", "route-first")

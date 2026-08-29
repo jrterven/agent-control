@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -61,6 +63,68 @@ class ConflictError(RuntimeError):
 
 class UpstreamUnavailableError(ConnectionError):
     pass
+
+
+_AUDIO_MEDIA_TYPES: dict[str, str] = {
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".mp3": "audio/mpeg",
+    ".oga": "audio/ogg",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".wav": "audio/wav",
+    ".webm": "audio/webm",
+}
+_AUDIO_EXTENSION_PATTERN = "|".join(
+    suffix.removeprefix(".") for suffix in _AUDIO_MEDIA_TYPES
+)
+_AUDIO_MEDIA_TAG = re.compile(
+    r'''[`"'*_]{0,3}MEDIA:\s*'''
+    r'''(?P<path>`[^`\r\n]+?\.(?:''' + _AUDIO_EXTENSION_PATTERN + r''')`|'''
+    r'''"[^"\r\n]+?\.(?:''' + _AUDIO_EXTENSION_PATTERN + r''')"|'''
+    r'''\'[^\'\r\n]+?\.(?:''' + _AUDIO_EXTENSION_PATTERN + r''')\'|'''
+    r'''(?:~/|/)\S+?\.(?:''' + _AUDIO_EXTENSION_PATTERN + r'''))'''
+    r'''(?=[\s`"'*_,;:)\]}\[]|MEDIA:|$)[`"'*_]{0,3}\.?''',
+    re.IGNORECASE,
+)
+_SAFE_PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$")
+_SAFE_MEDIA_ID = re.compile(r"^[0-9a-f]{32}$")
+
+
+@dataclass(frozen=True)
+class AudioMediaMarker:
+    path: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class SessionMediaAsset:
+    media_id: str
+    path: Path
+    media_type: str
+
+
+def _audio_media_markers(content: str) -> list[AudioMediaMarker]:
+    markers: list[AudioMediaMarker] = []
+    seen: set[str] = set()
+    for match in _AUDIO_MEDIA_TAG.finditer(content):
+        path = match.group("path").strip()
+        if len(path) >= 2 and path[0] == path[-1] and path[0] in {"`", '"', "'"}:
+            path = path[1:-1]
+        if path in seen:
+            continue
+        seen.add(path)
+        markers.append(AudioMediaMarker(path=path, start=match.start(), end=match.end()))
+    return markers[:16]
+
+
+def _without_media_markers(content: str, markers: list[AudioMediaMarker]) -> str:
+    cleaned = content
+    for marker in sorted(markers, key=lambda item: item.start, reverse=True):
+        cleaned = f"{cleaned[:marker.start]}{cleaned[marker.end:]}"
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
 # Every current Control operation that can change Hermes state is centralized
@@ -1330,7 +1394,11 @@ class SessionService:
             db.refresh(row)
         return row
 
-    async def history(self, db: Session, actor: User, row: SessionLink) -> list[dict[str, Any]]:
+    async def _raw_history(
+        self,
+        db: Session,
+        row: SessionLink,
+    ) -> list[dict[str, Any]]:
         await require_capability(
             db,
             self.services,
@@ -1349,12 +1417,143 @@ class SessionService:
             # A locally created, not-yet-prompted Hermes runtime has no durable
             # row by contract. Its authoritative transcript is therefore empty.
             history = []
+        return history
+
+    def _media_asset(
+        self,
+        row: SessionLink,
+        *,
+        history_index: int,
+        media_index: int,
+        marker: AudioMediaMarker,
+    ) -> SessionMediaAsset | None:
+        configured_root = self.services.settings.hermes_media_root
+        if not configured_root or not _SAFE_PROFILE_NAME.fullmatch(row.profile_name):
+            return None
+        try:
+            profiles_root = Path(configured_root).expanduser().resolve(strict=True)
+            allowed_root = (
+                profiles_root / row.profile_name / "cache" / "audio"
+            ).resolve(strict=True)
+            candidate = Path(marker.path).expanduser().resolve(strict=True)
+            candidate.relative_to(allowed_root)
+            stat = candidate.stat()
+        except (OSError, RuntimeError, ValueError):
+            return None
+        suffix = candidate.suffix.lower()
+        media_type = _AUDIO_MEDIA_TYPES.get(suffix)
+        if (
+            media_type is None
+            or not candidate.is_file()
+            or stat.st_size <= 0
+            or stat.st_size > self.services.settings.hermes_media_max_bytes
+        ):
+            return None
+        digest = hashlib.sha256(
+            f"{row.id}\0{history_index}\0{media_index}\0{candidate}".encode("utf-8")
+        ).hexdigest()[:32]
+        return SessionMediaAsset(
+            media_id=digest,
+            path=candidate,
+            media_type=media_type,
+        )
+
+    def _project_history(
+        self,
+        db: Session,
+        row: SessionLink,
+        history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        normalizer = EventNormalizer(
+            gateway_id=row.gateway_id, profile_name=row.profile_name
+        )
+        sanitized = normalizer.sanitize_data(history)
+        gateway = db.get(Gateway, row.gateway_id)
+        if not isinstance(sanitized, list) or gateway is None or not gateway.env_managed:
+            return list(sanitized) if isinstance(sanitized, list) else []
+
+        for history_index, (raw_item, safe_item) in enumerate(
+            zip(history, sanitized, strict=False)
+        ):
+            if (
+                not isinstance(raw_item, dict)
+                or not isinstance(safe_item, dict)
+                or raw_item.get("role") != "assistant"
+            ):
+                continue
+            content_key = (
+                "content" if isinstance(raw_item.get("content"), str)
+                else "text" if isinstance(raw_item.get("text"), str)
+                else None
+            )
+            if content_key is None:
+                continue
+            raw_content = str(raw_item[content_key])
+            playable: list[tuple[AudioMediaMarker, SessionMediaAsset]] = []
+            for media_index, marker in enumerate(_audio_media_markers(raw_content)):
+                asset = self._media_asset(
+                    row,
+                    history_index=history_index,
+                    media_index=media_index,
+                    marker=marker,
+                )
+                if asset is not None:
+                    playable.append((marker, asset))
+            if not playable:
+                continue
+            safe_item[content_key] = normalizer.sanitize_data(
+                _without_media_markers(
+                    raw_content,
+                    [marker for marker, _ in playable],
+                )
+            )
+            safe_item["controlMedia"] = [
+                {
+                    "id": asset.media_id,
+                    "kind": "audio",
+                    "mediaType": asset.media_type,
+                }
+                for _, asset in playable
+            ]
+        return list(sanitized)
+
+    async def history(self, db: Session, actor: User, row: SessionLink) -> list[dict[str, Any]]:
+        history = await self._raw_history(db, row)
         self._reconcile_active_prompt_from_history(db, row, history)
         db.commit()
-        sanitized = EventNormalizer(
-            gateway_id=row.gateway_id, profile_name=row.profile_name
-        ).sanitize_data(history)
-        return list(sanitized)
+        return self._project_history(db, row, history)
+
+    async def media(
+        self,
+        db: Session,
+        actor: User,
+        row: SessionLink,
+        media_id: str,
+    ) -> SessionMediaAsset:
+        if not _SAFE_MEDIA_ID.fullmatch(media_id):
+            raise NotFoundError("Voice note not found")
+        gateway = db.get(Gateway, row.gateway_id)
+        if gateway is None or not gateway.env_managed:
+            raise NotFoundError("Voice note not found")
+        history = await self._raw_history(db, row)
+        for history_index, item in enumerate(history):
+            if not isinstance(item, dict) or item.get("role") != "assistant":
+                continue
+            content = item.get("content")
+            if not isinstance(content, str):
+                content = item.get("text")
+            if not isinstance(content, str):
+                continue
+            for media_index, marker in enumerate(_audio_media_markers(content)):
+                asset = self._media_asset(
+                    row,
+                    history_index=history_index,
+                    media_index=media_index,
+                    marker=marker,
+                )
+                if asset is not None and asset.media_id == media_id:
+                    return asset
+        raise NotFoundError("Voice note not found")
 
     async def submit(
         self,

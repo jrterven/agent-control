@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -1103,6 +1103,31 @@ async def session_history(
     service = SessionService(services(request))
     row = service.owned(db, user, session_id)
     return {"items": await service.history(db, user, row)}
+
+
+@router.get("/sessions/{session_id}/media/{media_id}")
+async def session_media(
+    session_id: str,
+    media_id: str,
+    request: Request,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """Stream one history-bound voice note without exposing its host path."""
+
+    service = SessionService(services(request))
+    row = service.owned(db, user, session_id)
+    asset = await service.media(db, user, row, media_id)
+    return FileResponse(
+        asset.path,
+        media_type=asset.media_type,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": f'inline; filename="voice-note{asset.path.suffix.lower()}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/sessions/{session_id}/export")

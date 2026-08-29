@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     hermes_api_url: str | None = "http://127.0.0.1:18642"
     hermes_dashboard_token: str | None = None
     hermes_api_key: str | None = None
+    # Local, read-only projection of Hermes-owned media. This is deliberately
+    # separate from gateway URLs: only the environment-managed gateway may
+    # resolve MEDIA references through this filesystem boundary.
+    hermes_media_root: str | None = "~/.hermes/profiles"
+    hermes_media_max_bytes: int = Field(
+        default=50 * 1024 * 1024,
+        ge=1,
+        le=500 * 1024 * 1024,
+    )
     # Hermes' official 0.20.5/0.20.6 dashboard status response doesn't expose
     # the installed commit.  This operator-supplied value is therefore the
     # only revision identity trusted for enabling audited write contracts.
@@ -114,6 +123,18 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         if not re.fullmatch(r"[0-9a-f]{40}", normalized):
             raise ValueError("Hermes source SHA must contain exactly 40 hexadecimal characters")
+        return normalized
+
+    @field_validator("hermes_media_root", mode="before")
+    @classmethod
+    def normalize_media_root(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized:
+            return None
+        if "\x00" in normalized or "\n" in normalized or "\r" in normalized:
+            raise ValueError("Hermes media root contains invalid characters")
         return normalized
 
     @model_validator(mode="after")

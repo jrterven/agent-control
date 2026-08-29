@@ -107,6 +107,13 @@ HERMES_CONTROL_HERMES_SOURCE_SHA=<independently-verified-40-hex-commit>
 HERMES_CONTROL_MUTABLE_PROFILES=control-dev
 ```
 
+Voice-note playback requires Agent Control to have read-only filesystem access
+to the gateway's Hermes profile directory. A backend running on the Mac through
+the two HTTP/WebSocket tunnels cannot resolve remote `MEDIA:` files; use the
+mock locally or run Control on the Hermes host and set
+`HERMES_CONTROL_HERMES_MEDIA_ROOT=/home/hermes/.hermes/profiles`. The public API
+never returns that path and only streams audio referenced by an owned session.
+
 Store these in the backend's ignored local env file with mode 0600. Vite must
 receive only its ordinary application configuration; it proxies `/api` and the
 Control realtime socket to FastAPI. If the exact source SHA is absent or does

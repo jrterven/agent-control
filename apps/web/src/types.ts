@@ -98,6 +98,12 @@ export type ToolRun = {
   summary: string;
 };
 
+export type MessageMedia = {
+  id: string;
+  kind: "audio";
+  mediaType: string;
+};
+
 export type ChatMessage = {
   id: string;
   sessionId: string;
@@ -106,6 +112,7 @@ export type ChatMessage = {
   createdAt: string;
   delivery?: "sending" | "sent" | "ambiguous" | "failed";
   tools?: ToolRun[];
+  media?: MessageMedia[];
   streaming?: boolean;
 };
 

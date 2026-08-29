@@ -352,6 +352,22 @@ function toolFromHistory(item: Record<string, unknown>, fallbackId: string): Too
   };
 }
 
+function mediaFromHistory(item: Record<string, unknown>) {
+  if (!Array.isArray(item.controlMedia)) return [];
+  return item.controlMedia.slice(0, 16).flatMap((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const media = value as Record<string, unknown>;
+    if (
+      media.kind !== "audio"
+      || typeof media.id !== "string"
+      || !/^[0-9a-f]{32}$/.test(media.id)
+      || typeof media.mediaType !== "string"
+      || !media.mediaType.startsWith("audio/")
+    ) return [];
+    return [{ id: media.id, kind: "audio" as const, mediaType: media.mediaType }];
+  });
+}
+
 function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index: number): MappedHistoryItem | null {
   const role = item.role;
   const createdAt = historyTime(item);
@@ -366,8 +382,9 @@ function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index:
     };
   }
   if (role !== "user" && role !== "assistant" && role !== "system") return null;
+  const media = mediaFromHistory(item);
   const content = typeof item.content === "string" ? item.content : typeof item.text === "string" ? item.text : "";
-  if (!content) return null;
+  if (!content && !media.length) return null;
   return {
     id: String(item.id ?? `${sessionId}-history-${index}`),
     sessionId,
@@ -375,6 +392,7 @@ function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index:
     content,
     createdAt,
     delivery: role === "user" ? "sent" : undefined,
+    ...(media.length ? { media } : {}),
   };
 }
 

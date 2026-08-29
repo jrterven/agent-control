@@ -1,4 +1,4 @@
-import { Check, Checks, PaperPlaneTilt, Plus, Question, ShieldWarning, Stop, WarningCircle } from "@phosphor-icons/react";
+import { Check, Checks, PaperPlaneTilt, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -7,8 +7,9 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { Badge, Button, IconButton } from "@hermes-control/ui";
 import { createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
+import { api } from "../lib/api";
 import { useAppStore } from "../store/appStore";
-import type { ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest } from "../types";
+import type { ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageMedia } from "../types";
 import { BrandMark } from "./BrandMark";
 
 const emptyApprovals: ApprovalRequest[] = [];
@@ -283,8 +284,44 @@ function Message({ message, agentName }: { message: ChatMessage; agentName: stri
       <div className="assistant-content">
         <header><strong>{agentName}</strong><time>{message.createdAt}</time>{message.streaming ? <Badge tone="info">{t("chat.streaming")}</Badge> : null}</header>
         <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{message.content || " "}</ReactMarkdown>{message.streaming ? <span className="stream-caret" aria-hidden="true" /> : null}</div>
+        {message.media?.length ? (
+          <div className="message-media">
+            {message.media.map((media, index) => (
+              <VoiceNote
+                key={media.id}
+                media={media}
+                sessionId={message.sessionId}
+                number={message.media && message.media.length > 1 ? index + 1 : undefined}
+              />
+            ))}
+          </div>
+        ) : null}
       </div>
     </article>
+  );
+}
+
+function VoiceNote({
+  media,
+  sessionId,
+  number,
+}: {
+  media: MessageMedia;
+  sessionId: string;
+  number?: number;
+}) {
+  const { t } = useTranslation();
+  const label = number
+    ? t("chat.voiceNoteNumber", { number })
+    : t("chat.voiceNote");
+  return (
+    <section className="voice-note" aria-label={label}>
+      <div className="voice-note__label"><SpeakerHigh size={18} weight="fill" /> <span>{label}</span></div>
+      <audio controls preload="metadata" aria-label={t("chat.playVoiceNote")}>
+        <source src={api.sessionMediaUrl(sessionId, media.id)} type={media.mediaType} />
+        {t("chat.audioUnsupported")}
+      </audio>
+    </section>
   );
 }
 

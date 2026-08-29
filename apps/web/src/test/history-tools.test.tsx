@@ -74,4 +74,42 @@ describe("rehydrated Hermes tool history", () => {
 
     expect(screen.queryByRole("button", { name: /Herramientas · 2/i })).not.toBeInTheDocument();
   });
+
+  it("renders an authenticated voice-note player instead of a private MEDIA path", async () => {
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      items: [
+        {
+          id: "assistant-voice",
+          role: "assistant",
+          content: "Nota de voz — resumen ejecutivo",
+          controlMedia: [{
+            id: "0123456789abcdef0123456789abcdef",
+            kind: "audio",
+            mediaType: "audio/mpeg",
+          }],
+        },
+      ],
+    });
+    const { container } = render(<ReopenedChat />);
+
+    expect(await screen.findByLabelText("Nota de voz")).toBeVisible();
+    expect(screen.getByText("Nota de voz — resumen ejecutivo")).toBeVisible();
+    expect(screen.queryByText(/MEDIA:\//)).not.toBeInTheDocument();
+    const audio = container.querySelector("audio");
+    const source = container.querySelector("audio source");
+    expect(audio).toHaveAttribute("preload", "metadata");
+    expect(audio).toHaveAccessibleName("Reproducir nota de voz");
+    expect(source).toHaveAttribute(
+      "src",
+      "/api/v1/sessions/session-papers/media/0123456789abcdef0123456789abcdef",
+    );
+    expect(source).toHaveAttribute("type", "audio/mpeg");
+    expect(useAppStore.getState().messages[0]?.media).toEqual([
+      {
+        id: "0123456789abcdef0123456789abcdef",
+        kind: "audio",
+        mediaType: "audio/mpeg",
+      },
+    ]);
+  });
 });

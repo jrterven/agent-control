@@ -266,6 +266,7 @@ export const api = {
     },
   }),
   sessionHistory: (sessionId: string) => request<{ items: Array<Record<string, unknown>> }>(`/sessions/${encodeURIComponent(sessionId)}/messages`),
+  sessionMediaUrl: (sessionId: string, mediaId: string) => `/api/v1/sessions/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(mediaId)}`,
   exportSession: (sessionId: string) => requestBlob(`/sessions/${encodeURIComponent(sessionId)}/export`),
   submitPrompt: (sessionId: string, content: string, idempotencyKey: string, csrfToken?: string) => request<{ operationId: string; status: string }>(`/sessions/${encodeURIComponent(sessionId)}/prompts`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey, ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) }, body: JSON.stringify({ content }) }),
   promptOperation: (sessionId: string, operationId: string) => request<{ operationId: string; status: string; acceptedAt?: string }>(`/sessions/${encodeURIComponent(sessionId)}/operations/${encodeURIComponent(operationId)}`),
