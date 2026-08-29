@@ -177,12 +177,19 @@ Use **Create agent** at the bottom of the Agents screen. Provide:
 </p>
 
 The backend first asks the provider to create a fresh isolated profile without
-sending the brief as `description` or `soul`. Agent Control then opens a visible
-setup chat with that new profile and submits the brief with bounded safety
-instructions. Hermes analyzes the request and decides what identity, working
-rules and configuration to persist; Agent Control never copies the text
-directly into `SOUL.md`. Any approval or clarification remains visible in that
-conversation.
+sending the brief as `description` or `soul`. Agent Control then shows a guided
+progress screen while it opens an internal setup session and submits the brief
+with bounded safety instructions. Hermes analyzes the request and decides what
+identity, working rules and configuration to persist; Agent Control never
+copies the text directly into `SOUL.md`. If Hermes requests approval or
+clarification, the progress screen presents the verified response controls.
+
+After Hermes confirms completion, Agent Control archives the internal setup
+session, activates the new profile and creates a second, empty conversation.
+The app only then navigates to **Chats**, so the operator starts with the new
+agent active and a clean composer instead of seeing the technical setup brief.
+If transport becomes ambiguous, retry resumes checking the same operation and
+does not automatically resend the brief.
 
 New profiles start with empty memory and history and use the gateway-managed
 inference authentication pool. A Telegram bot or channel is not created

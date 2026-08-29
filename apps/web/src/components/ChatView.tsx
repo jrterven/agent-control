@@ -13,7 +13,7 @@ import { useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
 import { useSpeechPlayback, type LiveSpeechStatus, type SpeechPlaybackStatus } from "../hooks/useSpeechPlayback";
 import { usePwaUpdateStore } from "../lib/pwaUpdate";
-import type { ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageMedia } from "../types";
+import type { ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageMedia, Profile } from "../types";
 import { BrandMark } from "./BrandMark";
 
 const emptyApprovals: ApprovalRequest[] = [];
@@ -35,7 +35,7 @@ function DeliveryIcon({ delivery }: { delivery?: ChatMessage["delivery"] }) {
   return <Check aria-label={t("chat.delivery.sending")} />;
 }
 
-function ApprovalCard({ request, offline, canRespond }: { request: ApprovalRequest; offline: boolean; canRespond: boolean }) {
+function ApprovalCard({ request, offline, canRespond, profileOverride }: { request: ApprovalRequest; offline: boolean; canRespond: boolean; profileOverride?: Profile }) {
   const { t } = useTranslation();
   const headingId = useId();
   const busy = request.state === "submitting";
@@ -61,7 +61,7 @@ function ApprovalCard({ request, offline, canRespond }: { request: ApprovalReque
             variant={choice === "deny" ? "danger" : choice === "once" ? "primary" : "secondary"}
             disabled={blocked}
             aria-busy={busy || undefined}
-            onClick={() => void respondToApproval(request.sessionId, request.requestId, choice).catch(() => undefined)}
+            onClick={() => void respondToApproval(request.sessionId, request.requestId, choice, profileOverride).catch(() => undefined)}
           >
             {busy ? t("approvals.confirming") : t(`approvals.choices.${choice}`)}
           </Button>
@@ -90,12 +90,14 @@ function ClarificationQuestionForm({
   index,
   offline,
   canRespond,
+  profileOverride,
 }: {
   request: ClarificationRequest;
   question: ClarificationQuestion;
   index: number;
   offline: boolean;
   canRespond: boolean;
+  profileOverride?: Profile;
 }) {
   const { t } = useTranslation();
   const headingId = useId();
@@ -141,6 +143,7 @@ function ClarificationQuestionForm({
       request.requestId,
       value,
       request.batch ? question.questionId : undefined,
+      profileOverride,
     ).catch(() => undefined);
   };
 
@@ -223,7 +226,7 @@ function ClarificationQuestionForm({
   );
 }
 
-function ClarificationCard({ request, offline, canRespond }: { request: ClarificationRequest; offline: boolean; canRespond: boolean }) {
+function ClarificationCard({ request, offline, canRespond, profileOverride }: { request: ClarificationRequest; offline: boolean; canRespond: boolean; profileOverride?: Profile }) {
   const { t } = useTranslation();
   const headingId = useId();
   return (
@@ -245,6 +248,7 @@ function ClarificationCard({ request, offline, canRespond }: { request: Clarific
             index={index}
             offline={offline}
             canRespond={canRespond}
+            profileOverride={profileOverride}
           />
         ))}
       </div>
@@ -255,19 +259,20 @@ function ClarificationCard({ request, offline, canRespond }: { request: Clarific
   );
 }
 
-function InteractionCards({ approvals, clarifications, offline, canApprove, canClarify }: {
+export function InteractionCards({ approvals, clarifications, offline, canApprove, canClarify, profileOverride }: {
   approvals: ApprovalRequest[];
   clarifications: ClarificationRequest[];
   offline: boolean;
   canApprove: boolean;
   canClarify: boolean;
+  profileOverride?: Profile;
 }) {
   const { t } = useTranslation();
   if (!approvals.length && !clarifications.length) return null;
   return (
     <div className="interaction-stack" aria-live="polite" aria-label={t("approvals.waitingAria")}>
-      {approvals.map((request) => <ApprovalCard key={request.requestId} request={request} offline={offline} canRespond={canApprove} />)}
-      {clarifications.map((request) => <ClarificationCard key={request.requestId} request={request} offline={offline} canRespond={canClarify} />)}
+      {approvals.map((request) => <ApprovalCard key={request.requestId} request={request} offline={offline} canRespond={canApprove} profileOverride={profileOverride} />)}
+      {clarifications.map((request) => <ClarificationCard key={request.requestId} request={request} offline={offline} canRespond={canClarify} profileOverride={profileOverride} />)}
     </div>
   );
 }

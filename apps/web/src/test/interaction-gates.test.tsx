@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../i18n";
 import { ChatView } from "../components/ChatView";
-import { applyRealtimeEvent } from "../hooks";
+import { applyRealtimeEvent, respondToApproval } from "../hooks";
 import { api, ApiError } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 import { automations, gateways, profiles, sessions, workspaces } from "../data";
@@ -130,6 +130,24 @@ describe("official approval and clarification gates", () => {
       "csrf-memory-only",
     ));
     await waitFor(() => expect(screen.queryByRole("heading", { name: "Aprobación requerida" })).not.toBeInTheDocument());
+  });
+
+  it("answers a verified approval for an internal setup session without exposing it in the chat list", async () => {
+    const setupProfile = useAppStore.getState().profiles.find((profile) => profile.id === "profile-control-dev");
+    expect(setupProfile).toBeDefined();
+    vi.spyOn(api, "respondApproval").mockResolvedValue({ requestId: "approval-1", resolved: 1, status: "resolved" });
+    applyRealtimeEvent(approvalEvent());
+    useAppStore.setState({ sessions: [], profiles: [] });
+
+    await respondToApproval("session-papers", "approval-1", "once", setupProfile);
+
+    expect(api.respondApproval).toHaveBeenCalledWith(
+      "session-papers",
+      "approval-1",
+      "once",
+      "csrf-memory-only",
+    );
+    expect(useAppStore.getState().approvalsBySession["session-papers"]).toBeUndefined();
   });
 
   it("allows an operator-authorized non-default profile with the exact capability", () => {

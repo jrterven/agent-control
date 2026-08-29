@@ -66,6 +66,13 @@ const setupSession: SessionSummary = {
   updatedAt: "2026-08-29T12:00:00Z",
 };
 
+const cleanSession: SessionSummary = {
+  ...setupSession,
+  id: "session-researcher-clean",
+  storedSessionId: "stored-researcher-clean",
+  runtimeSessionId: "runtime-researcher-clean",
+};
+
 function bootstrap(profiles: Profile[], sessions: SessionSummary[] = []): BootstrapData {
   return { gateways: [gateway], profiles, workspaces: [], sessions, automations: [] };
 }
@@ -95,11 +102,17 @@ describe("new agent flow", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("creates a clean profile and lets Hermes analyze a long brief in a setup chat", async () => {
+  it("shows setup progress, archives the internal session, and opens a clean chat with the new agent active", async () => {
     const create = vi.spyOn(api, "createProfile").mockResolvedValue(createdProfile);
-    const createSession = vi.spyOn(api, "createSession").mockResolvedValue(setupSession);
-    vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrap([sourceProfile, createdProfile], [setupSession]));
-    const submit = vi.spyOn(api, "submitPrompt").mockResolvedValue({ operationId: "setup-operation", status: "completed" });
+    const createSession = vi.spyOn(api, "createSession")
+      .mockResolvedValueOnce(setupSession)
+      .mockResolvedValueOnce(cleanSession);
+    vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrap([sourceProfile, createdProfile]));
+    const archive = vi.spyOn(api, "archiveSession").mockResolvedValue(setupSession);
+    let finishSetup!: (value: { operationId: string; status: string }) => void;
+    const submit = vi.spyOn(api, "submitPrompt").mockImplementation(() => new Promise((resolve) => {
+      finishSetup = resolve;
+    }));
     const user = userEvent.setup();
     const longBrief = `Investiga fuentes técnicas y prepara reportes verificables. ${"Contexto detallado. ".repeat(300)}`.trim();
 
@@ -122,15 +135,26 @@ describe("new agent flow", () => {
       displayName: "Researcher",
       description: longBrief,
     }, "csrf-memory-only"));
-    expect(createSession).toHaveBeenCalledWith(createdProfile.id, undefined, "csrf-memory-only");
-    await waitFor(() => expect(useAppStore.getState().selectedProfileId).toBe(createdProfile.id));
-    expect(useAppStore.getState().selectedSessionId).toBe(setupSession.id);
-    expect(useAppStore.getState().profiles).toContainEqual(createdProfile);
     await waitFor(() => expect(submit).toHaveBeenCalled());
+    expect(screen.getByRole("dialog", { name: "Creando a Researcher" })).toBeInTheDocument();
+    expect(screen.getByText("Hermes sigue trabajando. Esto puede tardar unos minutos.")).toBeInTheDocument();
+    expect(createSession).toHaveBeenNthCalledWith(1, createdProfile.id, undefined, "csrf-memory-only");
     const submittedPrompt = submit.mock.calls[0]?.[1] ?? "";
     expect(submittedPrompt).toContain(longBrief);
     expect(submittedPrompt).toContain("no lo copies literalmente a SOUL.md");
     expect(submittedPrompt).not.toBe(longBrief);
+
+    finishSetup({ operationId: "setup-operation", status: "completed" });
+
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: "/chats" }));
+    expect(archive).toHaveBeenCalledWith(setupSession.id, "csrf-memory-only");
+    expect(createSession).toHaveBeenNthCalledWith(2, createdProfile.id, undefined, "csrf-memory-only");
+    expect(useAppStore.getState().selectedProfileId).toBe(createdProfile.id);
+    expect(useAppStore.getState().selectedSessionId).toBe(cleanSession.id);
+    expect(useAppStore.getState().profiles).toContainEqual(createdProfile);
+    expect(useAppStore.getState().sessions).toContainEqual(cleanSession);
+    expect(useAppStore.getState().sessions).not.toContainEqual(setupSession);
+    expect(useAppStore.getState().messages.filter((message) => message.sessionId === cleanSession.id)).toHaveLength(0);
     expect(navigate).toHaveBeenCalledWith({ to: "/chats" });
     expect(screen.queryByRole("dialog", { name: "Crear un agente" })).not.toBeInTheDocument();
   });
@@ -157,11 +181,14 @@ describe("new agent flow", () => {
   it("retries setup after a transient session failure without creating a duplicate profile", async () => {
     const turingProfile = { ...createdProfile, technicalName: "turing", displayName: "Turing" };
     const turingSession = { ...setupSession, profileName: "turing" };
+    const turingCleanSession = { ...cleanSession, profileName: "turing" };
     const create = vi.spyOn(api, "createProfile").mockResolvedValue(turingProfile);
     const createSession = vi.spyOn(api, "createSession")
       .mockRejectedValueOnce(new Error("Temporary setup connection failure"))
-      .mockResolvedValueOnce(turingSession);
-    vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrap([sourceProfile, turingProfile], [turingSession]));
+      .mockResolvedValueOnce(turingSession)
+      .mockResolvedValueOnce(turingCleanSession);
+    vi.spyOn(api, "archiveSession").mockResolvedValue(turingSession);
+    vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrap([sourceProfile, turingProfile]));
     const submit = vi.spyOn(api, "submitPrompt").mockResolvedValue({ operationId: "setup-retry", status: "completed" });
     const user = userEvent.setup();
 
@@ -173,12 +200,41 @@ describe("new agent flow", () => {
     await user.click(screen.getByRole("button", { name: "Crear y configurar" }));
 
     expect(await screen.findByText("Temporary setup connection failure")).toBeInTheDocument();
-    expect(screen.getByLabelText("Nombre técnico")).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Reintentar configuración" }));
+    expect(screen.queryByLabelText("Nombre técnico")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reintentar desde aquí" }));
 
     await waitFor(() => expect(submit).toHaveBeenCalled());
     expect(create).toHaveBeenCalledTimes(1);
-    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(createSession).toHaveBeenCalledTimes(3);
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ technicalName: "turing" }), "csrf-memory-only");
+  });
+
+  it("checks the same ambiguous setup operation instead of resending the brief", async () => {
+    vi.spyOn(api, "createProfile").mockResolvedValue(createdProfile);
+    vi.spyOn(api, "createSession")
+      .mockResolvedValueOnce(setupSession)
+      .mockResolvedValueOnce(cleanSession);
+    const submit = vi.spyOn(api, "submitPrompt").mockRejectedValueOnce(new Error("Temporary network loss"));
+    const operation = vi.spyOn(api, "promptOperation").mockResolvedValue({ operationId: "preserved-operation", status: "completed" });
+    vi.spyOn(api, "archiveSession").mockResolvedValue(setupSession);
+    vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrap([sourceProfile, createdProfile]));
+    const user = userEvent.setup();
+
+    render(<AgentsScreen />);
+    await user.click(screen.getByRole("button", { name: "Nuevo agente" }));
+    await user.type(screen.getByLabelText("Nombre técnico"), "researcher-ai");
+    await user.type(screen.getByLabelText("Nombre visible"), "Researcher");
+    await user.type(screen.getByLabelText("Descripción del agente"), "Investiga y entrega resultados con fuentes verificables.");
+    await user.click(screen.getByRole("button", { name: "Crear y configurar" }));
+
+    expect(await screen.findByText("Temporary network loss")).toBeInTheDocument();
+    const preservedIdempotencyKey = submit.mock.calls[0]?.[2];
+    expect(preservedIdempotencyKey).toEqual(expect.any(String));
+    await user.click(screen.getByRole("button", { name: "Reintentar desde aquí" }));
+
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: "/chats" }));
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(operation).toHaveBeenCalledWith(setupSession.id, preservedIdempotencyKey);
+    expect(useAppStore.getState().selectedSessionId).toBe(cleanSession.id);
   });
 });

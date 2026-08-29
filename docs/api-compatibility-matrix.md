@@ -66,11 +66,14 @@ Important response contracts:
   an exact audited version/SHA. Control creates a fresh profile without
   `clone_from`, `description`, or `soul`, and requests Hermes' shared
   authentication mode so OAuth refresh state is not forked. The operator's
-  long setup brief is then submitted in a visible session to the new profile so
-  Hermes can analyze it and decide what to persist; Control never copies the
-  brief directly into `SOUL.md`. It discards upstream filesystem/credential
-  diagnostics, serializes creation per gateway, and reconciles an ambiguous
-  response by listing profiles rather than resending the mutation.
+  long setup brief is then submitted in an internal setup session to the new
+  profile so Hermes can analyze it and decide what to persist; Control never
+  copies the brief directly into `SOUL.md`. The UI tracks the durable prompt
+  operation, surfaces verified approval and clarification requests, archives
+  the setup session after terminal success, and opens a second empty session
+  with the new profile selected. It discards upstream filesystem/credential
+  diagnostics, serializes creation per gateway, and reconciles ambiguous
+  responses without blindly resending either mutation or prompt.
 - `session.events.since` returns `events`, `latest_seq`, `truncated`, `count`
   and `epoch`. Upstream buffers 512 events per session for at most 64 sessions.
 - `approval.request` supplies `request_id`, a redacted `command`, description,

@@ -410,6 +410,31 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .create-agent-callout > .hc-button { min-width: 148px; }
 .agent-creator { width: min(560px, 100%); }
 .agent-creator textarea { min-height: 132px; resize: vertical; }
+.agent-creation-progress { width: min(620px, 100%); max-height: min(780px, 88dvh); }
+.agent-creation-progress__header { display: flex; align-items: center; gap: 13px; margin-bottom: 8px; }
+.agent-creation-progress__header > span:last-child { min-width: 0; }
+.agent-creation-progress__header h2 { overflow-wrap: anywhere; }
+.agent-creation-progress__icon { width: 52px; height: 52px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--border-accent); border-radius: 15px; color: var(--accent); background: var(--accent-soft); }
+.agent-creation-steps { display: grid; gap: 0; margin: 22px 0; padding: 0; list-style: none; }
+.agent-creation-steps li { position: relative; min-height: 70px; display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: start; gap: 12px; color: var(--muted); }
+.agent-creation-steps li:not(:last-child)::after { content: ""; position: absolute; z-index: 0; top: 31px; bottom: 0; left: 15px; width: 2px; background: var(--border); }
+.agent-creation-steps li > span { position: relative; z-index: 1; width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-elevated); }
+.agent-creation-steps li > div { display: grid; gap: 3px; padding-top: 2px; }
+.agent-creation-steps strong { color: var(--text-soft); font-size: 14px; }
+.agent-creation-steps small { max-width: 460px; line-height: 1.45; }
+.agent-creation-steps .is-complete > span { color: var(--success-text); border-color: var(--success-border); background: var(--success-surface); }
+.agent-creation-steps .is-complete:not(:last-child)::after { background: var(--success); }
+.agent-creation-steps .is-complete strong, .agent-creation-steps .is-active strong { color: var(--text); }
+.agent-creation-steps .is-active > span { color: var(--accent); border-color: var(--border-accent); background: var(--accent-soft); box-shadow: 0 0 0 4px var(--focus-ring); }
+.agent-creation-steps .is-error > span { color: var(--danger-text); border-color: var(--danger-border); background: var(--danger-surface); box-shadow: none; }
+.agent-creation-progress__waiting { min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0 !important; color: var(--muted); font-size: 12px; }
+.agent-creation-progress__waiting svg { flex: 0 0 auto; color: var(--accent); }
+.agent-creation-progress__attention { display: grid; gap: 10px; margin-top: 6px; }
+.agent-creation-progress__attention > p { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--warning-text); font-size: 12px; font-weight: 700; }
+.agent-creation-progress__attention > p svg { flex: 0 0 auto; }
+.agent-creation-progress__attention .interaction-stack { margin: 0; }
+.agent-creation-progress__error { display: grid; gap: 12px; }
+.agent-creation-progress__error > div { display: flex; justify-content: flex-end; gap: 8px; }
 .next-runs { margin-bottom: 20px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-1); }
 .next-runs > div { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 10px; }
 .next-runs > div > span { display: grid; grid-template-columns: 28px 1fr; align-items: center; column-gap: 8px; }
@@ -715,6 +740,9 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
   .integration-settings__voice-controls { grid-template-columns: 1fr; }
   .command-layer, .modal-layer { align-items: end; padding: 0; }
   .command-palette, .form-modal { width: 100%; max-height: 84dvh; border-radius: 20px 20px 0 0; overflow-y: auto; }
+  .agent-creation-progress { min-height: 84dvh; align-content: start; }
+  .agent-creation-progress__header { position: sticky; top: -24px; z-index: 2; margin: -24px -24px 8px; padding: 20px 24px 12px; background: var(--surface-elevated); }
+  .agent-creation-steps { margin-block: 18px; }
   .page-wrap { width: calc(100% - 28px); padding: 24px 0 84px; }
   .page-header { align-items: flex-start; margin-bottom: 20px; }
   .update-settings__row { align-items: stretch; flex-direction: column; }

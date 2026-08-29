@@ -20,7 +20,7 @@ same-origin APIs and normalized realtime events.
 | Area | Available today |
 | --- | --- |
 | Conversations | Create and resume profile-isolated chats, stream Markdown, stop a run, answer verified approvals and clarifications, recover after disconnects, export or archive a conversation, and play proxied voice notes. |
-| Agents | Discover Newton, Jarvis and other provider profiles; use their verified tools and administration capabilities; create a clean isolated Hermes profile and let it analyze an extensive setup brief in a visible chat, without opening a terminal or copying the brief directly into SOUL. |
+| Agents | Discover Newton, Jarvis and other provider profiles; use their verified tools and administration capabilities; create a clean isolated Hermes profile while following live setup progress, then start in a new empty chat without opening a terminal or copying the brief directly into SOUL. |
 | Automations | Create, edit, pause, resume, run and delete cron jobs on eligible profiles; use simple or advanced schedules; inspect the next five runs; filter results by All, Unread and Read. |
 | Voice | Configure one owner-scoped ElevenLabs key for Scribe v2 Realtime dictation and response playback with either Flash v2.5 or Multilingual v2. Choose an account voice and model, listen while an answer streams, or replay any completed response with play/pause, stop and speed controls. Eleven v3 is intentionally excluded; native keyboard dictation remains the free fallback. |
 | Organization | Group chats into optional local workspaces, search across the interface and keep an encrypted, bounded offline snapshot when explicitly enabled. |
