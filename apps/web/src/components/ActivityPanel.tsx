@@ -64,7 +64,6 @@ export function ActivityPanel() {
   const [exportBusy, setExportBusy] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string; storedSessionId: string } | null>(null);
-  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [actionError, setActionError] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [announcement, setAnnouncement] = useState("");
@@ -78,7 +77,6 @@ export function ActivityPanel() {
   const closeDeleteDialog = () => {
     if (deleteBusy) return;
     setDeleteTarget(null);
-    setDeleteConfirmation("");
     setDeleteError("");
   };
   const drawer = useOverlayDialog<HTMLElement>({ open: open && !deleteTarget, onClose: () => close(false), mediaQuery: "(max-width: 1199px)" });
@@ -134,14 +132,13 @@ export function ActivityPanel() {
   const openDeleteDialog = () => {
     if (!session || !canDeleteFromHermes || mutationsDisabled) return;
     setDeleteTarget({ id: session.id, title: session.title, storedSessionId: session.storedSessionId });
-    setDeleteConfirmation("");
     setDeleteError("");
     setActionError("");
   };
 
   const deleteSession = async (event: FormEvent) => {
     event.preventDefault();
-    if (!deleteTarget || deleteBusy || deleteConfirmation !== deleteTarget.storedSessionId) return;
+    if (!deleteTarget || deleteBusy) return;
     const target = deleteTarget;
     setDeleteBusy(true);
     setDeleteError("");
@@ -151,7 +148,6 @@ export function ActivityPanel() {
       removeSession(target.id);
       await refreshBootstrap();
       setDeleteTarget(null);
-      setDeleteConfirmation("");
       setAnnouncement(t("activity.deletedAnnouncement", { title: target.title }));
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : t("activity.deleteError"));
@@ -284,22 +280,10 @@ export function ActivityPanel() {
           <h2 id="session-delete-title">{t("activity.deleteTitle", { title: deleteTarget.title })}</h2>
           <p id="session-delete-description">{t("activity.deleteDialogDescription")}</p>
           <form onSubmit={(event) => void deleteSession(event)}>
-            <label className="hc-field" htmlFor="session-delete-confirmation">
-              <span className="hc-field__label">{t("activity.persistentId")} <code>{deleteTarget.storedSessionId}</code></span>
-              <input
-                id="session-delete-confirmation"
-                className="hc-input"
-                autoComplete="off"
-                spellCheck={false}
-                value={deleteConfirmation}
-                onChange={(event) => setDeleteConfirmation(event.target.value)}
-                aria-invalid={Boolean(deleteConfirmation) && deleteConfirmation !== deleteTarget.storedSessionId}
-              />
-            </label>
             {deleteError ? <p className="form-error" role="alert"><WarningCircle /> {deleteError}</p> : null}
             <div>
               <Button type="button" variant="ghost" disabled={deleteBusy} onClick={closeDeleteDialog}>{t("activity.cancel")}</Button>
-              <Button type="submit" variant="danger" disabled={deleteBusy || deleteConfirmation !== deleteTarget.storedSessionId} leadingIcon={<Trash />}>{t(deleteBusy ? "activity.deleting" : "activity.deleteFromHermes")}</Button>
+              <Button type="submit" variant="danger" disabled={deleteBusy} leadingIcon={<Trash />}>{t(deleteBusy ? "activity.deleting" : "activity.deleteFromHermes")}</Button>
             </div>
           </form>
         </div>

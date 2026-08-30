@@ -48,7 +48,6 @@ export function LeftSidebar() {
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<SessionSummary | null>(null);
-  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [sessionAnnouncement, setSessionAnnouncement] = useState("");
@@ -80,7 +79,6 @@ export function LeftSidebar() {
   const closeDeleteDialog = () => {
     if (deleteBusy) return;
     setDeleteTarget(null);
-    setDeleteConfirmation("");
     setDeleteError("");
   };
   const renameDialog = useOverlayDialog<HTMLDivElement>({ open: Boolean(renameTarget), onClose: closeRenameDialog, mediaQuery: "(min-width: 0px)" });
@@ -140,14 +138,13 @@ export function LeftSidebar() {
     if (!canDeleteSession(session) || mutationsDisabled) return;
     closeSessionMenu();
     setDeleteTarget(session);
-    setDeleteConfirmation("");
     setDeleteError("");
     setSessionAnnouncement("");
   };
 
   const deleteSession = async (event: FormEvent) => {
     event.preventDefault();
-    if (!deleteTarget || deleteBusy || deleteConfirmation !== deleteTarget.storedSessionId) return;
+    if (!deleteTarget || deleteBusy) return;
     const target = deleteTarget;
     setDeleteBusy(true);
     setDeleteError("");
@@ -155,7 +152,6 @@ export function LeftSidebar() {
       await api.deleteSessionFromHermes(target.id, target.storedSessionId, csrfToken);
       removeSession(target.id);
       setDeleteTarget(null);
-      setDeleteConfirmation("");
       setSessionAnnouncement(t("activity.deletedAnnouncement", { title: target.title }));
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : t("activity.deleteError"));
@@ -328,7 +324,7 @@ export function LeftSidebar() {
       <p className="session-action-announcement" role="status" aria-live="polite">{sessionAnnouncement}</p>
       {workspaceEditorOpen ? <div ref={workspaceDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="workspace-editor-title"><button className="modal-scrim" aria-label={t("sidebar.closeWorkspaceEditor")} onClick={closeWorkspaceEditor} /><div className="hc-panel form-modal workspace-editor"><span className="eyebrow">{t("sidebar.localOrganization")}</span><h2 id="workspace-editor-title">{editingWorkspace ? t("sidebar.editWorkspaceTitle") : t("sidebar.newWorkspaceTitle")}</h2><p>{t("sidebar.workspaceExplanation")}</p><form onSubmit={(event) => void saveWorkspace(event)}><label className="hc-field"><span>{t("sidebar.name")}</span><input autoFocus maxLength={200} value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} /></label><label className="hc-field"><span>{t("sidebar.description")}</span><textarea rows={3} maxLength={4000} value={workspaceDescription} onChange={(event) => setWorkspaceDescription(event.target.value)} /></label>{workspaceError ? <p className="form-error" role="alert">{workspaceError}</p> : null}<div>{editingWorkspace ? <Button type="button" variant="danger" disabled={workspaceBusy} leadingIcon={<Archive />} onClick={() => void archiveWorkspace()}>{t("sidebar.archive")}</Button> : <span />}<span><Button type="button" variant="ghost" disabled={workspaceBusy} onClick={closeWorkspaceEditor}>{t("sidebar.cancel")}</Button><Button type="submit" variant="primary" disabled={workspaceBusy || !workspaceName.trim()}>{workspaceBusy ? t("sidebar.saving") : t("sidebar.save")}</Button></span></div></form></div></div> : null}
       {renameTarget ? <div className="modal-layer" role="presentation"><button className="modal-scrim" aria-label={t("sidebar.closeRenameEditor")} onClick={closeRenameDialog} /><div ref={renameDialog.containerRef} tabIndex={-1} className="hc-panel form-modal session-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="session-rename-title" aria-describedby="session-rename-description"><span className="eyebrow">{t("sidebar.localOrganization")}</span><h2 id="session-rename-title">{t("sidebar.renameTitle")}</h2><p id="session-rename-description">{t("sidebar.renameDescription")}</p><form onSubmit={(event) => void saveSessionTitle(event)}><label className="hc-field"><span>{t("sidebar.conversationName")}</span><input autoFocus maxLength={300} value={renameTitle} onChange={(event) => setRenameTitle(event.target.value)} /></label>{renameError ? <p className="form-error" role="alert"><WarningCircle /> {renameError}</p> : null}<div><Button type="button" variant="ghost" disabled={renameBusy} onClick={closeRenameDialog}>{t("sidebar.cancel")}</Button><Button type="submit" variant="primary" disabled={renameBusy || !renameTitle.trim()}>{t(renameBusy ? "sidebar.renaming" : "sidebar.rename")}</Button></div></form></div></div> : null}
-      {deleteTarget ? <div className="modal-layer" role="presentation"><button className="modal-scrim" aria-label={t("activity.cancelDeleteAria")} onClick={closeDeleteDialog} /><div ref={deleteDialog.containerRef} tabIndex={-1} className="hc-panel form-modal session-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="sidebar-session-delete-title" aria-describedby="sidebar-session-delete-description"><span className="eyebrow">{t("activity.irreversible")}</span><h2 id="sidebar-session-delete-title">{t("activity.deleteTitle", { title: deleteTarget.title })}</h2><p id="sidebar-session-delete-description">{t("activity.deleteDialogDescription")}</p><form onSubmit={(event) => void deleteSession(event)}><label className="hc-field" htmlFor="sidebar-session-delete-confirmation"><span className="hc-field__label">{t("activity.persistentId")} <code>{deleteTarget.storedSessionId}</code></span><input id="sidebar-session-delete-confirmation" autoFocus autoComplete="off" spellCheck={false} value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} aria-invalid={Boolean(deleteConfirmation) && deleteConfirmation !== deleteTarget.storedSessionId} /></label>{deleteError ? <p className="form-error" role="alert"><WarningCircle /> {deleteError}</p> : null}<div><Button type="button" variant="ghost" disabled={deleteBusy} onClick={closeDeleteDialog}>{t("activity.cancel")}</Button><Button type="submit" variant="danger" disabled={deleteBusy || deleteConfirmation !== deleteTarget.storedSessionId} leadingIcon={<Trash />}>{t(deleteBusy ? "activity.deleting" : "activity.deleteFromHermes")}</Button></div></form></div></div> : null}
+      {deleteTarget ? <div className="modal-layer" role="presentation"><button className="modal-scrim" aria-label={t("activity.cancelDeleteAria")} onClick={closeDeleteDialog} /><div ref={deleteDialog.containerRef} tabIndex={-1} className="hc-panel form-modal session-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="sidebar-session-delete-title" aria-describedby="sidebar-session-delete-description"><span className="eyebrow">{t("activity.irreversible")}</span><h2 id="sidebar-session-delete-title">{t("activity.deleteTitle", { title: deleteTarget.title })}</h2><p id="sidebar-session-delete-description">{t("activity.deleteDialogDescription")}</p><form onSubmit={(event) => void deleteSession(event)}>{deleteError ? <p className="form-error" role="alert"><WarningCircle /> {deleteError}</p> : null}<div><Button type="button" variant="ghost" disabled={deleteBusy} onClick={closeDeleteDialog}>{t("activity.cancel")}</Button><Button type="submit" variant="danger" disabled={deleteBusy} leadingIcon={<Trash />}>{t(deleteBusy ? "activity.deleting" : "activity.deleteFromHermes")}</Button></div></form></div></div> : null}
     </>
   );
 }

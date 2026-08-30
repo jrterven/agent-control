@@ -80,7 +80,7 @@ describe("sidebar session menu", () => {
     expect(screen.getByRole("status")).toHaveTextContent("ahora se llama “Proyecto Turing”");
   });
 
-  it("requires the exact persistent id before permanent deletion", async () => {
+  it("requires a clear irreversible warning before permanent deletion", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "deleteSessionFromHermes").mockResolvedValue(undefined);
     render(<LeftSidebar />);
@@ -88,11 +88,10 @@ describe("sidebar session menu", () => {
     await user.click(screen.getByRole("button", { name: "Opciones de “Conversación”" }));
     await user.click(screen.getByRole("menuitem", { name: "Eliminar…" }));
     const dialog = screen.getByRole("dialog", { name: "Eliminar “Conversación”" });
-    const input = within(dialog).getByRole("textbox", { name: /ID persistente/ });
     const submit = within(dialog).getByRole("button", { name: "Eliminar de Hermes" });
-    expect(submit).toBeDisabled();
-
-    await user.type(input, "stored-exact-42");
+    expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Esta acción no se puede deshacer");
+    expect(submit).toBeEnabled();
     await user.click(submit);
 
     await waitFor(() => expect(api.deleteSessionFromHermes).toHaveBeenCalledWith("session-a", "stored-exact-42", "csrf-memory-only"));

@@ -78,9 +78,10 @@ During a conversation Agent Control can:
 
 Renaming changes only the label shown and searched by Agent Control. Hermes
 keeps its canonical session title and history untouched. Permanent deletion is
-shown only when the provider contract confirms `session.delete`; it requires
-typing the exact persistent session ID so an accidental mobile tap cannot erase
-the wrong conversation.
+shown only when the provider contract confirms `session.delete`; a dedicated
+warning names the conversation and requires a separate destructive
+confirmation. Agent Control still supplies the exact persistent session ID
+internally so the backend cannot delete a different conversation.
 
 The empty composer starts at one line, grows line by line up to six visible
 lines, and then scrolls. Tool execution detail is kept in the activity panel so
