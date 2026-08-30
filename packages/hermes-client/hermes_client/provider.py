@@ -131,6 +131,28 @@ _AUDITED_REVISIONS: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
         ),
         frozenset({"cron.create", "cron.update", "cron.delete", "cron.trigger"}),
     ),
+    # Mac gateway inspected on 2026-08-29. The original 0.20.6 revision above
+    # is an ancestor. Its contracted WS/session/API files are unchanged; the
+    # only protocol-adjacent differences are an additive prompt.btw method and
+    # an unrelated non-blocking TTS file-read fix in web_server.py.
+    "4209d371aa1bb8840ce8447555bdd863a1a96c38": (
+        "0.20.6",
+        frozenset(
+            {
+                "session.create",
+                "session.resume",
+                "session.status",
+                "session.history",
+                "prompt.submit",
+                "session.interrupt",
+                "approval.respond",
+                "clarify.respond",
+                "session.events.since",
+                "session.delete",
+            }
+        ),
+        frozenset({"cron.create", "cron.update", "cron.delete", "cron.trigger"}),
+    ),
 }
 
 # Every read probe is a side-effect-free GET. A write is advertised only when

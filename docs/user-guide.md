@@ -278,6 +278,12 @@ finished** and activation waits for a safe moment. The selected gateway,
 workspace, agent and conversation are restored after the controlled reload;
 drafts remain in the existing encrypted/local draft store.
 
+If Android cannot start the JavaScript bundle after an interrupted PWA update,
+the startup screen changes from **Starting Agent Control…** to a localized
+**Repair and reload** action. It unregisters the stale service worker and clears
+only Cache Storage before downloading a fresh shell. IndexedDB preferences,
+drafts and encrypted offline data are deliberately preserved.
+
 ## Mobile installation with Tailscale Serve
 
 The recommended private mobile deployment keeps Hermes and Agent Control's

@@ -112,6 +112,63 @@ async def test_profile_sync_probes_capabilities_per_gateway_profile_route():
         engine.dispose()
 
 
+class GatewayAliasedDefaultProvider(ScopedProbeProvider):
+    async def list_profiles(self):
+        self.calls.append(("profiles", self.connection.profile_name))
+        assert self.connection.profile_name == "default"
+        return [HermesProfile("default", "Turing", "unknown", "gpt-5.6-sol")]
+
+
+@pytest.mark.asyncio
+async def test_profile_sync_respects_gateway_local_default_display_name():
+    settings = Settings(
+        environment="test",
+        database_url="sqlite://",
+        vault_key_b64=base64.urlsafe_b64encode(b"t" * 32).decode("ascii"),
+        provider_mode="real",
+    )
+    engine = build_engine(settings)
+    Base.metadata.create_all(engine)
+    factory = build_session_factory(engine)
+    calls: list[tuple[str, str]] = []
+    pool = ProviderPool(
+        lambda connection: GatewayAliasedDefaultProvider(connection, calls)
+    )
+    services = AppServices(
+        settings=settings,
+        vault=SecretVault(settings.materialize_vault_key()),
+        event_hub=EventHub(),
+        provider_pool=pool,
+        session_router=HermesSessionRouter(pool),
+    )
+    try:
+        with factory() as db:
+            gateway = Gateway(
+                name="MacBook de Juan",
+                rest_url="http://127.0.0.1:29119",
+                ws_url="ws://127.0.0.1:29119/api/ws",
+                connection_mode="tunnel",
+                enabled=True,
+            )
+            db.add(gateway)
+            db.commit()
+            db.refresh(gateway)
+
+            rows = await ProfileService(services).sync(db, gateway.id)
+
+            assert len(rows) == 1
+            assert rows[0].profile_name == "default"
+            assert rows[0].display_name == "Turing"
+            assert rows[0].status == "online"
+            assert calls == [
+                ("profiles", "default"),
+                ("capabilities", "default"),
+            ]
+    finally:
+        await pool.close()
+        engine.dispose()
+
+
 class FailingAuthoritativeProvider:
     def __init__(self) -> None:
         self.connection = ProviderConnection(

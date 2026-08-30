@@ -161,6 +161,35 @@ Native systemd is preferred initially because it has fewer network-namespace
 surprises. Never start the container with `-p 9119`, `-p 8642`, privileged mode,
 or a broad mount of `/home/hermes/.hermes`.
 
+## Add a macOS Hermes gateway
+
+A second Hermes installation in the same tailnet can join Control without
+exposing its protocol port to the browser or to other tailnet devices. Keep
+Hermes on Mac loopback and carry it to a distinct loopback port on the Control
+host with a reverse SSH tunnel over Tailscale:
+
+```text
+Mac 127.0.0.1:9119
+  -> reverse SSH over Tailscale
+Control host 127.0.0.1:29119
+```
+
+Use the two wrappers in `deploy/bin` with the launchd templates in
+`deploy/launchd`. Store the dashboard token in the macOS login Keychain under
+service `com.agent-control.hermes-dashboard`; never place it in a plist, shell
+history, frontend variable or repository file. The launchd jobs run as the
+signed-in macOS user and require no sudo. They keep `hermes serve` and the SSH
+tunnel independently restartable and use SSH keepalives to recover after a
+Tailscale or network interruption.
+
+Register the gateway in Control with URLs that are local from the backend's
+perspective, for example `http://127.0.0.1:29119` and
+`ws://127.0.0.1:29119/api/ws`, connection mode `tunnel`, and no API fallback.
+Leave the trusted SHA empty until that exact Hermes checkout has passed the
+compatibility review. Profile display names are gateway-scoped: a Mac profile
+whose canonical id remains `default` may therefore be displayed as Turing while
+the production gateway's own `default` profile remains Newton.
+
 ## Post-deploy checks
 
 - `9119`, `8642` and `8000` are loopback listeners only.

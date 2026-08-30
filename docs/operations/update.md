@@ -25,6 +25,13 @@ version, and activation is deferred while dictation, speech playback, streaming
 or an unsent draft is active. After activation, confirm that the same Control conversation
 is selected and that no API response entered the service-worker cache.
 
+Keep the immediately preceding release's hashed frontend assets available while
+rolling out the new shell. This prevents a still-open client from requesting a
+chunk that disappeared during the symlink switch. Also test the bundle-failure
+path: the static startup shell must remain visible and offer **Repair and
+reload**; that repair may delete service-worker Cache Storage but must not clear
+IndexedDB drafts or offline snapshots.
+
 For rollback, stop Control and switch back only if the earlier binary supports
 the migrated schema. Otherwise restore the pre-update database first. Never run
 an Alembic downgrade against production without a migration-specific reviewed

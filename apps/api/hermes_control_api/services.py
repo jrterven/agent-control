@@ -910,10 +910,20 @@ class ProfileService:
                 # inherit capabilities from another route or from mock fallback.
                 pass
         for profile in profiles:
-            discovered_display_name = {
-                "default": "Newton",
-                "jarvis": "Jarvis",
-            }.get(profile.name, profile.display_name)
+            # A Hermes instance may give its canonical ``default`` profile a
+            # gateway-local display name (for example, Turing on a developer
+            # workstation).  Respect that declared identity before applying
+            # Control's legacy labels for installations that report only the
+            # technical profile name.
+            declared_display_name = profile.display_name.strip()
+            discovered_display_name = (
+                declared_display_name
+                if declared_display_name and declared_display_name != profile.name
+                else {
+                    "default": "Newton",
+                    "jarvis": "Jarvis",
+                }.get(profile.name, declared_display_name or profile.name)
+            )
             row = db.scalar(
                 select(ProfileRef).where(
                     ProfileRef.gateway_id == gateway_id,

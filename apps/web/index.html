@@ -9,9 +9,46 @@
     <link rel="icon" href="/icon-192.png" type="image/png" sizes="192x192" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
     <title>Agent Control</title>
+    <style>
+      .boot-fallback {
+        min-height: 100dvh;
+        display: grid;
+        place-content: center;
+        justify-items: center;
+        gap: 1rem;
+        padding: 2rem;
+        box-sizing: border-box;
+        background: #071018;
+        color: #dce8ef;
+        font: 500 1rem/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        text-align: center;
+      }
+      .boot-fallback__mark { width: 5rem; height: 5rem; }
+      .boot-fallback__status { margin: 0; color: #9baeb9; }
+      .boot-fallback__recovery {
+        min-height: 2.75rem;
+        padding: 0.65rem 1.1rem;
+        border: 1px solid #32b9ed;
+        border-radius: 0.8rem;
+        background: #0d89b5;
+        color: #fff;
+        font: inherit;
+        font-weight: 700;
+      }
+      .boot-fallback__recovery[hidden] { display: none; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main class="boot-fallback" data-agent-control-boot aria-live="polite">
+        <img class="boot-fallback__mark" src="/favicon.svg" alt="" />
+        <p class="boot-fallback__status" data-agent-control-boot-status>Starting Agent Control…</p>
+        <button class="boot-fallback__recovery" data-agent-control-boot-recovery type="button" hidden>
+          Repair and reload
+        </button>
+      </main>
+    </div>
+    <script src="/boot-recovery.js" defer></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

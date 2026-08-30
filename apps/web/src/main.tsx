@@ -13,17 +13,30 @@ const queryClient = new QueryClient({
 });
 
 async function mountApplication() {
-  await initializeLanguagePreference();
   restorePwaUpdateContext();
   initializePwaUpdates();
 
-  ReactDOM.createRoot(document.getElementById("root")!).render(
+  // IndexedDB can remain blocked after an interrupted Android WebView/PWA
+  // update. Language hydration must never keep the entire application blank.
+  const languageReady = initializeLanguagePreference().catch(() => undefined);
+  await Promise.race([
+    languageReady,
+    new Promise<void>((resolve) => window.setTimeout(resolve, 1_500)),
+  ]);
+
+  const root = document.getElementById("root");
+  if (!root) throw new Error("Agent Control root element is missing");
+  ReactDOM.createRoot(root).render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
       </QueryClientProvider>
     </React.StrictMode>,
   );
+  window.requestAnimationFrame(() => {
+    root.dataset.agentControlMounted = "true";
+    window.dispatchEvent(new Event("agent-control:mounted"));
+  });
 }
 
 void mountApplication();

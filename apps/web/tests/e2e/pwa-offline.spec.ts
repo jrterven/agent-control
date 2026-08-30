@@ -1,5 +1,17 @@
 import { expect, test } from "./fixtures";
 
+test("ofrece recuperación visible si el bundle no puede iniciar", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-mobile", "El arranque fallido se valida una vez en Chromium móvil");
+
+  await page.route("**/assets/*.js", (route) => route.abort());
+  await page.goto("/chats", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByText("Iniciando Agent Control…")).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event("error")));
+  await expect(page.getByText("La app no pudo iniciar. Tus borradores locales se conservarán.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reparar y recargar" })).toBeVisible();
+});
+
 async function databaseRecordExists(page: import("@playwright/test").Page, storeName: string, key: string) {
   return page.evaluate(async ({ storeName, key }) => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -53,6 +65,7 @@ test("expone un manifiesto instalable, registra el service worker y no cachea AP
     return (await Promise.all(names.map(async (name) => (await caches.open(name)).keys()))).flat().map((request) => request.url);
   });
   expect(cachedUrls.length).toBeGreaterThan(0);
+  expect(cachedUrls.some((url) => new URL(url).pathname === "/boot-recovery.js")).toBe(true);
   expect(cachedUrls.some((url) => new URL(url).pathname.startsWith("/api/"))).toBe(false);
 });
 

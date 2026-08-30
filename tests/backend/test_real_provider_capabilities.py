@@ -14,6 +14,7 @@ from hermes_client import (
 
 
 AUDITED_0206_SHA = "9978706e9303dbf990d90e744b131361449d73b9"
+AUDITED_MAC_0206_SHA = "4209d371aa1bb8840ce8447555bdd863a1a96c38"
 AUDITED_0205_SHA = "791e2ae3257e211d14ca77e654dfe10ee1976a1c"
 
 
@@ -187,7 +188,11 @@ async def test_reported_sha_that_contradicts_operator_anchor_disables_writes(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("version", "trusted_sha"),
-    [("0.20.5", AUDITED_0205_SHA), ("0.20.6", AUDITED_0206_SHA)],
+    [
+        ("0.20.5", AUDITED_0205_SHA),
+        ("0.20.6", AUDITED_0206_SHA),
+        ("0.20.6", AUDITED_MAC_0206_SHA),
+    ],
 )
 async def test_audited_real_provider_uses_rest_cron_probe_and_hides_memory(
     monkeypatch, version: str, trusted_sha: str

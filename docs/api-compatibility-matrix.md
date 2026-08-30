@@ -8,6 +8,7 @@ build exposes the same surface.
 |---|---|---|
 | Remote installation | `0.20.5`, `791e2ae3257e211d14ca77e654dfe10ee1976a1c` | Primary production target; probe at startup |
 | Official line | `0.20.6`, `9978706e9303dbf990d90e744b131361449d73b9` | Development compatibility target |
+| Mac Turing gateway | `0.20.6`, `4209d371aa1bb8840ce8447555bdd863a1a96c38` | Descendant audited on 2026-08-29; existing Control contract unchanged |
 
 Primary references: [programmatic integration](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/programmatic-integration.md),
 [WebSocket transport](https://github.com/NousResearch/hermes-agent/blob/main/tui_gateway/ws.py),
