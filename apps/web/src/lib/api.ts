@@ -344,7 +344,11 @@ export const api = {
       "X-Confirm-Delete": storedSessionId,
     },
   }),
-  sessionHistory: (sessionId: string) => request<{ items: Array<Record<string, unknown>> }>(`/sessions/${encodeURIComponent(sessionId)}/messages`),
+  sessionHistory: (sessionId: string) => request<{
+    items: Array<Record<string, unknown>>;
+    sessionStatus: string;
+    activeOperation: { operationId: string; status: string; acceptedAt?: string | null } | null;
+  }>(`/sessions/${encodeURIComponent(sessionId)}/messages`),
   sessionMediaUrl: (sessionId: string, mediaId: string) => `/api/v1/sessions/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(mediaId)}`,
   exportSession: (sessionId: string) => requestBlob(`/sessions/${encodeURIComponent(sessionId)}/export`),
   submitPrompt: (sessionId: string, content: string, idempotencyKey: string, csrfToken?: string) => request<{ operationId: string; status: string }>(`/sessions/${encodeURIComponent(sessionId)}/prompts`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey, ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) }, body: JSON.stringify({ content }) }),
@@ -443,6 +447,24 @@ export type RealtimeHandlers = {
 
 export type ReplayCursor = { seq: number; epoch: string };
 
+// Mobile operating systems throttle JavaScript timers while a PWA is in the
+// background. A healthy socket can therefore look old immediately after the
+// app becomes visible again. Keep a wider liveness window, but proactively
+// replace a genuinely stale socket on resume instead of waiting through the
+// exponential retry delay.
+export const REALTIME_HEARTBEAT_INTERVAL_MS = 15_000;
+export const REALTIME_BACKGROUND_RECONNECT_MS = 60_000;
+export const REALTIME_STALE_AFTER_MS = 120_000;
+
+export function shouldReconnectRealtimeAfterBackground(
+  lastSeenAt: number,
+  now: number,
+  visibilityState: DocumentVisibilityState,
+) {
+  return visibilityState === "visible"
+    && now - lastSeenAt > REALTIME_BACKGROUND_RECONNECT_MS;
+}
+
 export function advanceReplayCursor(previous: ReplayCursor | undefined, sequence: number, replayEpoch?: string): ReplayCursor {
   const epoch = replayEpoch ?? previous?.epoch ?? "";
   return {
@@ -453,6 +475,7 @@ export function advanceReplayCursor(previous: ReplayCursor | undefined, sequence
 
 export async function connectRealtime(handlers: RealtimeHandlers, signal: AbortSignal, csrfToken?: string) {
   let attempt = 0;
+  let immediateRetry = false;
   const cursors = new Map<string, ReplayCursor>();
   while (!signal.aborted) {
     try {
@@ -480,15 +503,55 @@ export async function connectRealtime(handlers: RealtimeHandlers, signal: AbortS
         signal.addEventListener("abort", onAbort, { once: true });
         socket.onopen = () => { cleanup(); resolve(); };
         socket.onerror = () => { cleanup(); socket.close(); reject(new Error("Realtime unavailable")); };
+        if (signal.aborted) onAbort();
       });
       attempt = 0;
       handlers.onState("connected");
       let lastSeen = Date.now();
-      const heartbeat = window.setInterval(() => {
-        if (Date.now() - lastSeen > 45_000) socket.close();
-        else socket.send(JSON.stringify({ type: "ping", at: Date.now() }));
-      }, 15_000);
       await new Promise<void>((resolve) => {
+        let settled = false;
+        const sendPing = () => {
+          if (socket.readyState !== WebSocket.OPEN) return;
+          try {
+            socket.send(JSON.stringify({ type: "ping", at: Date.now() }));
+          } catch {
+            socket.close();
+          }
+        };
+        const cleanup = () => {
+          window.clearInterval(heartbeat);
+          signal.removeEventListener("abort", onAbort);
+          document.removeEventListener("visibilitychange", onVisibilityChange);
+        };
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve();
+        };
+        const onAbort = () => {
+          socket.close();
+          finish();
+        };
+        const onVisibilityChange = () => {
+          if (shouldReconnectRealtimeAfterBackground(
+            lastSeen,
+            Date.now(),
+            document.visibilityState,
+          )) {
+            immediateRetry = true;
+            socket.close();
+            return;
+          }
+          if (document.visibilityState !== "visible") return;
+          // A prompt ping confirms a short background transition without
+          // waiting for the next throttled interval tick.
+          sendPing();
+        };
+        const heartbeat = window.setInterval(() => {
+          if (Date.now() - lastSeen > REALTIME_STALE_AFTER_MS) socket.close();
+          else sendPing();
+        }, REALTIME_HEARTBEAT_INTERVAL_MS);
         socket.onmessage = (message) => {
           lastSeen = Date.now();
           try {
@@ -509,15 +572,23 @@ export async function connectRealtime(handlers: RealtimeHandlers, signal: AbortS
             handlers.onEvent(event);
           } catch { /* Unknown frames are intentionally ignored. */ }
         };
-        socket.onclose = () => { window.clearInterval(heartbeat); resolve(); };
-        signal.addEventListener("abort", () => { window.clearInterval(heartbeat); socket.close(); resolve(); }, { once: true });
+        socket.onclose = finish;
+        signal.addEventListener("abort", onAbort, { once: true });
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        // AbortSignal does not replay an abort that raced with listener
+        // registration. Close immediately instead of leaving this promise
+        // waiting for a socket callback that may never arrive.
+        if (signal.aborted) onAbort();
       });
     } catch {
       handlers.onState("offline");
     }
     if (signal.aborted) break;
     attempt += 1;
-    const delay = Math.min(30_000, 800 * 2 ** attempt) + Math.random() * 450;
+    const delay = immediateRetry
+      ? 0
+      : Math.min(30_000, 800 * 2 ** attempt) + Math.random() * 450;
+    immediateRetry = false;
     await new Promise((resolve) => window.setTimeout(resolve, delay));
   }
 }

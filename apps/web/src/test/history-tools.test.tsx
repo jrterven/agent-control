@@ -36,6 +36,8 @@ describe("rehydrated Hermes tool history", () => {
 
   it("preserves role=tool history for the activity panel without inline chat cards", async () => {
     vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      sessionStatus: "ready",
+      activeOperation: null,
       items: [
         { id: "user-1", role: "user", content: "Busca evidencia", timestamp: 1_777_000_000 },
         {
@@ -77,6 +79,8 @@ describe("rehydrated Hermes tool history", () => {
 
   it("renders an authenticated voice-note player instead of a private MEDIA path", async () => {
     vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      sessionStatus: "ready",
+      activeOperation: null,
       items: [
         {
           id: "assistant-voice",

@@ -16,6 +16,8 @@
     <string>default</string>
     <key>HERMES_PORT</key>
     <string>9119</string>
+    <key>HERMES_TUI_WS_ORPHAN_REAP_GRACE_S</key>
+    <string>300</string>
     <key>HERMES_TOKEN_KEYCHAIN_ACCOUNT</key>
     <string>__MACOS_USER__</string>
     <key>HERMES_TOKEN_KEYCHAIN_SERVICE</key>

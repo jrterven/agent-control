@@ -32,7 +32,9 @@ describe("prompt delivery classification", () => {
     new ApiError(409, "Prompt delivery is unknown; reconcile history before sending again"),
   ])("marks transport uncertainty as ambiguous for %s", async (error) => {
     const send = vi.spyOn(api, "submitPrompt").mockRejectedValue(error);
-    const history = vi.spyOn(api, "sessionHistory").mockResolvedValue({ items: [] });
+    const history = vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      items: [], sessionStatus: "streaming", activeOperation: null,
+    });
     await submitPrompt("Mensaje importante");
     const state = useAppStore.getState();
     const userMessage = state.messages.find((message) => message.role === "user");
@@ -47,7 +49,9 @@ describe("prompt delivery classification", () => {
 
   it("marks an explicit non-ambiguous 4xx response as failed", async () => {
     const send = vi.spyOn(api, "submitPrompt").mockRejectedValue(new ApiError(422, "Prompt inválido"));
-    const history = vi.spyOn(api, "sessionHistory").mockResolvedValue({ items: [] });
+    const history = vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      items: [], sessionStatus: "ready", activeOperation: null,
+    });
     await submitPrompt("Mensaje inválido");
     const state = useAppStore.getState();
     expect(state.messages.find((message) => message.role === "user")?.delivery).toBe("failed");

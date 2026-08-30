@@ -1193,7 +1193,38 @@ async def session_history(
 ) -> dict[str, Any]:
     service = SessionService(services(request))
     row = service.owned(db, user, session_id)
-    return {"items": await service.history(db, user, row)}
+    history = await service.history(db, user, row)
+    active_operation = db.scalar(
+        select(IdempotencyOperation)
+        .where(
+            IdempotencyOperation.user_id == user.id,
+            IdempotencyOperation.scope == f"session:{row.id}:prompt",
+            IdempotencyOperation.status.in_(
+                ("pending", "accepted", "streaming", "delivery_unknown")
+            ),
+        )
+        .order_by(IdempotencyOperation.created_at.desc())
+        .limit(1)
+    )
+    active_response = dict(active_operation.response_json or {}) if active_operation else {}
+    accepted_at = active_response.get("acceptedAt")
+    if not isinstance(accepted_at, str) or len(accepted_at) > 100:
+        accepted_at = None
+    return {
+        "items": history,
+        # These two bounded fields let a restarted/evicted PWA reconstruct the
+        # in-flight response without retaining prompt text in browser storage.
+        "sessionStatus": row.status,
+        "activeOperation": (
+            {
+                "operationId": active_operation.idempotency_key,
+                "status": active_operation.status,
+                "acceptedAt": accepted_at,
+            }
+            if active_operation is not None
+            else None
+        ),
+    }
 
 
 @router.get("/sessions/{session_id}/media/{media_id}")

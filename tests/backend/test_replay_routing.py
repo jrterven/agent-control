@@ -235,6 +235,7 @@ async def test_prompt_timeout_after_dispatch_is_delivery_unknown(monkeypatch):
     with pytest.raises(RuntimeError, match="^PROMPT_DELIVERY_UNKNOWN$"):
         await provider.submit_prompt(route, "do this once", operation_id="op-once")
 
+    assert provider._reattach_routes["stored"] == route
     await provider.close()
 
 
@@ -274,6 +275,7 @@ async def test_gateway_epoch_is_applied_to_session_cursor_and_forces_reconciliat
     )
     route = SessionRoute("g1", "default", "stored", "runtime")
     provider._remember_route(route)
+    provider._mark_route_for_reattach(route)
     await provider._on_event(
         NormalizedEvent.create(
             type="gateway.ready",
@@ -297,19 +299,154 @@ async def test_gateway_epoch_is_applied_to_session_cursor_and_forces_reconciliat
         provider.rpc,
         "request",
         AsyncMock(
-            return_value={
-                "events": [],
-                "latest_seq": 0,
-                "truncated": False,
-                "epoch": "epoch-new",
-            }
+            side_effect=[
+                {
+                    "session_id": "runtime",
+                    "stored_session_id": "stored",
+                    "status": "streaming",
+                },
+                {
+                    "events": [],
+                    "latest_seq": 0,
+                    "truncated": False,
+                    "epoch": "epoch-new",
+                },
+            ]
         ),
     )
 
     await provider._recover_after_reconnect()
 
+    assert [call.args[0] for call in provider.rpc.request.await_args_list] == [
+        "session.resume",
+        "session.events.since",
+    ]
     reconcile = [item for item in emitted if item.type == "control.reconcile"]
     assert reconcile and reconcile[-1].data["reason"] == "epoch_changed"
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_reattaches_runtime_even_without_a_replay_cursor(monkeypatch):
+    emitted: list[NormalizedEvent] = []
+
+    async def collect(item: NormalizedEvent) -> None:
+        emitted.append(item)
+
+    provider = HermesGatewayProvider(
+        ProviderConnection("g1", "default", "http://x", "ws://x"), collect
+    )
+    route = SessionRoute("g1", "default", "stored", "runtime")
+    provider._remember_route(route)
+    provider._mark_route_for_reattach(route)
+    request = AsyncMock(
+        return_value={
+            "session_id": "runtime",
+            "stored_session_id": "stored",
+            "status": "streaming",
+        }
+    )
+    monkeypatch.setattr(provider.rpc, "request", request)
+
+    await provider._recover_after_reconnect()
+
+    request.assert_awaited_once_with(
+        "session.resume",
+        {
+            "session_id": "stored",
+            "stored_session_id": "stored",
+            "omit_messages": True,
+        },
+        timeout=15,
+    )
+    assert provider._routes["runtime"] == route
+    assert provider._route_generations["runtime"] == provider.runtime_generation
+    reconcile = [item for item in emitted if item.type == "control.reconcile"]
+    assert len(reconcile) == 1
+    assert reconcile[0].runtime_session_id == "runtime"
+    assert reconcile[0].data == {
+        "reason": "cursor_unavailable",
+        "historyRequired": True,
+    }
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_does_not_resume_an_idle_remembered_route(monkeypatch):
+    provider = HermesGatewayProvider(
+        ProviderConnection("g1", "default", "http://x", "ws://x")
+    )
+    provider._remember_route(
+        SessionRoute("g1", "default", "stored-idle", "runtime-idle")
+    )
+    request = AsyncMock()
+    monkeypatch.setattr(provider.rpc, "request", request)
+
+    await provider._recover_after_reconnect()
+
+    request.assert_not_awaited()
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_terminal_event_removes_runtime_from_reconnect_set():
+    provider = HermesGatewayProvider(
+        ProviderConnection("g1", "default", "http://x", "ws://x")
+    )
+    route = SessionRoute("g1", "default", "stored-active", "runtime-active")
+    provider._remember_route(route)
+    provider._mark_route_for_reattach(route)
+
+    await provider._on_event(
+        NormalizedEvent.create(
+            type="message.complete",
+            gateway_id="g1",
+            profile_name="default",
+            runtime_session_id="runtime-active",
+        )
+    )
+
+    assert "stored-active" not in provider._reattach_routes
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_reanchors_a_replaced_runtime_and_rehydrates(monkeypatch):
+    emitted: list[NormalizedEvent] = []
+
+    async def collect(item: NormalizedEvent) -> None:
+        emitted.append(item)
+
+    provider = HermesGatewayProvider(
+        ProviderConnection("g1", "default", "http://x", "ws://x"), collect
+    )
+    old_route = SessionRoute("g1", "default", "stored", "runtime-old")
+    provider._remember_route(old_route)
+    provider._mark_route_for_reattach(old_route)
+    provider._cursors["runtime-old"] = (9, "epoch-old")
+    request = AsyncMock(
+        return_value={
+            "session_id": "runtime-new",
+            "stored_session_id": "stored",
+            "status": "idle",
+        }
+    )
+    monkeypatch.setattr(provider.rpc, "request", request)
+
+    await provider._recover_after_reconnect()
+
+    request.assert_awaited_once()
+    assert "runtime-old" not in provider._routes
+    assert "runtime-old" not in provider._cursors
+    assert provider._routes["runtime-new"].stored_session_id == "stored"
+    assert provider._route_generations["runtime-new"] == provider.runtime_generation
+    reconcile = [item for item in emitted if item.type == "control.reconcile"]
+    assert len(reconcile) == 1
+    assert reconcile[0].runtime_session_id == "runtime-new"
+    assert reconcile[0].data == {
+        "reason": "runtime_replaced",
+        "historyRequired": True,
+    }
     await provider.close()
 
 

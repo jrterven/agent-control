@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { advanceReplayCursor, api } from "../lib/api";
+import {
+  advanceReplayCursor,
+  api,
+  REALTIME_BACKGROUND_RECONNECT_MS,
+  shouldReconnectRealtimeAfterBackground,
+} from "../lib/api";
 
 describe("browser API boundary", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -279,5 +284,24 @@ describe("browser API boundary", () => {
   it("resets sequence watermarks when the replay epoch changes", () => {
     expect(advanceReplayCursor({ seq: 12, epoch: "epoch-a" }, 8, "epoch-a")).toEqual({ seq: 12, epoch: "epoch-a" });
     expect(advanceReplayCursor({ seq: 12, epoch: "epoch-a" }, 2, "epoch-b")).toEqual({ seq: 2, epoch: "epoch-b" });
+  });
+
+  it("keeps short mobile background transitions and replaces stale sockets on return", () => {
+    const lastSeen = 1_000;
+    expect(shouldReconnectRealtimeAfterBackground(
+      lastSeen,
+      lastSeen + REALTIME_BACKGROUND_RECONNECT_MS,
+      "visible",
+    )).toBe(false);
+    expect(shouldReconnectRealtimeAfterBackground(
+      lastSeen,
+      lastSeen + REALTIME_BACKGROUND_RECONNECT_MS + 1,
+      "hidden",
+    )).toBe(false);
+    expect(shouldReconnectRealtimeAfterBackground(
+      lastSeen,
+      lastSeen + REALTIME_BACKGROUND_RECONNECT_MS + 1,
+      "visible",
+    )).toBe(true);
   });
 });

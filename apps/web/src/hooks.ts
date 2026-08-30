@@ -30,6 +30,9 @@ import type {
 } from "./types";
 
 const unmatchedEvents = new Map<string, RealtimeEvent[]>();
+const unmatchedSessionEvents = new Map<string, RealtimeEvent[]>();
+const rehydrationGenerations = new Map<string, number>();
+let nextRehydrationGeneration = 0;
 
 function bufferUnmatchedEvent(operationId: string, event: RealtimeEvent) {
   const existing = unmatchedEvents.get(operationId) ?? [];
@@ -40,6 +43,17 @@ function bufferUnmatchedEvent(operationId: string, event: RealtimeEvent) {
     const oldest = unmatchedEvents.keys().next().value;
     if (typeof oldest !== "string") break;
     unmatchedEvents.delete(oldest);
+  }
+}
+
+function bufferUnmatchedSessionEvent(sessionId: string, event: RealtimeEvent) {
+  const existing = unmatchedSessionEvents.get(sessionId) ?? [];
+  unmatchedSessionEvents.delete(sessionId);
+  unmatchedSessionEvents.set(sessionId, [...existing, event].slice(-100));
+  while (unmatchedSessionEvents.size > 256) {
+    const oldest = unmatchedSessionEvents.keys().next().value;
+    if (typeof oldest !== "string") break;
+    unmatchedSessionEvents.delete(oldest);
   }
 }
 
@@ -267,6 +281,19 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   if (event.type === "session.usage") return Boolean(usageSessionId && hasUsageSnapshot);
   if (!messageId) {
     if (operationId) bufferUnmatchedEvent(operationId, event);
+    else if (
+      routeSessionId
+      && (
+        event.type.startsWith("message.")
+        || event.type.startsWith("tool.")
+        || terminalStreamEvent
+      )
+    ) {
+      // A mobile OS may evict the PWA process while Hermes continues. Keep
+      // route-scoped frames until history reconstructs the active response.
+      bufferUnmatchedSessionEvent(routeSessionId, event);
+    }
+    if (terminalStreamEvent && routeSessionId) void rehydrateSession(routeSessionId);
     return terminalStreamEvent || Boolean(usageSessionId && hasUsageSnapshot);
   }
   if (event.type === "message.delta") {
@@ -284,6 +311,7 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
         .filter(([, pendingMessageId]) => pendingMessageId === messageId)
         .forEach(([pendingOperationId]) => state.clearOperation(pendingOperationId));
     }
+    if (completedSessionId) void rehydrateSession(completedSessionId);
     return true;
   }
   if (event.type.startsWith("tool.")) {
@@ -455,12 +483,81 @@ function historyMessages(sessionId: string, items: Record<string, unknown>[]): C
   return messages;
 }
 
-async function rehydrateSession(sessionId: string) {
+export async function rehydrateSession(sessionId: string) {
+  nextRehydrationGeneration += 1;
+  const generation = nextRehydrationGeneration;
+  rehydrationGenerations.delete(sessionId);
+  rehydrationGenerations.set(sessionId, generation);
+  while (rehydrationGenerations.size > 256) {
+    const oldest = rehydrationGenerations.keys().next().value;
+    if (typeof oldest !== "string") break;
+    rehydrationGenerations.delete(oldest);
+  }
   try {
     const history = await api.sessionHistory(sessionId);
+    // Reconnect, replay and terminal events can all request history at nearly
+    // the same time. Never let a slower, older active snapshot overwrite a
+    // newer terminal transcript.
+    if (rehydrationGenerations.get(sessionId) !== generation) return;
     const messages = historyMessages(sessionId, history.items);
+    const state = useAppStore.getState();
+    const activeOperation = history.activeOperation;
+    const operationIsActive = Boolean(
+      activeOperation
+      && typeof activeOperation.operationId === "string"
+      && activeOperation.operationId.length > 0
+      && activeOperation.operationId.length <= 200
+      && ["pending", "accepted", "streaming", "delivery_unknown"].includes(activeOperation.status),
+    );
+
+    if (operationIsActive && activeOperation) {
+      const existingStreamId = state.streamingBySession[sessionId];
+      const existingStream = existingStreamId
+        ? state.messages.find((message) => (
+          message.id === existingStreamId && message.sessionId === sessionId
+        ))
+        : undefined;
+      const streamId = existingStream?.id
+        ?? `recovered-${sessionId}-${activeOperation.operationId}`;
+      if (!existingStream) {
+        messages.push({
+          id: streamId,
+          sessionId,
+          role: "assistant",
+          content: "",
+          createdAt: "",
+          streaming: true,
+        });
+      }
+      state.setMessagesForSession(sessionId, messages);
+      state.setStreamingMessageId(sessionId, streamId);
+      state.bindOperation(activeOperation.operationId, streamId);
+
+      const buffered = [
+        ...(unmatchedEvents.get(activeOperation.operationId) ?? []),
+        ...(unmatchedSessionEvents.get(sessionId) ?? []),
+      ];
+      unmatchedEvents.delete(activeOperation.operationId);
+      unmatchedSessionEvents.delete(sessionId);
+      buffered.forEach(applyRealtimeEvent);
+      return;
+    }
+
+    const staleStreamId = state.streamingBySession[sessionId];
+    if (staleStreamId) {
+      state.updateMessage(staleStreamId, { streaming: false });
+      state.setStreamingMessageId(sessionId, undefined);
+      Object.entries(state.pendingOperations)
+        .filter(([, messageId]) => messageId === staleStreamId)
+        .forEach(([operationId]) => {
+          state.clearOperation(operationId);
+          unmatchedEvents.delete(operationId);
+        });
+    }
+    unmatchedSessionEvents.delete(sessionId);
     useAppStore.getState().setMessagesForSession(sessionId, messages);
   } catch {
+    if (rehydrationGenerations.get(sessionId) !== generation) return;
     const state = useAppStore.getState();
     const workspaceId = state.sessions.find((session) => session.id === sessionId)?.workspaceId;
     if (state.offlineCacheEnabled && workspaceId) {

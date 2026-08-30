@@ -180,7 +180,10 @@ service `com.agent-control.hermes-dashboard`; never place it in a plist, shell
 history, frontend variable or repository file. The launchd jobs run as the
 signed-in macOS user and require no sudo. They keep `hermes serve` and the SSH
 tunnel independently restartable and use SSH keepalives to recover after a
-Tailscale or network interruption.
+Tailscale or network interruption. The Hermes service template also keeps a
+detached in-flight session alive for five minutes, giving Control time to
+reconnect and issue `session.resume`; the window is bounded so permanently
+abandoned runtimes are still reclaimed.
 
 Register the gateway in Control with URLs that are local from the backend's
 perspective, for example `http://127.0.0.1:29119` and

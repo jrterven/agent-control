@@ -67,6 +67,38 @@ _MAX_AUTOMATIONS = 1_000
 _MAX_ADMIN_ROWS = 2_000
 _MAX_SEARCH_RESULTS = 100
 
+_ACTIVE_RUNTIME_STATUSES = frozenset(
+    {
+        "pending",
+        "queued",
+        "accepted",
+        "starting",
+        "streaming",
+        "running",
+        "working",
+        "waiting",
+    }
+)
+_TERMINAL_RUNTIME_EVENTS = frozenset(
+    {
+        "message.complete",
+        "message.completed",
+        "message.done",
+        "message.error",
+        "message.failed",
+        "message.interrupted",
+        "message.cancelled",
+        "run.completed",
+        "run.error",
+        "run.failed",
+        "run.interrupted",
+        "run.cancelled",
+        "session.interrupted",
+        "error",
+        "interrupted",
+    }
+)
+
 
 def _bounded_text(value: Any, *, label: str, max_length: int) -> str:
     text = str(value or "").strip()
@@ -409,6 +441,10 @@ class HermesGatewayProvider:
         self._routes: OrderedDict[str, SessionRoute] = OrderedDict()
         self._route_generations: OrderedDict[str, str] = OrderedDict()
         self._cursors: OrderedDict[str, tuple[int, str | None]] = OrderedDict()
+        # Only runtimes with an unresolved turn need transport ownership after
+        # a reconnect. Keeping this set separate prevents one tunnel flap from
+        # eagerly resuming every idle chat the process has ever opened.
+        self._reattach_routes: OrderedDict[str, SessionRoute] = OrderedDict()
         self._max_remembered_routes = 2_048
         self._gateway_epoch: str | None = None
         self._supervisor: asyncio.Task[None] | None = None
@@ -590,8 +626,25 @@ class HermesGatewayProvider:
                 event.replay_epoch or self._gateway_epoch,
             )
             self._cursors.move_to_end(cursor_key)
+        if event.type in _TERMINAL_RUNTIME_EVENTS:
+            stored_session_id = event.stored_session_id or (
+                route.stored_session_id if route is not None else None
+            )
+            if stored_session_id:
+                self._reattach_routes.pop(stored_session_id, None)
         if self.event_sink is not None:
             await self.event_sink(event)
+
+    def _mark_route_for_reattach(self, route: SessionRoute) -> None:
+        if not route.runtime_session_id:
+            return
+        self._reattach_routes.pop(route.stored_session_id, None)
+        self._reattach_routes[route.stored_session_id] = route
+        while len(self._reattach_routes) > self._max_remembered_routes:
+            self._reattach_routes.popitem(last=False)
+
+    def _clear_route_for_reattach(self, stored_session_id: str) -> None:
+        self._reattach_routes.pop(stored_session_id, None)
 
     def _remember_route(
         self, route: SessionRoute, *, generation: str | None = None
@@ -613,6 +666,8 @@ class HermesGatewayProvider:
             )
             self._routes.move_to_end(route.runtime_session_id)
             self._route_generations.move_to_end(route.runtime_session_id)
+            if route.stored_session_id in self._reattach_routes:
+                self._mark_route_for_reattach(route)
             while len(self._routes) > self._max_remembered_routes:
                 old_runtime, _ = self._routes.popitem(last=False)
                 self._route_generations.pop(old_runtime, None)
@@ -621,65 +676,133 @@ class HermesGatewayProvider:
                 self._cursors.popitem(last=False)
 
     async def _recover_after_reconnect(self) -> None:
+        """Reattach every active Hermes runtime before replaying events.
+
+        Hermes deliberately detaches sessions from a dashboard WebSocket when
+        that transport disappears.  A new socket alone is not enough to keep
+        an in-flight turn alive: ``session.resume`` must bind the live runtime
+        to the replacement transport before Hermes' orphan grace expires.
+
+        The browser is not part of this lifecycle.  Control owns the upstream
+        connection and therefore performs the reattachment even when no PWA is
+        currently connected.  Event replay remains a second, independent step
+        used to repair Control's projection after the runtime is safe again.
+        """
         normalizer = EventNormalizer(
             gateway_id=self.connection.gateway_id,
             profile_name=self.connection.profile_name,
         )
-        for route in list(self._routes.values()):
+        # Most recently submitted work goes first so a burst of independent
+        # sessions cannot consume the orphan grace before the newest turn is
+        # rebound. Idle remembered routes are intentionally excluded.
+        for route in list(reversed(self._reattach_routes.values())):
             if not route.runtime_session_id:
                 continue
-            last_seq, previous_epoch = self._cursors.get(route.runtime_session_id, (0, None))
-            if not last_seq:
-                self._routes.pop(route.runtime_session_id, None)
-                self._route_generations.pop(route.runtime_session_id, None)
-                self._cursors.pop(route.runtime_session_id, None)
-                if self.event_sink is not None:
-                    await self.event_sink(
-                        NormalizedEvent.create(
-                            type="control.reconcile",
-                            gateway_id=route.gateway_id,
-                            profile_name=route.profile_name,
-                            stored_session_id=route.stored_session_id,
-                            runtime_generation=self.runtime_generation,
-                            data={
-                                "reason": "connection_generation_changed",
-                                "historyRequired": True,
-                            },
-                        )
-                    )
-                continue
+            previous_runtime_id = route.runtime_session_id
+            last_seq, previous_epoch = self._cursors.get(
+                previous_runtime_id, (0, None)
+            )
             reconciliation_reason: str | None = None
+            attached_route: SessionRoute | None = None
             try:
-                raw = await self.rpc.request(
-                    "session.events.since",
-                    {"session_id": route.runtime_session_id, "last_seen": last_seq},
+                resumed_raw = await self.rpc.request(
+                    "session.resume",
+                    {
+                        "session_id": route.stored_session_id,
+                        "stored_session_id": route.stored_session_id,
+                        # Reconnection needs the transport binding, not another
+                        # potentially large transcript copy. History is fetched
+                        # through Control's bounded read endpoint when required.
+                        "omit_messages": True,
+                    },
                     timeout=15,
                 )
-                if not isinstance(raw, Mapping):
-                    reconciliation_reason = "invalid_replay"
+                if not isinstance(resumed_raw, Mapping):
+                    raise UpstreamPayloadError(
+                        "Hermes resumed session must be an object"
+                    )
+                resumed = self._session(dict(resumed_raw))
+                if resumed.stored_session_id != route.stored_session_id:
+                    raise UpstreamPayloadError(
+                        "Hermes reattached a different stored session"
+                    )
+                if not resumed.runtime_session_id:
+                    raise UpstreamPayloadError(
+                        "Hermes resumed session has no runtime identity"
+                    )
+                attached_route = SessionRoute(
+                    route.gateway_id,
+                    route.profile_name,
+                    resumed.stored_session_id,
+                    resumed.runtime_session_id,
+                )
+                self._remember_route(
+                    attached_route, generation=self.runtime_generation
+                )
+                if resumed.status in _ACTIVE_RUNTIME_STATUSES:
+                    self._mark_route_for_reattach(attached_route)
                 else:
-                    epoch = str(raw.get("epoch")) if raw.get("epoch") is not None else None
-                    if bool(raw.get("truncated")):
-                        reconciliation_reason = "buffer_truncated"
-                    elif epoch and previous_epoch != epoch:
-                        reconciliation_reason = "epoch_changed"
-                    if epoch:
-                        self._gateway_epoch = epoch
-                    if reconciliation_reason != "epoch_changed":
-                        self._route_generations[
-                            route.runtime_session_id
-                        ] = self.runtime_generation
-                        for item in raw.get("events", []) if isinstance(raw.get("events"), list) else []:
-                            if isinstance(item, Mapping):
-                                await self._on_event(normalizer.normalize(item))
-            except (JsonRpcError, JsonRpcDisconnected, OSError, TimeoutError):
-                reconciliation_reason = "runtime_stale"
+                    self._clear_route_for_reattach(route.stored_session_id)
+                await self._emit_resumed_interactions(resumed_raw, resumed)
+
+                if attached_route.runtime_session_id != previous_runtime_id:
+                    self._cursors.pop(previous_runtime_id, None)
+                    reconciliation_reason = "runtime_replaced"
+                elif not last_seq:
+                    # The runtime is now safely attached, but Control has no
+                    # replay boundary for it. Durable history is authoritative.
+                    reconciliation_reason = "cursor_unavailable"
+                else:
+                    raw = await self.rpc.request(
+                        "session.events.since",
+                        {
+                            "session_id": attached_route.runtime_session_id,
+                            "last_seen": last_seq,
+                        },
+                        timeout=15,
+                    )
+                    if not isinstance(raw, Mapping):
+                        reconciliation_reason = "invalid_replay"
+                    else:
+                        epoch = (
+                            str(raw.get("epoch"))
+                            if raw.get("epoch") is not None
+                            else None
+                        )
+                        if bool(raw.get("truncated")):
+                            reconciliation_reason = "buffer_truncated"
+                        elif epoch and previous_epoch != epoch:
+                            reconciliation_reason = "epoch_changed"
+                        if epoch:
+                            self._gateway_epoch = epoch
+                        if reconciliation_reason != "epoch_changed":
+                            for item in (
+                                raw.get("events", [])
+                                if isinstance(raw.get("events"), list)
+                                else []
+                            ):
+                                if isinstance(item, Mapping):
+                                    await self._on_event(
+                                        normalizer.normalize(item)
+                                    )
+            except (
+                JsonRpcError,
+                JsonRpcDisconnected,
+                OSError,
+                TimeoutError,
+                UpstreamPayloadError,
+            ):
+                reconciliation_reason = (
+                    "replay_unavailable"
+                    if attached_route is not None
+                    else "runtime_stale"
+                )
             if reconciliation_reason and self.event_sink is not None:
-                runtime_is_valid = reconciliation_reason == "buffer_truncated"
-                if not runtime_is_valid and route.runtime_session_id:
-                    self._routes.pop(route.runtime_session_id, None)
-                    self._route_generations.pop(route.runtime_session_id, None)
-                    self._cursors.pop(route.runtime_session_id, None)
+                runtime_is_valid = attached_route is not None
+                if not runtime_is_valid:
+                    self._routes.pop(previous_runtime_id, None)
+                    self._route_generations.pop(previous_runtime_id, None)
+                    self._cursors.pop(previous_runtime_id, None)
                 await self.event_sink(
                     NormalizedEvent.create(
                         type="control.reconcile",
@@ -687,7 +810,9 @@ class HermesGatewayProvider:
                         profile_name=route.profile_name,
                         stored_session_id=route.stored_session_id,
                         runtime_session_id=(
-                            route.runtime_session_id if runtime_is_valid else None
+                            attached_route.runtime_session_id
+                            if runtime_is_valid and attached_route is not None
+                            else None
                         ),
                         runtime_generation=self.runtime_generation,
                         data={
@@ -1184,6 +1309,15 @@ class HermesGatewayProvider:
             self._remember_route(
                 SessionRoute(self.connection.gateway_id, self.connection.profile_name, session.stored_session_id, session.runtime_session_id)
             )
+            if session.status in _ACTIVE_RUNTIME_STATUSES and session.runtime_session_id:
+                self._mark_route_for_reattach(
+                    SessionRoute(
+                        self.connection.gateway_id,
+                        self.connection.profile_name,
+                        session.stored_session_id,
+                        session.runtime_session_id,
+                    )
+                )
             await self._emit_resumed_interactions(raw, session)
             return session
         except (ConnectionError, OSError, TimeoutError):
@@ -1362,6 +1496,9 @@ class HermesGatewayProvider:
         route_generation = expected_runtime_generation or self.runtime_generation
         rpc_generation = self._rpc_generation_for(route_generation)
         self._remember_route(route, generation=route_generation)
+        # Mark before dispatch: a missing prompt.submit reply is ambiguous and
+        # may mean Hermes already started the turn on this transport.
+        self._mark_route_for_reattach(route)
         try:
             raw = await self.rpc.request(
                 "prompt.submit",
@@ -1375,6 +1512,7 @@ class HermesGatewayProvider:
                 expected_generation=rpc_generation,
             )
         except JsonRpcGenerationChanged as exc:
+            self._clear_route_for_reattach(route.stored_session_id)
             raise RuntimeGenerationChanged(
                 "Hermes reconnected before prompt dispatch"
             ) from exc
@@ -1384,6 +1522,8 @@ class HermesGatewayProvider:
             # Never downgrade this to a normal failure or retry it.
             raise RuntimeError("PROMPT_DELIVERY_UNKNOWN") from exc
         status = raw.get("status", "streaming") if isinstance(raw, dict) else "streaming"
+        if str(status) not in _ACTIVE_RUNTIME_STATUSES:
+            self._clear_route_for_reattach(route.stored_session_id)
         return PromptReceipt(operation_id=operation_id, status=status)
 
     async def interrupt(
@@ -1414,6 +1554,7 @@ class HermesGatewayProvider:
             ) from exc
         except (JsonRpcDisconnected, ConnectionError, OSError, TimeoutError) as exc:
             raise RuntimeError("INTERRUPT_DELIVERY_UNKNOWN") from exc
+        self._clear_route_for_reattach(route.stored_session_id)
 
     async def respond_approval(
         self,

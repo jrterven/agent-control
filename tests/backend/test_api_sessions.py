@@ -259,6 +259,61 @@ def test_prompt_operation_is_queryable_and_closed_by_terminal_event(authenticate
         assert db.get(SessionLink, session["id"]).status == "ready"
 
 
+def test_history_exposes_active_operation_for_pwa_process_recovery(authenticated):
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "pwa-recovery-session")
+    operation_id = "pwa-recovery-operation"
+    accepted_at = "2026-08-30T20:15:00+00:00"
+
+    with client.app.state.session_factory() as db:
+        row = db.get(SessionLink, session["id"])
+        row.status = "streaming"
+        db.add(
+            IdempotencyOperation(
+                user_id=row.owner_id,
+                scope=f"session:{row.id}:prompt",
+                idempotency_key=operation_id,
+                status="streaming",
+                response_json={
+                    "operationId": operation_id,
+                    "status": "streaming",
+                    "acceptedAt": accepted_at,
+                },
+            )
+        )
+        db.commit()
+
+    active = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert active.status_code == 200, active.text
+    assert active.json() == {
+        "items": [],
+        "sessionStatus": "streaming",
+        "activeOperation": {
+            "operationId": operation_id,
+            "status": "streaming",
+            "acceptedAt": accepted_at,
+        },
+    }
+
+    with client.app.state.session_factory() as db:
+        row = db.get(SessionLink, session["id"])
+        operation = db.scalar(
+            select(IdempotencyOperation).where(
+                IdempotencyOperation.user_id == row.owner_id,
+                IdempotencyOperation.scope == f"session:{row.id}:prompt",
+                IdempotencyOperation.idempotency_key == operation_id,
+            )
+        )
+        operation.status = "completed"
+        row.status = "ready"
+        db.commit()
+
+    settled = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert settled.status_code == 200, settled.text
+    assert settled.json()["sessionStatus"] == "ready"
+    assert settled.json()["activeOperation"] is None
+
+
 def test_second_prompt_is_rejected_while_the_session_has_an_unresolved_operation(
     authenticated,
 ):
