@@ -1,13 +1,72 @@
 import { expect, test } from "./fixtures";
 
-test("ofrece recuperación visible si el bundle no puede iniciar", async ({ page }, testInfo) => {
+async function writeBootRecoveryMarker(page: import("@playwright/test").Page) {
+  await page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("agent-control-boot-recovery-e2e", 1);
+      request.onupgradeneeded = () => request.result.createObjectStore("markers");
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction("markers", "readwrite");
+      transaction.objectStore("markers").put("preserved", "draft");
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+    database.close();
+    const cache = await caches.open("agent-control-boot-recovery-e2e");
+    await cache.put("/stale-shell-marker", new Response("stale"));
+  });
+}
+
+async function bootRecoveryMarkerExists(page: import("@playwright/test").Page) {
+  return page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("agent-control-boot-recovery-e2e", 1);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+    });
+    const marker = await new Promise<unknown>((resolve, reject) => {
+      const request = database.transaction("markers", "readonly").objectStore("markers").get("draft");
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+    });
+    database.close();
+    return marker === "preserved";
+  });
+}
+
+async function bootRecoveryCacheExists(page: import("@playwright/test").Page) {
+  return page.evaluate(async () => (await caches.keys()).includes("agent-control-boot-recovery-e2e"));
+}
+
+test("ofrece recuperación visible si el bundle no puede iniciar y conserva IndexedDB", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-mobile", "El arranque fallido se valida una vez en Chromium móvil");
 
   await page.route("**/assets/*.js", (route) => route.abort());
   await page.goto("/chats", { waitUntil: "domcontentloaded" });
 
-  await expect(page.getByText("Iniciando Agent Control…")).toBeVisible();
-  await page.evaluate(() => window.dispatchEvent(new Event("error")));
+  await expect(page.getByText("La app no pudo iniciar. Tus borradores locales se conservarán.")).toBeVisible();
+  const repair = page.getByRole("button", { name: "Reparar y recargar" });
+  await expect(repair).toBeVisible();
+
+  await writeBootRecoveryMarker(page);
+  await repair.click();
+  await page.waitForURL((url) => url.searchParams.has("app-recovery"));
+  await expect.poll(() => bootRecoveryMarkerExists(page)).toBe(true);
+  await expect.poll(() => bootRecoveryCacheExists(page)).toBe(false);
+});
+
+test("reactiva la recuperación tras un fallo fatal posterior al montaje", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-mobile", "La recuperación fatal se valida una vez en Chromium móvil");
+
+  await page.goto("/chats");
+  await expect(page.getByText("La sesión está aislada y lista para continuar.")).toBeVisible();
+  await expect(page.locator("[data-agent-control-boot]")).toBeHidden();
+
+  await page.evaluate(() => window.dispatchEvent(new Event("agent-control:fatal")));
+
   await expect(page.getByText("La app no pudo iniciar. Tus borradores locales se conservarán.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Reparar y recargar" })).toBeVisible();
 });

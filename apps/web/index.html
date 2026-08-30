@@ -11,6 +11,10 @@
     <title>Agent Control</title>
     <style>
       .boot-fallback {
+        position: fixed;
+        z-index: 2147483647;
+        inset: 0;
+        min-height: 100vh;
         min-height: 100dvh;
         display: grid;
         place-content: center;
@@ -35,20 +39,20 @@
         font: inherit;
         font-weight: 700;
       }
+      .boot-fallback[hidden] { display: none; }
       .boot-fallback__recovery[hidden] { display: none; }
     </style>
   </head>
   <body>
-    <div id="root">
-      <main class="boot-fallback" data-agent-control-boot aria-live="polite">
-        <img class="boot-fallback__mark" src="/favicon.svg" alt="" />
-        <p class="boot-fallback__status" data-agent-control-boot-status>Starting Agent Control…</p>
-        <button class="boot-fallback__recovery" data-agent-control-boot-recovery type="button" hidden>
-          Repair and reload
-        </button>
-      </main>
-    </div>
-    <script src="/boot-recovery.js" defer></script>
+    <main class="boot-fallback" data-agent-control-boot aria-live="polite">
+      <img class="boot-fallback__mark" src="/favicon.svg" alt="" />
+      <p class="boot-fallback__status" data-agent-control-boot-status>Starting Agent Control…</p>
+      <button class="boot-fallback__recovery" data-agent-control-boot-recovery type="button" hidden>
+        Repair and reload
+      </button>
+    </main>
+    <div id="root"></div>
+    <script src="/boot-recovery.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

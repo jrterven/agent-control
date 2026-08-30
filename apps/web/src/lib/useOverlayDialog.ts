@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { subscribeToMediaQuery } from "./mediaQuery";
 
 const focusableSelector = [
   "a[href]",
@@ -40,8 +41,7 @@ export function useOverlayDialog<T extends HTMLElement>({ open, onClose, mediaQu
     if (!media) return;
     const update = () => setIsOverlay(media.matches);
     update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
+    return subscribeToMediaQuery(media, update);
   }, [mediaQuery]);
 
   useEffect(() => {

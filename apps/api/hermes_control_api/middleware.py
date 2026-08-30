@@ -339,9 +339,9 @@ class SecurityBoundaryMiddleware(BaseHTTPMiddleware):
             "camera=(), microphone=(self), geolocation=()"
         )
         path = request.url.path
-        if path.startswith("/api/"):
+        if path.startswith("/api/") or response.status_code >= 400:
             response.headers["Cache-Control"] = "no-store"
-        elif path == "/sw.js" or path.endswith(".webmanifest") or path.endswith(".html") or "." not in path.rsplit("/", 1)[-1]:
+        elif path in {"/sw.js", "/boot-recovery.js"} or path.endswith(".webmanifest") or path.endswith(".html") or "." not in path.rsplit("/", 1)[-1]:
             response.headers["Cache-Control"] = "no-cache"
         elif path.startswith("/assets/"):
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"

@@ -16,6 +16,7 @@ import {
 } from "./lib/db";
 import { useAppStore } from "./store/appStore";
 import i18n, { getCurrentLanguage } from "./i18n";
+import { subscribeToMediaQuery } from "./lib/mediaQuery";
 import type {
   ApprovalChoice,
   ApprovalRequest,
@@ -727,9 +728,9 @@ export function useThemePreference() {
       document.documentElement.style.colorScheme = resolved;
     };
     apply();
-    media.addEventListener("change", apply);
+    const unsubscribe = subscribeToMediaQuery(media, apply);
     if (hydrated.current) void savePreference("theme", theme);
-    return () => media.removeEventListener("change", apply);
+    return unsubscribe;
   }, [theme]);
 }
 

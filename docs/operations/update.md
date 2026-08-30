@@ -25,12 +25,17 @@ version, and activation is deferred while dictation, speech playback, streaming
 or an unsent draft is active. After activation, confirm that the same Control conversation
 is selected and that no API response entered the service-worker cache.
 
-Keep the immediately preceding release's hashed frontend assets available while
-rolling out the new shell. This prevents a still-open client from requesting a
-chunk that disappeared during the symlink switch. Also test the bundle-failure
-path: the static startup shell must remain visible and offer **Repair and
-reload**; that repair may delete service-worker Cache Storage but must not clear
-IndexedDB drafts or offline snapshots.
+Keep the immediately preceding immutable release directory installed while
+rolling out the new shell. When the configured static directory follows the
+canonical `releases/<revision>/apps/api/static` layout, Control serves a missing
+`/assets/<hash>` from a sibling release; other missing static files return 404
+and are never replaced by cacheable `index.html`. This lets a still-open client
+finish loading the bundle referenced by its older shell. Also test the
+bundle-failure path: the persistent startup shell must remain visible and offer
+**Repair and reload**; that repair may delete service-worker Cache Storage but
+must not clear IndexedDB drafts or offline snapshots. Do not remove the previous
+release until installed clients have had an opportunity to activate the new
+service worker.
 
 For rollback, stop Control and switch back only if the earlier binary supports
 the migrated schema. Otherwise restore the pre-update database first. Never run

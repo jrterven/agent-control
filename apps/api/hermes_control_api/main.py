@@ -63,6 +63,64 @@ def _mark_orphans(session_factory, services: AppServices) -> int:
         return AutomationService(services).mark_orphaned_local_triggers_unknown(db)
 
 
+def _find_sibling_release_asset(static_root: Path, spa_path: str) -> Path | None:
+    """Find a missing hashed asset in another immutable release, if applicable."""
+
+    if not spa_path.startswith("assets/"):
+        return None
+    relative_asset = Path(spa_path.removeprefix("assets/"))
+    if (
+        not relative_asset.parts
+        or relative_asset.is_absolute()
+        or any(part in {"", ".", ".."} for part in relative_asset.parts)
+    ):
+        return None
+
+    try:
+        current_release = static_root.parents[2]
+        releases_root = static_root.parents[3]
+    except IndexError:
+        return None
+    if (
+        releases_root.name != "releases"
+        or static_root != current_release / "apps" / "api" / "static"
+    ):
+        return None
+
+    try:
+        release_entries = [
+            entry
+            for entry in releases_root.iterdir()
+            if entry != current_release and not entry.is_symlink() and entry.is_dir()
+        ]
+    except OSError:
+        return None
+
+    def installed_at(entry: Path) -> int:
+        try:
+            return entry.stat().st_mtime_ns
+        except OSError:
+            return -1
+
+    for release_entry in sorted(release_entries, key=installed_at, reverse=True):
+        try:
+            release_root = release_entry.resolve()
+            assets_root = (release_root / "apps" / "api" / "static" / "assets").resolve()
+        except OSError:
+            continue
+        if release_root not in assets_root.parents or not assets_root.is_dir():
+            continue
+        try:
+            candidate = (assets_root / relative_asset).resolve()
+        except OSError:
+            continue
+        if assets_root not in candidate.parents:
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 class RedactingLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if record.name.startswith("uvicorn"):
@@ -410,6 +468,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return JSONResponse(status_code=404, content={"code": "NOT_FOUND", "message": "File not found"})
             if candidate.is_file():
                 return FileResponse(candidate, media_type=mimetypes.guess_type(candidate.name)[0])
+            sibling_asset = _find_sibling_release_asset(static_root, spa_path)
+            if sibling_asset is not None:
+                return FileResponse(
+                    sibling_asset,
+                    media_type=mimetypes.guess_type(sibling_asset.name)[0],
+                )
+            last_segment = spa_path.rsplit("/", 1)[-1]
+            if spa_path == "assets" or spa_path.startswith("assets/") or "." in last_segment:
+                return JSONResponse(status_code=404, content={"code": "NOT_FOUND", "message": "File not found"})
             return FileResponse(static_root / "index.html", media_type="text/html")
     return app
 
