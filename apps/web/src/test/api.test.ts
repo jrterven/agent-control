@@ -111,14 +111,25 @@ describe("browser API boundary", () => {
   });
 
   it("uses the official session sync contract", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify([{
+      id: "session-automation",
+      gatewayId: "gateway-a",
+      profileName: "default",
+      profileId: "profile-a",
+      automationGenerated: true,
+      storedSessionId: "stored-automation",
+      title: "Automation run",
+      status: "idle",
+      updatedAt: "2026-08-30T12:00:00Z",
+    }]), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
-    await api.syncSessions("gateway-a", "default", "csrf-memory-only");
+    const sessions = await api.syncSessions("gateway-a", "default", "csrf-memory-only");
     const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(path).toBe("/api/v1/sessions/sync");
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({ gatewayId: "gateway-a", profileName: "default" });
     expect(init.headers).toEqual(expect.objectContaining({ "Idempotency-Key": expect.any(String), "X-CSRF-Token": "csrf-memory-only" }));
+    expect(sessions[0].automationGenerated).toBe(true);
   });
 
   it("creates a fresh agent through the same-origin profile boundary", async () => {

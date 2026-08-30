@@ -68,6 +68,7 @@ export type SessionSummary = Pick<SessionRoute, "storedSessionId" | "runtimeSess
   id: string;
   workspaceId?: string;
   profileId: string;
+  automationGenerated?: boolean;
   title: string;
   preview: string;
   updatedAt: string;

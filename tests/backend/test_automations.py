@@ -339,6 +339,19 @@ def test_automation_lifecycle_runs_and_idempotent_replays(authenticated):
     assert run["sessionLinkId"] is not None
     assert run["readAt"] is None
 
+    bootstrap_session = next(
+        session
+        for session in client.get("/api/v1/bootstrap").json()["sessions"]
+        if session["id"] == run["sessionLinkId"]
+    )
+    listed_session = next(
+        session
+        for session in client.get("/api/v1/sessions").json()
+        if session["id"] == run["sessionLinkId"]
+    )
+    assert bootstrap_session["automationGenerated"] is True
+    assert listed_session["automationGenerated"] is True
+
     assert client.post(f"/api/v1/automation-runs/{run['id']}/read").status_code == 403
     read_headers = mutation_headers(csrf, "automation-run-read-once")
     marked_read = client.post(

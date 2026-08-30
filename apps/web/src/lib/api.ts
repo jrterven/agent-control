@@ -130,6 +130,7 @@ type SessionWire = {
   workspaceId?: string | null;
   profileName: string;
   profileId?: string | null;
+  automationGenerated?: boolean;
   storedSessionId: string;
   runtimeSessionId?: string | null;
   title?: string | null;
@@ -182,6 +183,7 @@ function sessionFromWire(row: SessionWire, fallbackProfileId = ""): SessionSumma
     runtimeSessionId: row.runtimeSessionId,
     workspaceId: row.workspaceId ?? undefined,
     profileId: row.profileId ?? fallbackProfileId,
+    automationGenerated: row.automationGenerated === true,
     title: row.title || "Conversación",
     preview: "",
     updatedAt: row.updatedAt,

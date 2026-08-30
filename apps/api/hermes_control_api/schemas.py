@@ -351,6 +351,7 @@ class SessionView(ApiModel):
     workspace_id: str | None
     profile_name: str
     profile_id: str | None = None
+    automation_generated: bool = False
     stored_session_id: str
     runtime_session_id: str | None
     title: str | None

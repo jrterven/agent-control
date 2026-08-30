@@ -279,9 +279,19 @@ def session_view(db: Session, row: SessionLink) -> SessionView:
             ProfileRef.profile_name == row.profile_name,
         )
     )
+    automation_generated = db.scalar(
+        select(AutomationRun.id)
+        .join(Automation, Automation.id == AutomationRun.automation_id)
+        .where(
+            AutomationRun.session_link_id == row.id,
+            Automation.owner_id == row.owner_id,
+        )
+        .limit(1)
+    ) is not None
     return SessionView.model_validate(row).model_copy(
         update={
             "profile_id": profile_id,
+            "automation_generated": automation_generated,
             # A rename is intentionally a Control-side label. Hermes remains
             # the source of truth for the canonical title and conversation.
             "title": row.display_title or row.title,
@@ -520,6 +530,18 @@ def bootstrap(
             .order_by(Automation.updated_at.desc())
         ).all()
     )
+    automation_session_ids = {
+        session_link_id
+        for session_link_id in db.scalars(
+            select(AutomationRun.session_link_id)
+            .join(Automation, Automation.id == AutomationRun.automation_id)
+            .where(
+                Automation.owner_id == user.id,
+                AutomationRun.session_link_id.is_not(None),
+            )
+        ).all()
+        if session_link_id is not None
+    }
     profile_by_route = {(row.gateway_id, row.profile_name): row for row in profiles}
     profile_capabilities = {
         row.id: public_capability_flags(
@@ -677,6 +699,7 @@ def bootstrap(
                     if profile_by_route.get((row.gateway_id, row.profile_name))
                     else None
                 ),
+                "automationGenerated": row.id in automation_session_ids,
                 "title": row.display_title or row.title or "Conversación",
                 "preview": "",
                 "updatedAt": row.updated_at.isoformat(),

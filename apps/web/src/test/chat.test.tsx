@@ -156,6 +156,62 @@ describe("mobile-first chat", () => {
     expect((await axe.run(container)).violations).toHaveLength(0);
   });
 
+  it("hides an automation instruction by default and expands it into a ten-line scroller", async () => {
+    const automationSession = {
+      ...sessions[0],
+      id: "session-automation-instruction",
+      automationGenerated: true,
+      title: "Ejecución · Radar diario",
+    };
+    const instruction = [
+      "INSTRUCCION_AUTOMATIZADA_PRIVADA",
+      ...Array.from({ length: 18 }, (_, index) => `Línea extensa ${index + 1} para validar el desplazamiento interno.`),
+    ].join("\n");
+    useAppStore.setState({
+      selectedSessionId: automationSession.id,
+      sessions: [...sessions, automationSession],
+      messages: [
+        { id: "automation-first-user", sessionId: automationSession.id, role: "user", content: instruction, createdAt: "08:00", delivery: "sent" },
+        { id: "automation-answer", sessionId: automationSession.id, role: "assistant", content: "Resultado listo", createdAt: "08:01" },
+        { id: "automation-follow-up", sessionId: automationSession.id, role: "user", content: "Mensaje manual posterior visible", createdAt: "08:02", delivery: "sent" },
+      ],
+    });
+    const user = userEvent.setup();
+    const { container } = render(<ChatView />);
+
+    const toggle = screen.getByRole("button", { name: "Ver instrucción completa" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Instrucción de automatización")).toBeVisible();
+    expect(screen.queryByText(/INSTRUCCION_AUTOMATIZADA_PRIVADA/)).not.toBeInTheDocument();
+    expect(screen.getByText("Mensaje manual posterior visible")).toBeVisible();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAccessibleName("Ocultar instrucción");
+    const content = screen.getByRole("region", { name: "Contenido de la instrucción de automatización" });
+    expect(content).toHaveAttribute("data-max-lines", "10");
+    expect(content.style.getPropertyValue("--automation-instruction-lines")).toBe("10");
+    expect(content).toHaveClass("automation-instruction__content");
+    expect(screen.getByText(/INSTRUCCION_AUTOMATIZADA_PRIVADA/)).toBeVisible();
+
+    await user.click(toggle);
+    expect(screen.queryByRole("region", { name: "Contenido de la instrucción de automatización" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/INSTRUCCION_AUTOMATIZADA_PRIVADA/)).not.toBeInTheDocument();
+    expect((await axe.run(container)).violations).toHaveLength(0);
+  });
+
+  it("does not collapse a long first message in a manual chat", () => {
+    const manualInstruction = "MENSAJE_MANUAL_LARGO ".repeat(80).trim();
+    useAppStore.setState({
+      messages: [{ id: "manual-long-message", sessionId: "session-papers", role: "user", content: manualInstruction, createdAt: "08:00", delivery: "sent" }],
+    });
+
+    render(<ChatView />);
+
+    expect(screen.getByText(manualInstruction)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Ver instrucción completa" })).not.toBeInTheDocument();
+  });
+
   it("changes chat controls to English without translating conversation content", async () => {
     await i18n.changeLanguage("en");
     render(<ChatView />);
