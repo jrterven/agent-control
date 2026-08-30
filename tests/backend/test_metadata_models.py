@@ -173,10 +173,20 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     assert "read_at" in {
         column["name"] for column in schema.get_columns("automation_runs")
     }
+    assert "workspace_id" in {
+        column["name"] for column in schema.get_columns("automations")
+    }
+    automation_workspace_fk = next(
+        foreign_key
+        for foreign_key in schema.get_foreign_keys("automations")
+        if foreign_key["constrained_columns"] == ["workspace_id"]
+    )
+    assert automation_workspace_fk["referred_table"] == "workspaces"
+    assert automation_workspace_fk["options"].get("ondelete") == "SET NULL"
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0011_session_display_title"
+        ).scalar_one() == "0012_automation_workspace"
     engine.dispose()
 
     downgrade = subprocess.run(

@@ -431,6 +431,7 @@ class OperationView(ApiModel):
 class AutomationCreate(ApiModel):
     gateway_id: str
     profile_name: str
+    workspace_id: str | None = None
     name: str = Field(min_length=1, max_length=200)
     schedule: str = Field(min_length=1, max_length=200)
     timezone: str = Field(default="Hermes local", min_length=1, max_length=100)
@@ -449,6 +450,7 @@ class AutomationCreate(ApiModel):
 
 
 class AutomationUpdate(ApiModel):
+    workspace_id: str | None = None
     name: str | None = Field(default=None, min_length=1, max_length=200)
     schedule: str | None = Field(default=None, min_length=1, max_length=200)
     timezone: str | None = Field(default=None, min_length=1, max_length=100)
@@ -469,6 +471,7 @@ class AutomationUpdate(ApiModel):
 class AutomationView(ApiModel):
     id: str
     gateway_id: str
+    workspace_id: str | None
     profile_name: str
     hermes_automation_id: str | None
     name: str

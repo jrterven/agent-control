@@ -12,7 +12,7 @@ import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { Badge, Button, Field, Panel, StatusDot, Switch, cx } from "@hermes-control/ui";
-import { api, ApiError, type ReadinessView } from "../lib/api";
+import { api, ApiError, type AutomationUpdateInput, type ReadinessView } from "../lib/api";
 import { clearPrivateCache, clearTranscriptCache, savePreference } from "../lib/db";
 import { createAndProvisionGateway } from "../lib/gatewayProvisioning";
 import { buildSearchResults } from "../lib/search";
@@ -420,7 +420,7 @@ export function AgentsScreen() {
   );
 }
 
-type AutomationValues = { name: string; schedule: string; timezone: string; prompt: string; profileId: string };
+type AutomationValues = { name: string; schedule: string; timezone: string; prompt: string; profileId: string; workspaceId: string };
 
 const emptyAutomationValues: AutomationValues = {
   name: "",
@@ -428,6 +428,7 @@ const emptyAutomationValues: AutomationValues = {
   timezone: "Hermes local",
   prompt: "",
   profileId: "",
+  workspaceId: "",
 };
 
 const automationTemplates = [
@@ -487,9 +488,12 @@ export function AutomationsScreen() {
     timezone: z.string().trim().min(3, t("automationsPage.validationTimezone")),
     prompt: z.string().trim().min(3, t("automationsPage.validationPrompt")),
     profileId: z.string().min(1, t("automationsPage.validationProfile")),
+    workspaceId: z.string(),
   }), [t]);
   const storeItems = useAppStore((state) => state.automations);
   const profiles = useAppStore((state) => state.profiles);
+  const workspaces = useAppStore((state) => state.workspaces);
+  const selectedWorkspaceId = useAppStore((state) => state.selectedWorkspaceId);
   const [items, setItems] = useState(storeItems);
   const [editorOpen, setEditorOpen] = useState(false);
   const [advancedEditor, setAdvancedEditor] = useState(false);
@@ -549,14 +553,14 @@ export function AutomationsScreen() {
     setEditing(null);
     setAdvancedEditor(false);
     setSubmitError("");
-    reset({ ...emptyAutomationValues, profileId: eligibleProfiles[0]?.id ?? "" });
+    reset({ ...emptyAutomationValues, profileId: eligibleProfiles[0]?.id ?? "", workspaceId: selectedWorkspaceId });
     setEditorOpen(true);
   };
   const openEdit = (automation: Automation) => {
     setEditing(automation);
     setAdvancedEditor(true);
     setSubmitError("");
-    reset({ name: automation.name, schedule: automation.schedule, timezone: automation.timezone, prompt: automation.prompt ?? "", profileId: automation.profileId });
+    reset({ name: automation.name, schedule: automation.schedule, timezone: automation.timezone, prompt: automation.prompt ?? "", profileId: automation.profileId, workspaceId: automation.workspaceId ?? "" });
     setEditorOpen(true);
   };
   const toggle = async (automation: Automation) => {
@@ -584,12 +588,18 @@ export function AutomationsScreen() {
     setSubmitError("");
     try {
       if (editing) {
-        const raw = await api.updateAutomation(editing.id, { name: values.name, schedule: values.schedule, timezone: values.timezone, prompt: values.prompt }, csrfToken);
+        const changes: AutomationUpdateInput = { workspaceId: values.workspaceId || null };
+        if (values.name !== editing.name) changes.name = values.name;
+        if (values.schedule !== editing.schedule) changes.schedule = values.schedule;
+        if (values.timezone !== editing.timezone) changes.timezone = values.timezone;
+        if (values.prompt !== (editing.prompt ?? "")) changes.prompt = values.prompt;
+        const raw = await api.updateAutomation(editing.id, changes, csrfToken);
         setItems((current) => current.map((item) => item.id === editing.id ? uiAutomation(raw, profile.id, editing) : item));
       } else {
         const raw = await api.createAutomation({
           gatewayId: profile.gatewayId,
           profileName: profile.technicalName,
+          workspaceId: values.workspaceId || null,
           name: values.name,
           schedule: values.schedule,
           timezone: values.timezone,
@@ -676,11 +686,12 @@ export function AutomationsScreen() {
           const result = latestResult(automation.id);
           const unread = Boolean(result && !result.readAt);
           const runLabel = latestRun?.status === "completed" ? t("automationsPage.runSuccess") : latestRun?.status === "failed" ? t("automationsPage.runFailed") : latestRun ? t("automationsPage.runStatus", { status: latestRun.status }) : t("automationsPage.noRuns");
-          return <Panel key={automation.id} className="automation-row"><span className="automation-row__icon"><Lightning weight="duotone" /></span><div><span className="automation-row__title"><strong>{automation.name}</strong>{unread ? <span className="automation-unread-dot" role="img" aria-label={t("automationsPage.unreadResult")} title={t("automationsPage.unreadResult")} /> : null}</span><p>{describeCron(automation.schedule, automation.timezone, t)}</p><span><Badge>{profile?.displayName ?? automation.profileName ?? t("automationsPage.profile")}</Badge><Badge tone={latestRun?.status === "completed" ? "positive" : latestRun?.status === "failed" ? "warning" : "neutral"}>{runLabel}</Badge></span><details className="cron-details"><summary>{t("automationsPage.viewCron")}</summary><code>{automation.schedule}</code></details></div><div className="automation-row__end">{canUpdate ? <Switch checked={automation.enabled} disabled={actionId === automation.id} onChange={() => void toggle(automation)} label={automation.enabled ? t("automationsPage.enabled") : t("automationsPage.paused")} /> : null}<span className="automation-actions">{result?.sessionLinkId ? <Button size="sm" variant="ghost" onClick={() => void openRunSession(result)}>{t("automationsPage.openSession")}</Button> : null}{canTrigger ? <Button size="sm" variant="ghost" leadingIcon={<Play />} disabled={actionId === automation.id} onClick={() => void trigger(automation)}>{t("automationsPage.run")}</Button> : null}{canUpdate ? <Button size="sm" variant="ghost" leadingIcon={<PencilSimple />} onClick={() => openEdit(automation)}>{t("automationsPage.edit")}</Button> : null}{canDelete ? <Button size="sm" variant="ghost" leadingIcon={<Trash />} disabled={actionId === automation.id} onClick={() => void remove(automation)}>{t("automationsPage.remove")}</Button> : null}</span></div></Panel>;
+          const workspace = workspaces.find((item) => item.id === automation.workspaceId);
+          return <Panel key={automation.id} className="automation-row"><span className="automation-row__icon"><Lightning weight="duotone" /></span><div><span className="automation-row__title"><strong>{automation.name}</strong>{unread ? <span className="automation-unread-dot" role="img" aria-label={t("automationsPage.unreadResult")} title={t("automationsPage.unreadResult")} /> : null}</span><p>{describeCron(automation.schedule, automation.timezone, t)}</p><span><Badge>{profile?.displayName ?? automation.profileName ?? t("automationsPage.profile")}</Badge><Badge>{workspace?.name ?? t("automationsPage.noWorkspace")}</Badge><Badge tone={latestRun?.status === "completed" ? "positive" : latestRun?.status === "failed" ? "warning" : "neutral"}>{runLabel}</Badge></span><details className="cron-details"><summary>{t("automationsPage.viewCron")}</summary><code>{automation.schedule}</code></details></div><div className="automation-row__end">{canUpdate ? <Switch checked={automation.enabled} disabled={actionId === automation.id} onChange={() => void toggle(automation)} label={automation.enabled ? t("automationsPage.enabled") : t("automationsPage.paused")} /> : null}<span className="automation-actions">{result?.sessionLinkId ? <Button size="sm" variant="ghost" onClick={() => void openRunSession(result)}>{t("automationsPage.openSession")}</Button> : null}{canTrigger ? <Button size="sm" variant="ghost" leadingIcon={<Play />} disabled={actionId === automation.id} onClick={() => void trigger(automation)}>{t("automationsPage.run")}</Button> : null}{canUpdate ? <Button size="sm" variant="ghost" leadingIcon={<PencilSimple />} onClick={() => openEdit(automation)}>{t("automationsPage.edit")}</Button> : null}{canDelete ? <Button size="sm" variant="ghost" leadingIcon={<Trash />} disabled={actionId === automation.id} onClick={() => void remove(automation)}>{t("automationsPage.remove")}</Button> : null}</span></div></Panel>;
         })}
         {visibleItems.length === 0 ? <Panel className="automation-empty"><strong>{readFilter === "unread" ? t("automationsPage.emptyUnread") : readFilter === "read" ? t("automationsPage.emptyRead") : t("automationsPage.emptyAll")}</strong></Panel> : null}
       </div>
-      {editorOpen ? <div ref={editorDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="automation-editor-title"><button className="modal-scrim" aria-label={t("automationsPage.closeEditor")} onClick={closeEditor} /><Panel className="form-modal automation-editor"><span className="eyebrow">{t("automationsPage.editor", { mode: advancedEditor ? t("automationsPage.advanced") : t("automationsPage.simple") })}</span><h2 id="automation-editor-title">{editing ? t("automationsPage.editTitle") : t("automationsPage.newTitle")}</h2><p>{editing ? t("automationsPage.editDescription") : t("automationsPage.newDescription")}</p><div className="editor-mode" role="group" aria-label={t("automationsPage.editorMode")}><button type="button" className={!advancedEditor ? "is-active" : ""} aria-pressed={!advancedEditor} onClick={() => setAdvancedEditor(false)}>{t("automationsPage.simple")}</button><button type="button" className={advancedEditor ? "is-active" : ""} aria-pressed={advancedEditor} onClick={() => setAdvancedEditor(true)}>{t("automationsPage.advancedCron")}</button></div><form onSubmit={save}>{!editing ? <fieldset className="automation-templates"><legend>{t("automationsPage.startTemplate")}</legend><div>{automationTemplates.map((template) => { const label = t(`automationsPage.templates.${template.translationKey}.label`); const prompt = t(`automationsPage.templates.${template.translationKey}.prompt`); return <button key={template.id} type="button" onClick={() => { setValue("name", label, { shouldValidate: true }); setValue("schedule", template.schedule, { shouldValidate: true }); setValue("prompt", prompt, { shouldValidate: true }); }}>{label}</button>; })}</div></fieldset> : null}<Field label={t("automationsPage.name")} error={errors.name?.message} {...register("name")} /><label className="hc-field"><span>{t("automationsPage.profile")}</span><select {...register("profileId")} disabled={Boolean(editing)}>{eligibleProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.displayName} · {profile.technicalName}</option>)}</select>{errors.profileId?.message ? <small className="hc-field__error">{errors.profileId.message}</small> : null}</label>{advancedEditor ? <Field label={t("automationsPage.cronExpression")} placeholder="30 8 * * FRI" error={errors.schedule?.message} {...register("schedule")} /> : <label className="hc-field"><span>{t("automationsPage.frequency")}</span><select value={watchedSchedule} onChange={(event) => setValue("schedule", event.target.value, { shouldValidate: true })}><option value="30 8 * * MON-FRI">{t("automationsPage.weekdays")}</option><option value="0 9 * * *">{t("automationsPage.daily")}</option><option value="0 16 * * FRI">{t("automationsPage.friday")}</option>{!automationTemplates.some((template) => template.schedule === watchedSchedule) && watchedSchedule !== "0 9 * * *" ? <option value={watchedSchedule}>{t("automationsPage.customSchedule")}</option> : null}</select>{errors.schedule?.message ? <small className="hc-field__error">{errors.schedule.message}</small> : null}</label>}<label className="hc-field"><span>{t("automationsPage.timezone")}</span><select {...register("timezone")}><option value="Hermes local">{t("automationsPage.hermesLocalTimezone")}</option>{watchedTimezone && watchedTimezone !== "Hermes local" ? <option value={watchedTimezone}>{watchedTimezone}</option> : null}</select>{errors.timezone?.message ? <small className="hc-field__error">{errors.timezone.message}</small> : null}</label><output className="schedule-explanation" aria-live="polite"><Clock weight="duotone" /><span><strong>{t("automationsPage.explanation")}</strong>{describeCron(watchedSchedule, watchedTimezone, t)}</span></output><label className="hc-field"><span>{t("automationsPage.prompt")}</span><textarea rows={5} {...register("prompt")} />{errors.prompt?.message ? <small className="hc-field__error">{errors.prompt.message}</small> : null}</label>{submitError ? <p className="form-error" role="alert"><WarningCircle /> {submitError}</p> : null}<div><Button type="button" variant="ghost" onClick={closeEditor}>{t("automationsPage.cancel")}</Button><Button type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? t("automationsPage.saving") : editing ? t("automationsPage.save") : t("automationsPage.createPaused")}</Button></div></form></Panel></div> : null}
+      {editorOpen ? <div ref={editorDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="automation-editor-title"><button className="modal-scrim" aria-label={t("automationsPage.closeEditor")} onClick={closeEditor} /><Panel className="form-modal automation-editor"><span className="eyebrow">{t("automationsPage.editor", { mode: advancedEditor ? t("automationsPage.advanced") : t("automationsPage.simple") })}</span><h2 id="automation-editor-title">{editing ? t("automationsPage.editTitle") : t("automationsPage.newTitle")}</h2><p>{editing ? t("automationsPage.editDescription") : t("automationsPage.newDescription")}</p><div className="editor-mode" role="group" aria-label={t("automationsPage.editorMode")}><button type="button" className={!advancedEditor ? "is-active" : ""} aria-pressed={!advancedEditor} onClick={() => setAdvancedEditor(false)}>{t("automationsPage.simple")}</button><button type="button" className={advancedEditor ? "is-active" : ""} aria-pressed={advancedEditor} onClick={() => setAdvancedEditor(true)}>{t("automationsPage.advancedCron")}</button></div><form onSubmit={save}>{!editing ? <fieldset className="automation-templates"><legend>{t("automationsPage.startTemplate")}</legend><div>{automationTemplates.map((template) => { const label = t(`automationsPage.templates.${template.translationKey}.label`); const prompt = t(`automationsPage.templates.${template.translationKey}.prompt`); return <button key={template.id} type="button" onClick={() => { setValue("name", label, { shouldValidate: true }); setValue("schedule", template.schedule, { shouldValidate: true }); setValue("prompt", prompt, { shouldValidate: true }); }}>{label}</button>; })}</div></fieldset> : null}<Field label={t("automationsPage.name")} error={errors.name?.message} {...register("name")} /><label className="hc-field"><span>{t("automationsPage.profile")}</span><select {...register("profileId")} disabled={Boolean(editing)}>{eligibleProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.displayName} · {profile.technicalName}</option>)}</select>{errors.profileId?.message ? <small className="hc-field__error">{errors.profileId.message}</small> : null}</label><label className="hc-field"><span>{t("automationsPage.workspace")}</span><select {...register("workspaceId")}><option value="">{t("automationsPage.noWorkspace")}</option>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select><small className="hc-field__hint">{t("automationsPage.workspaceHint")}</small></label>{advancedEditor ? <Field label={t("automationsPage.cronExpression")} placeholder="30 8 * * FRI" error={errors.schedule?.message} {...register("schedule")} /> : <label className="hc-field"><span>{t("automationsPage.frequency")}</span><select value={watchedSchedule} onChange={(event) => setValue("schedule", event.target.value, { shouldValidate: true })}><option value="30 8 * * MON-FRI">{t("automationsPage.weekdays")}</option><option value="0 9 * * *">{t("automationsPage.daily")}</option><option value="0 16 * * FRI">{t("automationsPage.friday")}</option>{!automationTemplates.some((template) => template.schedule === watchedSchedule) && watchedSchedule !== "0 9 * * *" ? <option value={watchedSchedule}>{t("automationsPage.customSchedule")}</option> : null}</select>{errors.schedule?.message ? <small className="hc-field__error">{errors.schedule.message}</small> : null}</label>}<label className="hc-field"><span>{t("automationsPage.timezone")}</span><select {...register("timezone")}><option value="Hermes local">{t("automationsPage.hermesLocalTimezone")}</option>{watchedTimezone && watchedTimezone !== "Hermes local" ? <option value={watchedTimezone}>{watchedTimezone}</option> : null}</select>{errors.timezone?.message ? <small className="hc-field__error">{errors.timezone.message}</small> : null}</label><output className="schedule-explanation" aria-live="polite"><Clock weight="duotone" /><span><strong>{t("automationsPage.explanation")}</strong>{describeCron(watchedSchedule, watchedTimezone, t)}</span></output><label className="hc-field"><span>{t("automationsPage.prompt")}</span><textarea rows={5} {...register("prompt")} />{errors.prompt?.message ? <small className="hc-field__error">{errors.prompt.message}</small> : null}</label>{submitError ? <p className="form-error" role="alert"><WarningCircle /> {submitError}</p> : null}<div><Button type="button" variant="ghost" onClick={closeEditor}>{t("automationsPage.cancel")}</Button><Button type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? t("automationsPage.saving") : editing ? t("automationsPage.save") : t("automationsPage.createPaused")}</Button></div></form></Panel></div> : null}
     </div>
   );
 }

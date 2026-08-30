@@ -177,6 +177,7 @@ export type ClarificationRequest = {
 export type Automation = {
   id: string;
   gatewayId?: string;
+  workspaceId?: string | null;
   profileName?: string;
   hermesAutomationId?: string | null;
   name: string;

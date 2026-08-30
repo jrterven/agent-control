@@ -7,7 +7,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from hermes_client import CapabilitySet, HermesAutomation, HermesGatewayProvider, InMemoryHermesProvider
-from hermes_control_api.models import Automation, AutomationRun, Gateway, ProfileRef, User
+from hermes_control_api.models import (
+    Automation,
+    AutomationRun,
+    Gateway,
+    ProfileRef,
+    SessionLink,
+    User,
+)
 from hermes_control_api.services import GatewayService
 
 from .conftest import mutation_headers
@@ -38,6 +45,16 @@ def create_automation(client: TestClient, csrf: str, key: str = "automation-crea
         "/api/v1/automations",
         headers=mutation_headers(csrf, key),
         json=automation_payload(client),
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def create_workspace(client: TestClient, csrf: str, *, name: str, key: str) -> dict:
+    response = client.post(
+        "/api/v1/workspaces",
+        headers=mutation_headers(csrf, key),
+        json={"name": name, "description": "Automation destination"},
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -163,6 +180,96 @@ def test_hermes_local_timezone_is_valid_for_native_cron(authenticated):
 
     assert response.status_code == 201, response.text
     assert response.json()["timezone"] == "Hermes local"
+
+
+def test_workspace_is_persisted_and_inherited_by_automation_run_sessions(
+    authenticated, app, monkeypatch
+):
+    client, csrf = authenticated
+    first_workspace = create_workspace(
+        client, csrf, name="Investigación", key="automation-workspace-first"
+    )
+    second_workspace = create_workspace(
+        client, csrf, name="Operaciones", key="automation-workspace-second"
+    )
+
+    created_response = client.post(
+        "/api/v1/automations",
+        headers=mutation_headers(csrf, "automation-with-workspace"),
+        json=automation_payload(client, workspaceId=first_workspace["id"]),
+    )
+    assert created_response.status_code == 201, created_response.text
+    automation = created_response.json()
+    assert automation["workspaceId"] == first_workspace["id"]
+    assert (
+        client.get("/api/v1/bootstrap").json()["automations"][0]["workspaceId"]
+        == first_workspace["id"]
+    )
+
+    first_trigger = client.post(
+        f"/api/v1/automations/{automation['id']}/trigger",
+        headers=mutation_headers(csrf, "automation-workspace-trigger-first"),
+    )
+    assert first_trigger.status_code == 202, first_trigger.text
+    first_run = client.get(
+        f"/api/v1/automations/{automation['id']}/runs"
+    ).json()[0]
+    assert first_run["sessionLinkId"] is not None
+    with app.state.session_factory() as db:
+        first_session = db.get(SessionLink, first_run["sessionLinkId"])
+        assert first_session is not None
+        assert first_session.workspace_id == first_workspace["id"]
+
+    moved_response = client.patch(
+        f"/api/v1/automations/{automation['id']}",
+        headers=mutation_headers(csrf, "automation-workspace-move"),
+        json={"workspaceId": second_workspace["id"], "name": "Morning brief moved"},
+    )
+    assert moved_response.status_code == 200, moved_response.text
+    assert moved_response.json()["workspaceId"] == second_workspace["id"]
+    assert moved_response.json()["name"] == "Morning brief moved"
+
+    second_trigger = client.post(
+        f"/api/v1/automations/{automation['id']}/trigger",
+        headers=mutation_headers(csrf, "automation-workspace-trigger-second"),
+    )
+    assert second_trigger.status_code == 202, second_trigger.text
+    runs = client.get(f"/api/v1/automations/{automation['id']}/runs").json()
+    second_run = next(
+        run for run in runs if run["id"] == second_trigger.json()["operationId"]
+    )
+    assert second_run["sessionLinkId"] is not None
+    with app.state.session_factory() as db:
+        second_session = db.get(SessionLink, second_run["sessionLinkId"])
+        assert second_session is not None
+        assert second_session.workspace_id == second_workspace["id"]
+
+    upstream_update = AsyncMock(
+        side_effect=AssertionError("a workspace-only change must stay local")
+    )
+    monkeypatch.setattr(InMemoryHermesProvider, "update_automation", upstream_update)
+    detached_response = client.patch(
+        f"/api/v1/automations/{automation['id']}",
+        headers=mutation_headers(csrf, "automation-workspace-detach"),
+        json={"workspaceId": None},
+    )
+    assert detached_response.status_code == 200, detached_response.text
+    assert detached_response.json()["workspaceId"] is None
+    upstream_update.assert_not_awaited()
+
+
+def test_unknown_workspace_is_rejected_before_automation_mutation(authenticated):
+    client, csrf = authenticated
+    response = client.post(
+        "/api/v1/automations",
+        headers=mutation_headers(csrf, "automation-unknown-workspace"),
+        json=automation_payload(
+            client, workspaceId="00000000-0000-0000-0000-000000000000"
+        ),
+    )
+
+    assert response.status_code == 404
+    assert client.get("/api/v1/automations").json() == []
 
 
 def test_automation_lifecycle_runs_and_idempotent_replays(authenticated):

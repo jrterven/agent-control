@@ -356,6 +356,9 @@ class Automation(Base, Timestamped):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     gateway_id: Mapped[str] = mapped_column(ForeignKey("gateways.id", ondelete="RESTRICT"))
+    workspace_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="SET NULL"), index=True
+    )
     profile_name: Mapped[str] = mapped_column(String(120))
     hermes_automation_id: Mapped[str | None] = mapped_column(String(255))
     name: Mapped[str] = mapped_column(String(200))

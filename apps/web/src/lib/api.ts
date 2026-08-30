@@ -79,6 +79,7 @@ export type SpeechTokenView = {
 export type AutomationCreateInput = {
   gatewayId: string;
   profileName: string;
+  workspaceId: string | null;
   name: string;
   schedule: string;
   timezone: string;
@@ -86,7 +87,7 @@ export type AutomationCreateInput = {
   enabled: boolean;
 };
 
-export type AutomationUpdateInput = Partial<Pick<AutomationCreateInput, "name" | "schedule" | "timezone" | "prompt" | "enabled">>;
+export type AutomationUpdateInput = Partial<Pick<AutomationCreateInput, "workspaceId" | "name" | "schedule" | "timezone" | "prompt" | "enabled">>;
 
 export type ApprovalResponseReceipt = {
   requestId: string;
@@ -140,6 +141,7 @@ type SessionWire = {
 type AutomationWire = {
   id: string;
   gatewayId: string;
+  workspaceId?: string | null;
   profileName: string;
   hermesAutomationId?: string | null;
   name: string;
@@ -190,6 +192,7 @@ function sessionFromWire(row: SessionWire, fallbackProfileId = ""): SessionSumma
 function automationFromWire(row: AutomationWire): Automation {
   return {
     ...row,
+    workspaceId: row.workspaceId ?? undefined,
     profileId: "",
     nextRun: row.nextRuns[0] ?? "",
     lastStatus: "idle",

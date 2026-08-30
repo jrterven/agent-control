@@ -99,6 +99,8 @@ def persist_normalized_event(
             automation = db.get(Automation, run.automation_id)
             if automation is None or automation.owner_id != session.owner_id:
                 run = None
+            else:
+                session.workspace_id = automation.workspace_id
         if session is None and run is not None and event.stored_session_id:
             automation = db.get(Automation, run.automation_id)
             collision = db.scalar(
@@ -114,6 +116,7 @@ def persist_normalized_event(
                 session = SessionLink(
                     owner_id=automation.owner_id,
                     gateway_id=event.gateway_id,
+                    workspace_id=automation.workspace_id,
                     profile_name=event.profile_name,
                     stored_session_id=event.stored_session_id,
                     runtime_session_id=event.runtime_session_id,

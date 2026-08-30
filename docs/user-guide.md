@@ -227,7 +227,10 @@ stays hidden for real providers rather than risking a cross-profile change.
 Automations are provider cron jobs whose runs remain isolated from ordinary
 chat history. Eligible profiles can create, edit, pause, resume, run and delete
 jobs. The editor supports a guided schedule, an advanced cron expression,
-human-readable explanation, templates and the next five projected runs.
+human-readable explanation, templates and the next five projected runs. It
+also lets you choose a workspace; new automations default to the workspace
+currently selected in Agent Control, and their future execution sessions are
+organized there as well.
 
 <p align="center">
   <img src="assets/screenshots/mobile-automations.jpg" alt="Automation inbox with unread results" width="330">

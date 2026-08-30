@@ -2404,6 +2404,8 @@ class AutomationService:
         return synchronized
 
     async def create(self, db: Session, actor: User, payload: AutomationCreate) -> Automation:
+        if payload.workspace_id is not None:
+            WorkspaceService().owned(db, actor, payload.workspace_id)
         await require_capability(
             db,
             self.services,
@@ -2426,6 +2428,7 @@ class AutomationService:
         row = Automation(
             owner_id=actor.id,
             gateway_id=payload.gateway_id,
+            workspace_id=payload.workspace_id,
             profile_name=payload.profile_name,
             hermes_automation_id=upstream.automation_id,
             name=upstream.name,
@@ -2461,6 +2464,24 @@ class AutomationService:
         *,
         audit_action: str = "automation.update",
     ) -> Automation:
+        upstream_changes = dict(changes)
+        workspace_change = "workspace_id" in upstream_changes
+        workspace_id = upstream_changes.pop("workspace_id", None)
+        if workspace_change and workspace_id is not None:
+            WorkspaceService().owned(db, actor, workspace_id)
+        if not upstream_changes:
+            if workspace_change:
+                row.workspace_id = workspace_id
+            audit(
+                db,
+                actor=actor,
+                action=audit_action,
+                target_type="automation",
+                target_id=row.id,
+            )
+            db.commit()
+            db.refresh(row)
+            return row
         await require_capability(
             db,
             self.services,
@@ -2472,7 +2493,9 @@ class AutomationService:
             raise ConflictError("Automation has no verified Hermes identity")
         connection = await self.gateways.connection(db, row.gateway_id, row.profile_name)
         provider = await self.services.provider_pool.get(connection)
-        upstream = await provider.update_automation(row.hermes_automation_id, changes)
+        upstream = await provider.update_automation(row.hermes_automation_id, upstream_changes)
+        if workspace_change:
+            row.workspace_id = workspace_id
         row.name = upstream.name
         row.schedule = upstream.schedule
         row.timezone = upstream.timezone
@@ -2566,6 +2589,7 @@ class AutomationService:
                 linked_session = SessionLink(
                     owner_id=row.owner_id,
                     gateway_id=row.gateway_id,
+                    workspace_id=row.workspace_id,
                     profile_name=row.profile_name,
                     stored_session_id=receipt.stored_session_id,
                     title=f"Ejecución · {row.name}",
@@ -2575,15 +2599,11 @@ class AutomationService:
                         else "streaming"
                     ),
                 )
-                SessionService._assign_runtime(
-                    db,
-                    linked_session,
-                    receipt.runtime_session_id,
-                    provider.runtime_generation,
-                )
                 db.add(linked_session)
                 db.flush()
-            elif receipt.runtime_session_id:
+            else:
+                linked_session.workspace_id = row.workspace_id
+            if linked_session is not None and receipt.runtime_session_id:
                 SessionService._assign_runtime(
                     db,
                     linked_session,

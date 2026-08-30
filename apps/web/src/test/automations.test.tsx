@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
 import { AutomationsScreen } from "../screens/Screens";
 import { useAppStore } from "../store/appStore";
-import type { Automation, AutomationRun, Profile } from "../types";
+import type { Automation, AutomationRun, Profile, Workspace } from "../types";
 
 const profile: Profile = {
   id: "profile-newton",
@@ -30,9 +30,25 @@ const profile: Profile = {
   },
 };
 
+const workspace: Workspace = {
+  id: "workspace-research",
+  name: "Investigación",
+  description: "",
+  sessionCount: 0,
+  updatedAt: "2030-01-01T00:00:00Z",
+};
+
 describe("automation editor contract", () => {
   beforeEach(() => {
-    useAppStore.setState({ profiles: [profile], automations: [], csrfToken: "csrf-memory-only", demoMode: false });
+    useAppStore.setState({
+      profiles: [profile],
+      workspaces: [workspace],
+      selectedWorkspaceId: workspace.id,
+      automations: [],
+      csrfToken: "csrf-memory-only",
+      demoMode: false,
+      authState: "authenticated",
+    });
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -40,6 +56,7 @@ describe("automation editor contract", () => {
     const created: Automation = {
       id: "automation-1",
       gatewayId: "gateway-a",
+      workspaceId: workspace.id,
       profileName: "default",
       name: "Resumen semanal",
       schedule: "30 8 * * FRI",
@@ -56,6 +73,7 @@ describe("automation editor contract", () => {
     render(<AutomationsScreen />);
 
     await user.click(screen.getByRole("button", { name: "Nueva automatización" }));
+    expect(screen.getByRole("combobox", { name: /Espacio de trabajo/ })).toHaveValue(workspace.id);
     await user.type(screen.getByLabelText("Nombre"), "Resumen semanal");
     await user.type(screen.getByLabelText("Prompt"), "Prepara el resumen semanal");
     await user.click(screen.getByRole("button", { name: "Crear pausada" }));
@@ -63,6 +81,7 @@ describe("automation editor contract", () => {
     await waitFor(() => expect(create).toHaveBeenCalledWith({
       gatewayId: "gateway-a",
       profileName: "default",
+      workspaceId: workspace.id,
       name: "Resumen semanal",
       schedule: "30 8 * * FRI",
       timezone: "Hermes local",
@@ -70,6 +89,40 @@ describe("automation editor contract", () => {
       enabled: false,
     }, "csrf-memory-only"));
     expect(await screen.findByText("Resumen semanal")).toBeInTheDocument();
+    expect(screen.getByText("Investigación")).toBeInTheDocument();
+  });
+
+  it("moves an existing automation to another workspace", async () => {
+    const operations: Workspace = { ...workspace, id: "workspace-operations", name: "Operaciones" };
+    const existing: Automation = {
+      id: "automation-existing",
+      gatewayId: "gateway-a",
+      workspaceId: workspace.id,
+      profileName: "default",
+      name: "Radar diario",
+      schedule: "0 9 * * *",
+      timezone: "Hermes local",
+      profileId: profile.id,
+      prompt: "Prepara el radar diario",
+      enabled: true,
+      nextRun: "",
+      nextRuns: [],
+      lastStatus: "idle",
+    };
+    useAppStore.setState({ workspaces: [workspace, operations], automations: [existing] });
+    const update = vi.spyOn(api, "updateAutomation").mockResolvedValue({ ...existing, workspaceId: operations.id });
+    vi.spyOn(api, "automationRuns").mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(<AutomationsScreen />);
+
+    await user.click(screen.getByRole("button", { name: "Editar" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: /Espacio de trabajo/ }), operations.id);
+    await user.click(screen.getByRole("button", { name: "Guardar cambios" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith("automation-existing", {
+      workspaceId: operations.id,
+    }, "csrf-memory-only"));
+    expect(await screen.findByText("Operaciones")).toBeInTheDocument();
   });
 
   it("filters automations by the persisted read state of their latest result", async () => {

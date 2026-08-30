@@ -667,6 +667,7 @@ def bootstrap(
             {
                 "id": row.id,
                 "gatewayId": row.gateway_id,
+                "workspaceId": row.workspace_id,
                 "profileName": row.profile_name,
                 "hermesAutomationId": row.hermes_automation_id,
                 "name": row.name,
