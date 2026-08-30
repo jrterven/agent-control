@@ -41,6 +41,36 @@ describe("normalized realtime events", () => {
     useAppStore.getState().updateMessage(assistant.id, { tools: [{ ...tools[0], status: "running" }] });
     applyRealtimeEvent(event("tool.error", { name: "search", summary: "Sin conexión" }));
     expect(useAppStore.getState().messages[0].tools?.[0]).toMatchObject({ id: "tool-active", status: "failed" });
+    expect(useAppStore.getState().messages[0].activity).toMatchObject([
+      { kind: "tool", status: "running", summary: "3 de 5" },
+      { kind: "tool", status: "completed", summary: "5 resultados" },
+      { kind: "tool", status: "failed", summary: "Sin conexión" },
+    ]);
+  });
+
+  it("keeps private reasoning opaque and bounds the public activity trace", () => {
+    expect(applyRealtimeEvent(event("reasoning.omitted", {
+      omitted: true,
+      delta: "PRIVATE-COT-MUST-NOT-REACH-THE-TRACE",
+    }))).toBe(true);
+    expect(useAppStore.getState().messages[0].activity).toBeUndefined();
+    expect(JSON.stringify(useAppStore.getState().messages[0])).not.toContain("PRIVATE-COT");
+
+    for (let index = 0; index < 90; index += 1) {
+      applyRealtimeEvent({
+        ...event("tool.progress", {
+          name: `tool-${index}`,
+          label: `Herramienta ${index}`,
+          summary: `${index} ${"detalle ".repeat(80)}`,
+        }),
+        eventId: `activity-${index}`,
+      });
+    }
+
+    const activity = useAppStore.getState().messages[0].activity ?? [];
+    expect(activity).toHaveLength(80);
+    expect(activity[0].id).toBe("activity-10");
+    expect(activity.at(-1)?.summary?.length).toBeLessThanOrEqual(240);
   });
 
   it.each(["message.error", "run.interrupted", "interrupted"])("treats %s as a terminal stream event", (type) => {

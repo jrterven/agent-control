@@ -94,6 +94,68 @@ describe("mobile-first chat", () => {
     expect((await axe.run(container)).violations).toHaveLength(0);
   });
 
+  it("turns the typing label into a six-line, scrollable public activity disclosure", async () => {
+    const streamingMessage = {
+      id: "assistant-progress",
+      sessionId: "session-papers",
+      role: "assistant" as const,
+      content: "Borrador parcial",
+      createdAt: "10:42",
+      streaming: true,
+      activity: [
+        { id: "search-1", kind: "tool" as const, label: "Búsqueda", summary: "Revisando fuentes", status: "running" as const },
+        { id: "delegate-1", kind: "delegation" as const, label: "Investigador", summary: "Comparando resultados", status: "completed" as const },
+      ],
+    };
+    useAppStore.setState({
+      messages: [...initialMessages, streamingMessage],
+      streamingBySession: { "session-papers": streamingMessage.id },
+    });
+    const user = userEvent.setup();
+    const { container } = render(<ChatView />);
+
+    const toggle = screen.getByRole("button", { name: "Mostrar actividad de Newton" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("log", { name: "Actividad de Newton" })).not.toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAccessibleName("Ocultar actividad de Newton");
+    const log = screen.getByRole("log", { name: "Actividad de Newton" });
+    expect(log).toHaveClass("agent-activity__log");
+    expect(screen.getByText("Analizando la solicitud")).toBeVisible();
+    expect(screen.getByText("Búsqueda")).toBeVisible();
+    expect(screen.getByText("Revisando fuentes")).toBeVisible();
+    expect(screen.getByText("Redactando la respuesta")).toBeVisible();
+
+    let scrollHeight = 320;
+    Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => scrollHeight });
+    Object.defineProperty(log, "clientHeight", { configurable: true, get: () => 100 });
+    act(() => {
+      useAppStore.getState().updateMessage(streamingMessage.id, {
+        activity: [...streamingMessage.activity, {
+          id: "search-2", kind: "tool", label: "Búsqueda", summary: "Fuentes verificadas", status: "completed",
+        }],
+      });
+    });
+    await waitFor(() => expect(log.scrollTop).toBe(320));
+
+    scrollHeight = 500;
+    log.scrollTop = 120;
+    fireEvent.scroll(log);
+    act(() => {
+      const current = useAppStore.getState().messages.find((message) => message.id === streamingMessage.id);
+      useAppStore.getState().updateMessage(streamingMessage.id, {
+        activity: [...(current?.activity ?? []), {
+          id: "search-3", kind: "tool", label: "Búsqueda", summary: "Última comprobación", status: "completed",
+        }],
+      });
+    });
+    await waitFor(() => expect(screen.getByText("Última comprobación")).toBeVisible());
+    expect(log.scrollTop).toBe(120);
+    expect((await axe.run(container)).violations).toHaveLength(0);
+  });
+
   it("changes chat controls to English without translating conversation content", async () => {
     await i18n.changeLanguage("en");
     render(<ChatView />);

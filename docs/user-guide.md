@@ -89,6 +89,14 @@ The empty composer starts at one line, grows line by line up to six visible
 lines, and then scrolls. Tool execution detail is kept in the activity panel so
 it does not consume vertical space after every assistant response.
 
+While a response is active, the “agent is typing” indicator is also a button.
+Opening it reveals a compact public activity trace: analysis status, bounded
+tool summaries, delegated work and response composition. The trace follows the
+latest item while the reader remains at the bottom, but stops auto-scrolling
+when the reader moves back. It is limited to six visible text lines and remains
+independently scrollable. This is an operational summary, not raw private
+chain-of-thought; the backend continues to omit private reasoning events.
+
 ### Voice notes from an agent
 
 When an agent response contains a supported `MEDIA:` audio reference, Agent

@@ -1,4 +1,4 @@
-import { Check, Checks, Microphone, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle } from "@phosphor-icons/react";
+import { CaretDown, Check, Checks, Microphone, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -13,7 +13,7 @@ import { useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
 import { useSpeechPlayback, type LiveSpeechStatus, type SpeechPlaybackStatus } from "../hooks/useSpeechPlayback";
 import { usePwaUpdateStore } from "../lib/pwaUpdate";
-import type { ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageMedia, Profile } from "../types";
+import type { AgentActivityItem, ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageMedia, Profile } from "../types";
 import { ProfileAvatar } from "./ProfileAvatar";
 
 const emptyApprovals: ApprovalRequest[] = [];
@@ -33,6 +33,92 @@ function DeliveryIcon({ delivery }: { delivery?: ChatMessage["delivery"] }) {
   if (delivery === "ambiguous" || delivery === "failed") return <WarningCircle aria-label={t("chat.delivery.unconfirmed")} />;
   if (delivery === "sent") return <Checks aria-label={t("chat.delivery.delivered")} />;
   return <Check aria-label={t("chat.delivery.sending")} />;
+}
+
+function AgentActivityDisclosure({ agentName, message }: { agentName: string; message?: ChatMessage }) {
+  const { t } = useTranslation();
+  const panelId = useId();
+  const logRef = useRef<HTMLDivElement>(null);
+  const followLatestRef = useRef(true);
+  const [expanded, setExpanded] = useState(false);
+  const activity = useMemo<AgentActivityItem[]>(() => {
+    const entries: AgentActivityItem[] = [{
+      id: `${message?.id ?? "active"}:analysis`,
+      kind: "analysis",
+      status: "running",
+      label: t("chat.activity.analyzing"),
+    }, ...(message?.activity ?? [])];
+    if (message?.content.trim()) {
+      entries.push({
+        id: `${message.id}:composing`,
+        kind: "composing",
+        status: "running",
+        label: t("chat.activity.composing"),
+      });
+    }
+    return entries;
+  }, [message?.activity, message?.content, message?.id, t]);
+  const activityKey = activity.map((item) => `${item.id}:${item.status}:${item.summary ?? ""}`).join("|");
+
+  useEffect(() => {
+    setExpanded(false);
+    followLatestRef.current = true;
+  }, [message?.id]);
+
+  useEffect(() => {
+    const log = logRef.current;
+    if (!expanded || !log || !followLatestRef.current) return;
+    log.scrollTop = log.scrollHeight;
+  }, [activityKey, expanded]);
+
+  const toggle = () => {
+    if (!expanded) followLatestRef.current = true;
+    setExpanded((current) => !current);
+  };
+
+  return (
+    <div className="agent-activity">
+      <span className="sr-only" role="status">{t("chat.typing", { agent: agentName })}</span>
+      <button
+        type="button"
+        className="agent-activity__toggle"
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        aria-label={t(expanded ? "chat.activity.hide" : "chat.activity.show", { agent: agentName })}
+        onClick={toggle}
+      >
+        <span>{t("chat.typing", { agent: agentName })}</span>
+        <span className="agent-activity__dots" aria-hidden="true"><i /><i /><i /></span>
+        <CaretDown className="agent-activity__caret" size={15} weight="bold" aria-hidden="true" />
+      </button>
+      {expanded ? (
+        <div
+          id={panelId}
+          ref={logRef}
+          className="agent-activity__log"
+          role="log"
+          aria-live="off"
+          aria-label={t("chat.activity.label", { agent: agentName })}
+          tabIndex={0}
+          onScroll={(event) => {
+            const log = event.currentTarget;
+            followLatestRef.current = log.scrollHeight - log.scrollTop - log.clientHeight <= 16;
+          }}
+        >
+          {activity.map((item) => (
+            <div className={`agent-activity__item is-${item.status}`} key={item.id}>
+              <span className="agent-activity__marker" aria-hidden="true" />
+              <span>
+                <strong>{item.label ?? t(item.kind === "delegation" ? "chat.activity.delegation" : "chat.activity.tool")}</strong>
+                {item.summary && item.summary !== item.label ? <small>{item.summary}</small> : null}
+              </span>
+              <span className="sr-only">{t(`chat.toolStatus.${item.status}`)}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function ApprovalCard({ request, offline, canRespond, profileOverride }: { request: ApprovalRequest; offline: boolean; canRespond: boolean; profileOverride?: Profile }) {
@@ -653,7 +739,7 @@ export function ChatView() {
           <InteractionCards approvals={approvals} clarifications={clarifications} offline={offline} canApprove={canApprove} canClarify={canClarify} />
           {streamingMessageId ? waitingForResponse
             ? <p className="typing-state typing-state--waiting" role="status"><WarningCircle /><span>{t("chat.waitingForResponse", { agent: profile?.displayName ?? "Hermes" })}</span></p>
-            : <p className="typing-state" role="status"><span>{t("chat.typing", { agent: profile?.displayName ?? "Hermes" })}</span><i /><i /><i /></p>
+            : <AgentActivityDisclosure agentName={profile?.displayName ?? "Hermes"} message={streamingMessage} />
             : null}
         </div>
       </div>

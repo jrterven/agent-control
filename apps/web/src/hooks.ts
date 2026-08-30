@@ -18,6 +18,7 @@ import { useAppStore } from "./store/appStore";
 import i18n, { getCurrentLanguage } from "./i18n";
 import { subscribeToMediaQuery } from "./lib/mediaQuery";
 import type {
+  AgentActivityItem,
   ApprovalChoice,
   ApprovalRequest,
   ChatMessage,
@@ -206,6 +207,20 @@ function normalizeSessionUsage(value: unknown, reportedAt?: string): SessionUsag
   return usage;
 }
 
+const MAX_AGENT_ACTIVITY_ITEMS = 80;
+const MAX_AGENT_ACTIVITY_TEXT = 240;
+
+function boundedAgentActivityText(value: unknown, fallback = "") {
+  if (typeof value !== "string") return fallback;
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact ? compact.slice(0, MAX_AGENT_ACTIVITY_TEXT) : fallback;
+}
+
+function nextAgentActivity(current: ChatMessage | undefined, item: AgentActivityItem) {
+  const existing = (current?.activity ?? []).filter((entry) => entry.id !== item.id);
+  return [...existing, item].slice(-MAX_AGENT_ACTIVITY_ITEMS);
+}
+
 export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   const state = useAppStore.getState();
   const data = eventData(event);
@@ -286,6 +301,9 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
       && (
         event.type.startsWith("message.")
         || event.type.startsWith("tool.")
+        || event.type === "reasoning.omitted"
+        || event.type.startsWith("delegation.")
+        || event.type.startsWith("subagent.")
         || terminalStreamEvent
       )
     ) {
@@ -295,6 +313,12 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
     }
     if (terminalStreamEvent && routeSessionId) void rehydrateSession(routeSessionId);
     return terminalStreamEvent || Boolean(usageSessionId && hasUsageSnapshot);
+  }
+  if (event.type === "reasoning.omitted") {
+    // Hermes can emit many private-reasoning deltas. Their contents never
+    // cross the public boundary; the UI represents them with one generic,
+    // truthful "analyzing" state instead of exposing or fabricating text.
+    return true;
   }
   if (event.type === "message.delta") {
     const current = state.messages.find((message) => message.id === messageId);
@@ -319,7 +343,7 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
     const requestedToolName = typeof data.name === "string" ? data.name : undefined;
     const activeTool = [...(current?.tools ?? [])].reverse().find((tool) => tool.status === "running" && (!requestedToolName || tool.name === requestedToolName));
     const toolName = requestedToolName ?? activeTool?.name ?? "tool";
-    const toolId = String(data.toolId ?? data.id ?? activeTool?.id ?? event.eventId ?? event.id ?? crypto.randomUUID());
+    const toolId = String(payloadValue(data, "tool_id", "toolId") ?? data.id ?? activeTool?.id ?? event.eventId ?? event.id ?? crypto.randomUUID());
     const status = ["tool.error", "tool.failed"].includes(event.type) || event.type.endsWith(".error") || event.type.endsWith(".failed")
       ? "failed"
       : ["tool.complete", "tool.completed"].includes(event.type) || event.type.endsWith(".complete") || event.type.endsWith(".completed")
@@ -328,12 +352,35 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
     const nextTool = {
       id: toolId,
       name: toolName,
-      label: String(data.label ?? data.name ?? activeTool?.label ?? "Herramienta"),
+      label: boundedAgentActivityText(data.label ?? data.name ?? activeTool?.label, "Herramienta"),
       status: status as "running" | "completed" | "failed",
-      summary: String(data.summary ?? activeTool?.summary ?? "Actividad de Hermes"),
+      summary: boundedAgentActivityText(data.summary ?? activeTool?.summary, "Actividad de Hermes"),
     };
     const tools = [...(current?.tools ?? []).filter((tool) => tool.id !== toolId), nextTool];
-    state.updateMessage(messageId, { tools });
+    const activityId = event.eventId ?? event.id ?? crypto.randomUUID();
+    const activity = nextAgentActivity(current, {
+      id: activityId,
+      kind: "tool",
+      label: nextTool.label,
+      summary: nextTool.summary,
+      status: nextTool.status,
+    });
+    state.updateMessage(messageId, { tools, activity });
+    return true;
+  }
+  if (event.type.startsWith("delegation.") || event.type.startsWith("subagent.")) {
+    const current = state.messages.find((message) => message.id === messageId);
+    const failed = event.type.endsWith(".error") || event.type.endsWith(".failed");
+    const completed = event.type.endsWith(".complete") || event.type.endsWith(".completed") || event.type.endsWith(".done");
+    const status = failed ? "failed" : completed ? "completed" : "running";
+    const activity = nextAgentActivity(current, {
+      id: event.eventId ?? event.id ?? crypto.randomUUID(),
+      kind: "delegation",
+      label: boundedAgentActivityText(data.label ?? data.name ?? data.title, "Subagente"),
+      summary: boundedAgentActivityText(data.summary ?? data.status ?? data.reason, "Trabajo delegado"),
+      status,
+    });
+    state.updateMessage(messageId, { activity });
     return true;
   }
   return false;

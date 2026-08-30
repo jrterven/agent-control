@@ -100,6 +100,20 @@ export type ToolRun = {
   summary: string;
 };
 
+/**
+ * Public progress reported while an assistant response is active.
+ *
+ * This intentionally contains only normalized status and tool summaries. Raw
+ * model reasoning never crosses the Agent Control security boundary.
+ */
+export type AgentActivityItem = {
+  id: string;
+  kind: "analysis" | "tool" | "delegation" | "composing";
+  label?: string;
+  summary?: string;
+  status: "running" | "completed" | "failed";
+};
+
 export type MessageMedia = {
   id: string;
   kind: "audio";
@@ -135,6 +149,7 @@ export type ChatMessage = {
   createdAt: string;
   delivery?: "sending" | "sent" | "ambiguous" | "failed";
   tools?: ToolRun[];
+  activity?: AgentActivityItem[];
   media?: MessageMedia[];
   streaming?: boolean;
 };

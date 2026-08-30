@@ -137,6 +137,36 @@ describe("browser security state", () => {
     expect(keyRecord?.key.extractable).toBe(false);
   });
 
+  it("keeps the live agent activity trace ephemeral", async () => {
+    const message: ChatMessage = {
+      id: "message-activity",
+      sessionId: "session-activity",
+      role: "assistant",
+      content: "respuesta pública",
+      createdAt: "10:31",
+      activity: [{
+        id: "activity-1",
+        kind: "tool",
+        label: "Búsqueda",
+        summary: "detalle transitorio que no debe persistir",
+        status: "running",
+      }],
+      streaming: true,
+    };
+
+    await saveEncryptedTranscript("session-activity", "workspace-1", [message]);
+    const record = await db.transcripts.get("session-activity");
+    expect(record?.cipherText).not.toContain("detalle transitorio");
+    expect(await loadEncryptedTranscript("session-activity", "workspace-1")).toEqual([{
+      id: message.id,
+      sessionId: message.sessionId,
+      role: message.role,
+      content: message.content,
+      createdAt: message.createdAt,
+      streaming: false,
+    }]);
+  });
+
   it("omits automation prompts and enforces one 10 MB budget across the offline cache", async () => {
     await saveOfflineSnapshot({
       gateways: [], profiles: [], workspaces: [], sessions: [],
