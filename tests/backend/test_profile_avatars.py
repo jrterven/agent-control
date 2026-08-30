@@ -6,6 +6,13 @@ from .conftest import mutation_headers
 PNG = b"\x89PNG\r\n\x1a\n" + (b"avatar" * 20)
 
 
+def test_security_policy_allows_only_local_avatar_preview_blobs(authenticated):
+    client, _ = authenticated
+    csp = client.get("/").headers["Content-Security-Policy"]
+    assert "img-src 'self' data: blob:" in csp
+    assert "img-src *" not in csp
+
+
 def test_admin_can_assign_replace_and_remove_a_profile_avatar(authenticated):
     client, csrf = authenticated
     bootstrap = client.get("/api/v1/bootstrap").json()
