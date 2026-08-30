@@ -53,6 +53,7 @@ from ..schemas import (
     OperationView,
     ProfileCreate,
     ProfileCreateView,
+    ProfileAvatarView,
     ProfileView,
     PromptRequest,
     SearchResponse,
@@ -83,6 +84,26 @@ from ..services import (
 
 
 router = APIRouter(prefix="/api/v1")
+
+_PROFILE_AVATAR_MAX_BYTES = 900_000
+_PROFILE_AVATAR_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
+
+
+def profile_avatar_url(row: ProfileRef) -> str | None:
+    if not row.avatar_data or not row.avatar_mime_type:
+        return None
+    version = row.updated_at.strftime("%Y%m%d%H%M%S%f")
+    return f"/api/v1/profiles/{row.id}/avatar?v={version}"
+
+
+def valid_profile_avatar_signature(media_type: str, content: bytes) -> bool:
+    if media_type == "image/jpeg":
+        return content.startswith(b"\xff\xd8\xff")
+    if media_type == "image/png":
+        return content.startswith(b"\x89PNG\r\n\x1a\n")
+    if media_type == "image/webp":
+        return len(content) >= 12 and content.startswith(b"RIFF") and content[8:12] == b"WEBP"
+    return False
 
 
 def services(request: Request):
@@ -595,6 +616,7 @@ def bootstrap(
                 "gatewayId": row.gateway_id,
                 "technicalName": row.profile_name,
                 "displayName": row.display_name,
+                "avatarUrl": profile_avatar_url(row),
                 "model": row.model or "sin detectar",
                 "status": (
                     "ready"
@@ -877,6 +899,7 @@ async def list_profiles(
             gateway_id=row.gateway_id,
             profile_name=row.profile_name,
             display_name=row.display_name,
+            avatar_url=profile_avatar_url(row),
             status=profile_health_state(
                 row,
                 at=observed_at,
@@ -946,6 +969,7 @@ async def create_profile(
         gateway_id=row.gateway_id,
         technical_name=row.profile_name,
         display_name=row.display_name,
+        avatar_url=profile_avatar_url(row),
         model=row.model or "sin detectar",
         status="ready" if health == "online" else "offline",
         mutable=public_profile_mutable(
@@ -964,6 +988,83 @@ async def create_profile(
         ),
         capability_set=capability_set,
     )
+
+
+@router.get("/profiles/{profile_id}/avatar")
+def get_profile_avatar(
+    profile_id: str,
+    _: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    row = db.get(ProfileRef, profile_id)
+    if row is None or not row.avatar_data or not row.avatar_mime_type:
+        raise HTTPException(status_code=404, detail="Agent image was not found")
+    return Response(
+        content=row.avatar_data,
+        media_type=row.avatar_mime_type,
+        headers={
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.put("/profiles/{profile_id}/avatar", response_model=ProfileAvatarView)
+async def update_profile_avatar(
+    profile_id: str,
+    request: Request,
+    _: AuthSession = Depends(require_csrf),
+    __: str = Depends(require_idempotency),
+    user: User = Depends(current_admin),
+    db: Session = Depends(get_db),
+) -> ProfileAvatarView:
+    row = db.get(ProfileRef, profile_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Agent was not found")
+    media_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
+    if media_type not in _PROFILE_AVATAR_MEDIA_TYPES:
+        raise HTTPException(status_code=415, detail="Use a JPEG, PNG, or WebP image")
+    content = await request.body()
+    if not content or len(content) > _PROFILE_AVATAR_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Agent image must be at most 900 KB")
+    if not valid_profile_avatar_signature(media_type, content):
+        raise HTTPException(status_code=422, detail="Agent image content does not match its media type")
+    row.avatar_mime_type = media_type
+    row.avatar_data = content
+    audit(
+        db,
+        actor=user,
+        action="profile.avatar.update",
+        target_type="profile",
+        target_id=row.id,
+        details={"mediaType": media_type, "bytes": len(content)},
+    )
+    db.commit()
+    db.refresh(row)
+    return ProfileAvatarView(avatar_url=profile_avatar_url(row))
+
+
+@router.delete("/profiles/{profile_id}/avatar", response_model=ProfileAvatarView)
+def delete_profile_avatar(
+    profile_id: str,
+    _: AuthSession = Depends(require_csrf),
+    __: str = Depends(require_idempotency),
+    user: User = Depends(current_admin),
+    db: Session = Depends(get_db),
+) -> ProfileAvatarView:
+    row = db.get(ProfileRef, profile_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Agent was not found")
+    row.avatar_mime_type = None
+    row.avatar_data = None
+    audit(
+        db,
+        actor=user,
+        action="profile.avatar.delete",
+        target_type="profile",
+        target_id=row.id,
+    )
+    db.commit()
+    return ProfileAvatarView(avatar_url=None)
 
 
 @router.post("/profiles/refresh", response_model=list[ProfileView])
@@ -994,6 +1095,7 @@ async def refresh_profiles(
             gateway_id=row.gateway_id,
             profile_name=row.profile_name,
             display_name=row.display_name,
+            avatar_url=profile_avatar_url(row),
             status=profile_health_state(
                 row,
                 at=observed_at,

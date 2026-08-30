@@ -7,11 +7,14 @@ import { useAppStore } from "../store/appStore";
 import type { BootstrapData, Gateway, Profile, SessionSummary } from "../types";
 
 const navigate = vi.hoisted(() => vi.fn());
+const prepareAvatar = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...await importOriginal<typeof import("@tanstack/react-router")>(),
   useNavigate: () => navigate,
 }));
+
+vi.mock("../lib/profileAvatar", () => ({ prepareProfileAvatar: prepareAvatar }));
 
 const gateway: Gateway = {
   id: "gateway-a",
@@ -80,6 +83,9 @@ function bootstrap(profiles: Profile[], sessions: SessionSummary[] = []): Bootst
 describe("new agent flow", () => {
   beforeEach(() => {
     navigate.mockReset();
+    prepareAvatar.mockReset().mockResolvedValue(new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: "image/jpeg" }));
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:avatar-preview") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
     useAppStore.setState({
       authState: "authenticated",
       demoMode: false,
@@ -100,7 +106,11 @@ describe("new agent flow", () => {
     });
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Reflect.deleteProperty(URL, "createObjectURL");
+    Reflect.deleteProperty(URL, "revokeObjectURL");
+  });
 
   it("shows setup progress, archives the internal session, and opens a clean chat with the new agent active", async () => {
     const create = vi.spyOn(api, "createProfile").mockResolvedValue(createdProfile);
@@ -176,6 +186,25 @@ describe("new agent flow", () => {
     expect(await screen.findByText(/minúsculas, números o guiones/)).toBeInTheDocument();
     expect(screen.getByText(/nombre visible de entre 2 y 80/)).toBeInTheDocument();
     expect(screen.getByText(/al menos 10/)).toBeInTheDocument();
+  });
+
+  it("assigns an image to an existing agent and refreshes every avatar surface", async () => {
+    const avatarUrl = "/api/v1/profiles/profile-default/avatar?v=updated";
+    const upload = vi.spyOn(api, "setProfileAvatar").mockResolvedValue({ avatarUrl });
+    vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrap([{ ...sourceProfile, avatarUrl }]));
+    const user = userEvent.setup();
+
+    render(<AgentsScreen />);
+    await user.click(screen.getByRole("button", { name: "Imagen" }));
+    const dialog = screen.getByRole("dialog", { name: "Imagen de Newton" });
+    const file = new File(["photo"], "newton.png", { type: "image/png" });
+    await user.upload(within(dialog).getByLabelText("Elegir imagen"), file);
+    await waitFor(() => expect(prepareAvatar).toHaveBeenCalledWith(file));
+    await user.click(within(dialog).getByRole("button", { name: "Guardar imagen" }));
+
+    await waitFor(() => expect(upload).toHaveBeenCalledWith(sourceProfile.id, expect.any(Blob), "csrf-memory-only"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Imagen de Newton" })).not.toBeInTheDocument());
+    expect(useAppStore.getState().profiles[0].avatarUrl).toBe(avatarUrl);
   });
 
   it("retries setup after a transient session failure without creating a duplicate profile", async () => {

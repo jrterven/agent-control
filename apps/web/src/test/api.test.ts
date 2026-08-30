@@ -157,6 +157,31 @@ describe("browser API boundary", () => {
     });
   });
 
+  it("uploads and removes an agent image through an authenticated binary boundary", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ avatarUrl: "/api/v1/profiles/profile-a/avatar?v=1" }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ avatarUrl: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const avatar = new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: "image/jpeg" });
+
+    await api.setProfileAvatar("profile/a", avatar, "csrf-memory-only");
+    await api.setProfileAvatar("profile/a", null, "csrf-memory-only");
+
+    const [uploadPath, uploadInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(uploadPath).toBe("/api/v1/profiles/profile%2Fa/avatar");
+    expect(uploadInit.method).toBe("PUT");
+    expect(uploadInit.body).toBe(avatar);
+    expect(uploadInit.headers).toEqual(expect.objectContaining({
+      "Content-Type": "image/jpeg",
+      "Idempotency-Key": expect.any(String),
+      "X-CSRF-Token": "csrf-memory-only",
+    }));
+
+    const [, removeInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(removeInit.method).toBe("DELETE");
+    expect(removeInit.body).toBeUndefined();
+  });
+
   it("sends operator trust only to the gateway PATCH and supports explicit revocation", async () => {
     const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ id: "gateway-a" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);

@@ -224,6 +224,7 @@ class ProfileView(ApiModel):
     display_name: str
     status: str
     model: str | None = None
+    avatar_url: str | None = None
     mutable: bool = False
     capabilities: dict[str, Any] = Field(default_factory=dict)
     capability_set: dict[str, Any] = Field(default_factory=dict)
@@ -271,11 +272,16 @@ class ProfileCreateView(ApiModel):
     gateway_id: str
     technical_name: str
     display_name: str
+    avatar_url: str | None = None
     model: str
     status: Literal["ready", "busy", "offline"]
     mutable: bool
     capabilities: dict[str, bool] = Field(default_factory=dict)
     capability_set: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProfileAvatarView(ApiModel):
+    avatar_url: str | None = None
 
 
 class WorkspaceCreate(ApiModel):

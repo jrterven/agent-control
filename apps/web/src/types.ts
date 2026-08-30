@@ -47,6 +47,7 @@ export type Profile = {
   gatewayId: string;
   technicalName: string;
   displayName: string;
+  avatarUrl?: string | null;
   model: string;
   status: "ready" | "busy" | "offline";
   mutable: boolean;

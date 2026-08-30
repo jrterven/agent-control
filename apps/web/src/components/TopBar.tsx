@@ -3,7 +3,7 @@ import { IconButton, StatusDot, cx } from "@hermes-control/ui";
 import { useTranslation } from "react-i18next";
 import { usePwaUpdateStore } from "../lib/pwaUpdate";
 import { useAppStore } from "../store/appStore";
-import { BrandMark } from "./BrandMark";
+import { ProfileAvatar } from "./ProfileAvatar";
 
 const connectionLabelKeys = {
   connected: "connection.connected",
@@ -32,7 +32,7 @@ export function TopBar() {
     <header className="top-bar">
       <IconButton className="top-bar__menu" label={t("nav.openNavigation")} icon={<List size={25} />} selected={leftOpen} aria-controls="left-sidebar" aria-expanded={leftOpen} onClick={() => setLeftOpen(!leftOpen)} />
       <div className="top-bar__identity">
-        <BrandMark size="sm" />
+        <ProfileAvatar profile={profile} />
         <button className="identity-button" type="button" onClick={() => setLeftOpen(true)}>
           <span className="identity-button__name">{profile?.displayName ?? t("nav.noAgent")}</span>
           <CaretDown size={16} />

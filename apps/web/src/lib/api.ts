@@ -316,6 +316,14 @@ export const api = {
     headers: mutationHeaders(csrfToken),
     body: JSON.stringify(payload),
   }),
+  setProfileAvatar: (profileId: string, avatar: Blob | null, csrfToken?: string) => request<{ avatarUrl?: string | null }>(`/profiles/${encodeURIComponent(profileId)}/avatar`, {
+    method: avatar ? "PUT" : "DELETE",
+    headers: {
+      ...mutationHeaders(csrfToken),
+      ...(avatar ? { "Content-Type": avatar.type } : {}),
+    },
+    ...(avatar ? { body: avatar } : {}),
+  }),
   syncSessions: (gatewayId: string, profileName: string, csrfToken?: string) => request<SessionWire[]>("/sessions/sync", {
     method: "POST",
     headers: { "Idempotency-Key": crypto.randomUUID(), ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) },

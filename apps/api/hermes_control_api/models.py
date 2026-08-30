@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     JSON,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -139,6 +140,11 @@ class ProfileRef(Base, Timestamped):
     managed_by_control: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="unknown")
     model: Mapped[str | None] = mapped_column(String(200))
+    # Optional Control-owned presentation metadata. Hermes keeps the agent's
+    # runtime identity; the avatar stays local so existing profiles can use it
+    # without requiring a new upstream capability.
+    avatar_mime_type: Mapped[str | None] = mapped_column(String(32))
+    avatar_data: Mapped[bytes | None] = mapped_column(LargeBinary)
     capabilities: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     # Connectivity observations and capability verification have different
     # trust lifetimes. A heartbeat may refresh last_seen_at, but it must never

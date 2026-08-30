@@ -8,6 +8,7 @@ import { createChatForCurrentContext } from "../hooks";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useAppStore } from "../store/appStore";
 import { BrandMark } from "./BrandMark";
+import { ProfileAvatar } from "./ProfileAvatar";
 import type { SessionSummary, Workspace } from "../types";
 
 export function LeftSidebar() {
@@ -289,7 +290,7 @@ export function LeftSidebar() {
         <nav className="profile-strip" aria-label={t("sidebar.agentProfiles")}>
           {profiles.filter((profile) => profile.gatewayId === selectedGatewayId).map((profile) => (
             <button key={profile.id} type="button" className={cx(profile.id === selectedProfileId && "is-active")} onClick={() => selectProfile(profile.id)}>
-              <span>{profile.displayName.slice(0, 1)}</span>
+              <ProfileAvatar profile={profile} size="compact" fallback="initial" />
               {profile.displayName}
             </button>
           ))}

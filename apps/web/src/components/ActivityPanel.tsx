@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { hasPwaUpdateBlockers, requestPwaUpdate, usePwaUpdateStore } from "../lib/pwaUpdate";
+import { ProfileAvatar } from "./ProfileAvatar";
 
 export function ActivityPanel() {
   const { t, i18n } = useTranslation();
@@ -192,7 +193,7 @@ export function ActivityPanel() {
         </section> : null}
 
         <section className="context-card">
-          <div className="context-card__agent"><span className="agent-initial">{profile?.displayName[0] ?? "?"}</span><span><strong>{profile?.displayName ?? t("activity.noAgent")}</strong><small>{profile?.model ?? t("activity.undetected")}</small></span><Badge tone={profile?.status === "ready" ? "positive" : "warning"}>{t(profile?.status === "ready" ? "activity.ready" : "activity.unavailable")}</Badge></div>
+          <div className="context-card__agent"><ProfileAvatar profile={profile} size="activity" fallback="initial" /><span><strong>{profile?.displayName ?? t("activity.noAgent")}</strong><small>{profile?.model ?? t("activity.undetected")}</small></span><Badge tone={profile?.status === "ready" ? "positive" : "warning"}>{t(profile?.status === "ready" ? "activity.ready" : "activity.unavailable")}</Badge></div>
           <dl>
             <div><dt>{t("activity.workspace")}</dt><dd>{workspace?.name ?? t("activity.noWorkspace")}</dd></div>
             <div><dt>{t("activity.gateway")}</dt><dd><StatusDot tone={gateway?.status === "connected" ? "positive" : "warning"} /> {gateway?.name ?? t("activity.noGateway")}</dd></div>

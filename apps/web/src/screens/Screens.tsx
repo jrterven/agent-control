@@ -20,12 +20,14 @@ import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useAppStore } from "../store/appStore";
 import type { Automation, AutomationRun, Gateway, Profile, SearchResult, SessionSummary, ThemePreference } from "../types";
 import { BrandMark } from "../components/BrandMark";
+import { ProfileAvatar } from "../components/ProfileAvatar";
 import { InteractionCards } from "../components/ChatView";
 import { AdminConfigScreen } from "../components/AdminConfigScreen";
 import { ElevenLabsIntegration } from "../components/ElevenLabsIntegration";
 import i18n from "../i18n";
 import { useLanguagePreference } from "../hooks/useLanguagePreference";
 import { APP_VERSION, checkForPwaUpdate, hasPwaUpdateBlockers, requestPwaUpdate, usePwaUpdateStore } from "../lib/pwaUpdate";
+import { prepareProfileAvatar } from "../lib/profileAvatar";
 
 export function PageHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
   return <header className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</header>;
@@ -107,12 +109,15 @@ type AgentCreationPhase = "idle" | "creatingProfile" | "creatingSession" | "conf
 
 type PendingAgentSetup = {
   profile?: Profile;
+  avatarUploaded?: boolean;
   setupSession?: SessionSummary;
   operationId?: string;
   setupComplete?: boolean;
   setupArchived?: boolean;
   cleanSession?: SessionSummary;
 };
+
+type AvatarSelection = { blob: Blob; previewUrl: string };
 
 const emptyInteractionRequests = [] as const;
 const agentCreationSteps = ["creatingProfile", "creatingSession", "configuring", "finalizing"] as const;
@@ -146,11 +151,19 @@ export function AgentsScreen() {
   const profiles = useAppStore((state) => state.profiles);
   const selectedGatewayId = useAppStore((state) => state.selectedGatewayId);
   const csrfToken = useAppStore((state) => state.csrfToken);
-  const offline = useAppStore((state) => state.authState === "offline");
+  const authState = useAppStore((state) => state.authState);
+  const offline = authState === "offline";
   const demoMode = useAppStore((state) => state.demoMode);
   const hydrateBootstrap = useAppStore((state) => state.hydrateBootstrap);
   const [creatorOpen, setCreatorOpen] = useState(false);
   const [createError, setCreateError] = useState("");
+  const [createAvatarError, setCreateAvatarError] = useState("");
+  const [newAgentAvatar, setNewAgentAvatar] = useState<AvatarSelection | null>(null);
+  const [avatarEditorProfile, setAvatarEditorProfile] = useState<Profile | null>(null);
+  const [avatarDraft, setAvatarDraft] = useState<AvatarSelection | null>(null);
+  const [avatarRemoved, setAvatarRemoved] = useState(false);
+  const [avatarError, setAvatarError] = useState("");
+  const [avatarBusy, setAvatarBusy] = useState(false);
   const [pendingSetup, setPendingSetup] = useState<PendingAgentSetup | null>(null);
   const [creationValues, setCreationValues] = useState<AgentCreateValues | null>(null);
   const [creationPhase, setCreationPhase] = useState<AgentCreationPhase>("idle");
@@ -169,6 +182,7 @@ export function AgentsScreen() {
     && !offline
     && !demoMode,
   );
+  const canEditAvatars = authState === "authenticated" && !demoMode;
   const agentCreateSchema = useMemo(() => z.object({
     technicalName: z.string()
       .trim()
@@ -192,6 +206,33 @@ export function AgentsScreen() {
     resolver: zodResolver(agentCreateSchema),
     defaultValues: emptyAgentCreateValues,
   });
+  useEffect(() => () => {
+    if (newAgentAvatar?.previewUrl) URL.revokeObjectURL(newAgentAvatar.previewUrl);
+  }, [newAgentAvatar?.previewUrl]);
+  useEffect(() => () => {
+    if (avatarDraft?.previewUrl) URL.revokeObjectURL(avatarDraft.previewUrl);
+  }, [avatarDraft?.previewUrl]);
+  const avatarErrorMessage = (error: unknown) => {
+    const code = error instanceof Error ? error.message : "";
+    if (code === "AVATAR_UNSUPPORTED_TYPE") return t("agentsPage.avatarUnsupported");
+    if (code === "AVATAR_DECODE_FAILED") return t("agentsPage.avatarDecodeFailed");
+    if (code === "AVATAR_TOO_LARGE") return t("agentsPage.avatarTooLarge");
+    return code || t("agentsPage.avatarSaveError");
+  };
+  const selectAvatarFile = async (
+    file: File | undefined,
+    setSelection: (selection: AvatarSelection) => void,
+    setError: (message: string) => void,
+  ) => {
+    if (!file) return;
+    setError("");
+    try {
+      const blob = await prepareProfileAvatar(file);
+      setSelection({ blob, previewUrl: URL.createObjectURL(blob) });
+    } catch (error) {
+      setError(avatarErrorMessage(error));
+    }
+  };
   const closeCreator = () => {
     setCreatorOpen(false);
     setCreateError("");
@@ -199,6 +240,8 @@ export function AgentsScreen() {
     setCreationValues(null);
     setCreationPhase("idle");
     setLastProgressPhase("creatingProfile");
+    setCreateAvatarError("");
+    setNewAgentAvatar(null);
     reset(emptyAgentCreateValues);
   };
   const creationInProgress = creationPhase !== "idle" && creationPhase !== "error";
@@ -215,6 +258,8 @@ export function AgentsScreen() {
     setCreationValues(null);
     setCreationPhase("idle");
     setLastProgressPhase("creatingProfile");
+    setCreateAvatarError("");
+    setNewAgentAvatar(null);
     reset(emptyAgentCreateValues);
     setCreatorOpen(true);
   };
@@ -232,7 +277,7 @@ export function AgentsScreen() {
     try {
       let progress = pendingSetup ?? {};
       advanceCreation("creatingProfile");
-      const created = progress.profile ?? await api.createProfile({
+      let created = progress.profile ?? await api.createProfile({
         gatewayId: targetGatewayId,
         technicalName: values.technicalName,
         displayName: values.displayName,
@@ -240,6 +285,13 @@ export function AgentsScreen() {
       }, csrfToken);
       progress = { ...progress, profile: created };
       setPendingSetup(progress);
+
+      if (newAgentAvatar && !progress.avatarUploaded) {
+        const avatar = await api.setProfileAvatar(created.id, newAgentAvatar.blob, csrfToken);
+        created = { ...created, avatarUrl: avatar.avatarUrl };
+        progress = { ...progress, profile: created, avatarUploaded: true };
+        setPendingSetup(progress);
+      }
 
       advanceCreation("creatingSession");
       const setupSession = progress.setupSession ?? await api.createSession(created.id, undefined, csrfToken);
@@ -350,15 +402,57 @@ export function AgentsScreen() {
     && setupProfile.capabilities?.clarifications
     && setupProfile.capabilitySet?.methods.includes("clarify.respond"),
   );
+  const avatarDialog = useOverlayDialog<HTMLDivElement>({
+    open: Boolean(avatarEditorProfile),
+    onClose: () => {
+      if (!avatarBusy) {
+        setAvatarEditorProfile(null);
+        setAvatarDraft(null);
+        setAvatarRemoved(false);
+        setAvatarError("");
+      }
+    },
+    mediaQuery: "(min-width: 0px)",
+  });
+  const openAvatarEditor = (profile: Profile) => {
+    setAvatarEditorProfile(profile);
+    setAvatarDraft(null);
+    setAvatarRemoved(false);
+    setAvatarError("");
+  };
+  const closeAvatarEditor = () => {
+    if (avatarBusy) return;
+    setAvatarEditorProfile(null);
+    setAvatarDraft(null);
+    setAvatarRemoved(false);
+    setAvatarError("");
+  };
+  const saveAvatar = async () => {
+    if (!avatarEditorProfile || avatarBusy || (!avatarDraft && !avatarRemoved)) return;
+    setAvatarBusy(true);
+    setAvatarError("");
+    try {
+      await api.setProfileAvatar(avatarEditorProfile.id, avatarRemoved && !avatarDraft ? null : avatarDraft!.blob, csrfToken);
+      hydrateBootstrap(await api.bootstrap());
+      setAvatarEditorProfile(null);
+      setAvatarDraft(null);
+      setAvatarRemoved(false);
+      setAvatarError("");
+    } catch (error) {
+      setAvatarError(avatarErrorMessage(error));
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
   return (
     <div className="page-wrap">
       <PageHeader eyebrow={t("agentsPage.eyebrow")} title={t("agentsPage.title")} description={t("agentsPage.description")} />
       <div className="agent-grid">
         {profiles.map((profile) => (
           <Panel key={profile.id} className={cx("agent-card", profile.id === selectedProfileId && "is-selected")}>
-            <header><span className="agent-card__avatar"><Robot weight="duotone" /></span><span><strong>{profile.displayName}</strong><small>{profile.technicalName}</small></span><Badge tone={profile.status === "ready" ? "positive" : "warning"}>{profile.status === "ready" ? t("agentsPage.available") : profile.status === "busy" ? t("agentsPage.working") : t("agentsPage.unconfigured")}</Badge></header>
+            <header><ProfileAvatar profile={profile} size="card" fallback="robot" /><span><strong>{profile.displayName}</strong><small>{profile.technicalName}</small></span><Badge tone={profile.status === "ready" ? "positive" : "warning"}>{profile.status === "ready" ? t("agentsPage.available") : profile.status === "busy" ? t("agentsPage.working") : t("agentsPage.unconfigured")}</Badge></header>
             <dl><div><dt>{t("agentsPage.model")}</dt><dd>{profile.model}</dd></div><div><dt>{t("agentsPage.functions")}</dt><dd>{profileWritePolicy(profile, t)}</dd></div></dl>
-            <div className="agent-card__actions"><Button variant={profile.id === selectedProfileId ? "primary" : "secondary"} onClick={() => selectProfile(profile.id)}>{profile.id === selectedProfileId ? t("agentsPage.active") : t("agentsPage.use")}</Button>{profile.capabilities?.config ? <Link to="/config" className="hc-button hc-button--ghost hc-button--md">{t("agentsPage.viewConfig")}</Link> : null}</div>
+            <div className="agent-card__actions"><Button variant={profile.id === selectedProfileId ? "primary" : "secondary"} onClick={() => selectProfile(profile.id)}>{profile.id === selectedProfileId ? t("agentsPage.active") : t("agentsPage.use")}</Button>{profile.capabilities?.config ? <Link to="/config" className="hc-button hc-button--ghost hc-button--md">{t("agentsPage.viewConfig")}</Link> : null}{canEditAvatars ? <Button variant="ghost" leadingIcon={<PencilSimple />} onClick={() => openAvatarEditor(profile)}>{t("agentsPage.editImage")}</Button> : null}</div>
           </Panel>
         ))}
       </div>
@@ -381,6 +475,10 @@ export function AgentsScreen() {
                 void technicalNameField.onChange(event);
               }} />
               <Field label={t("agentsPage.displayName")} aria-label={t("agentsPage.displayName")} autoComplete="off" error={errors.displayName?.message} disabled={Boolean(pendingSetup)} {...register("displayName")} />
+              <div className="avatar-picker">
+                <ProfileAvatar src={newAgentAvatar?.previewUrl ?? null} size="card" fallback="robot" />
+                <div><strong>{t("agentsPage.agentImage")}</strong><small>{t("agentsPage.agentImageHint")}</small><span className="avatar-picker__actions"><label className="hc-button hc-button--secondary hc-button--sm">{t(newAgentAvatar ? "agentsPage.changeImage" : "agentsPage.chooseImage")}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { void selectAvatarFile(event.currentTarget.files?.[0], setNewAgentAvatar, setCreateAvatarError); event.currentTarget.value = ""; }} /></label>{newAgentAvatar ? <Button type="button" size="sm" variant="ghost" onClick={() => { setNewAgentAvatar(null); setCreateAvatarError(""); }}>{t("agentsPage.removeImage")}</Button> : null}</span>{createAvatarError ? <span className="hc-field__error" role="alert">{createAvatarError}</span> : null}</div>
+              </div>
               <label className="hc-field">
                 <span className="hc-field__label">{t("agentsPage.agentDescription")}</span>
                 <textarea rows={6} aria-label={t("agentsPage.agentDescription")} placeholder={t("agentsPage.agentDescriptionPlaceholder")} aria-invalid={Boolean(errors.description)} {...register("description")} />
@@ -414,6 +512,18 @@ export function AgentsScreen() {
               <div><Button type="button" variant="ghost" onClick={closeCreator}>{t("agentsPage.cancel")}</Button><Button type="button" variant="primary" onClick={() => { if (creationValues) void runAgentCreation(creationValues); }}>{t("agentsPage.progressRetry")}</Button></div>
             </div> : <p className="agent-creation-progress__waiting"><SpinnerGap className="is-spinning" /> {t("agentsPage.progressWaiting")}</p>}
           </div>}
+        </Panel>
+      </div> : null}
+      {avatarEditorProfile ? <div ref={avatarDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="avatar-editor-title" aria-describedby="avatar-editor-description">
+        <button className="modal-scrim" aria-label={t("agentsPage.closeImageEditor")} onClick={closeAvatarEditor} />
+        <Panel className="form-modal avatar-editor">
+          <span className="eyebrow">{t("agentsPage.imageEditorEyebrow")}</span>
+          <h2 id="avatar-editor-title">{t("agentsPage.editAgentImage", { name: avatarEditorProfile.displayName })}</h2>
+          <p id="avatar-editor-description">{t("agentsPage.editAgentImageDescription")}</p>
+          <div className="avatar-editor__preview"><ProfileAvatar profile={avatarEditorProfile} src={avatarDraft?.previewUrl ?? (avatarRemoved ? null : undefined)} size="lg" fallback="robot" /></div>
+          <div className="avatar-editor__actions"><label className="hc-button hc-button--secondary hc-button--md">{t(avatarEditorProfile.avatarUrl || avatarDraft ? "agentsPage.changeImage" : "agentsPage.chooseImage")}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { void selectAvatarFile(event.currentTarget.files?.[0], (selection) => { setAvatarDraft(selection); setAvatarRemoved(false); }, setAvatarError); event.currentTarget.value = ""; }} /></label>{avatarEditorProfile.avatarUrl || avatarDraft ? <Button type="button" variant="ghost" onClick={() => { setAvatarDraft(null); setAvatarRemoved(true); setAvatarError(""); }}>{t("agentsPage.useDefaultImage")}</Button> : null}</div>
+          {avatarError ? <p className="form-error" role="alert"><WarningCircle /> {avatarError}</p> : null}
+          <div><Button type="button" variant="ghost" onClick={closeAvatarEditor}>{t("agentsPage.cancel")}</Button><Button type="button" variant="primary" disabled={avatarBusy || (!avatarDraft && !avatarRemoved)} onClick={() => void saveAvatar()}>{t(avatarBusy ? "agentsPage.savingImage" : "agentsPage.saveImage")}</Button></div>
         </Panel>
       </div> : null}
     </div>

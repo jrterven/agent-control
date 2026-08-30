@@ -100,6 +100,14 @@ button { color: inherit; }
 .brand-mark--sm { width: 40px; height: 40px; font-size: 23px; }
 .brand-mark--md { width: 48px; height: 48px; font-size: 27px; }
 .brand-mark--lg { width: 64px; height: 64px; font-size: 36px; }
+.profile-avatar { display: inline-grid; place-items: center; flex: 0 0 auto; overflow: hidden; border: 1px solid var(--border-accent); background: var(--surface-0); }
+.profile-avatar img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.profile-avatar--compact { width: 20px; height: 20px; border-radius: 7px; font-size: 11px; }
+.profile-avatar--activity { width: 34px; height: 34px; border-radius: 10px; font-size: 14px; }
+.profile-avatar--sm { width: 40px; height: 40px; border-radius: 999px; font-size: 22px; }
+.profile-avatar--card { width: 44px; height: 44px; border-radius: 12px; font-size: 23px; }
+.profile-avatar--lg { width: 64px; height: 64px; border-radius: 999px; font-size: 34px; }
+.profile-avatar--fallback { color: var(--accent); background: var(--accent-soft); font-weight: 800; }
 
 .top-bar { height: 72px; padding: 0 22px; display: grid; grid-template-columns: 1fr minmax(160px, auto) auto; align-items: center; gap: 16px; border-bottom: 1px solid var(--border); background: var(--surface-0); }
 .top-bar__menu, .top-bar__activity { display: none !important; }
@@ -406,7 +414,7 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .agent-card dl div { display: flex; justify-content: space-between; gap: 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .agent-card dt { color: var(--muted); }
 .agent-card dd { margin: 0; text-align: right; }
-.agent-card__actions { display: flex; gap: 8px; }
+.agent-card__actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .agent-card__actions > a { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; padding: 0 16px; border-radius: 12px; font-weight: 680; }
 .safety-callout { display: flex; align-items: flex-start; gap: 13px; margin-top: 16px; padding: 16px; color: var(--success-text); border-color: var(--success-border); background: var(--success-surface); }
 .safety-callout p { margin: 4px 0 0; color: var(--text-soft); }
@@ -417,6 +425,18 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .create-agent-callout > .hc-button { min-width: 148px; }
 .agent-creator { width: min(560px, 100%); }
 .agent-creator textarea { min-height: 132px; resize: vertical; }
+.avatar-picker { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); }
+.avatar-picker > div { min-width: 0; display: grid; gap: 3px; }
+.avatar-picker strong { font-size: 13px; }
+.avatar-picker small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.avatar-picker__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+.avatar-picker input[type="file"], .avatar-editor__actions input[type="file"] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.avatar-picker label, .avatar-editor__actions label { cursor: pointer; }
+.avatar-editor { width: min(480px, 100%); }
+.avatar-editor__preview { display: grid; place-items: center; min-height: 132px; margin: 4px 0 16px; border: 1px dashed var(--border-strong); border-radius: 14px; background: var(--surface-1); }
+.avatar-editor__preview .profile-avatar--lg { width: 104px; height: 104px; font-size: 48px; }
+.avatar-editor__actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.avatar-editor > div:last-child { display: flex; justify-content: flex-end; gap: 8px; }
 .agent-creation-progress { width: min(620px, 100%); max-height: min(780px, 88dvh); }
 .agent-creation-progress__header { display: flex; align-items: center; gap: 13px; margin-bottom: 8px; }
 .agent-creation-progress__header > span:last-child { min-width: 0; }
@@ -784,6 +804,7 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 @media (max-width: 420px) {
   .top-bar { padding-inline: 10px; }
   .top-bar__identity .brand-mark { width: 34px; height: 34px; }
+  .top-bar__identity .profile-avatar--sm { width: 34px; height: 34px; }
   .identity-button__status { font-size: 10px; }
   .message-list, .date-divider { width: calc(100% - 20px); }
   .assistant-avatar { display: none; }

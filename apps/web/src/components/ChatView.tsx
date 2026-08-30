@@ -14,7 +14,7 @@ import { useScribeDictation } from "../hooks/useScribeDictation";
 import { useSpeechPlayback, type LiveSpeechStatus, type SpeechPlaybackStatus } from "../hooks/useSpeechPlayback";
 import { usePwaUpdateStore } from "../lib/pwaUpdate";
 import type { ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageMedia, Profile } from "../types";
-import { BrandMark } from "./BrandMark";
+import { ProfileAvatar } from "./ProfileAvatar";
 
 const emptyApprovals: ApprovalRequest[] = [];
 const emptyClarifications: ClarificationRequest[] = [];
@@ -306,7 +306,7 @@ function SpeechPlayer({ speech }: { speech: MessageSpeech }) {
   </div>;
 }
 
-function Message({ message, agentName, speech }: { message: ChatMessage; agentName: string; speech: MessageSpeech }) {
+function Message({ message, profile, agentName, speech }: { message: ChatMessage; profile?: Profile; agentName: string; speech: MessageSpeech }) {
   const { t } = useTranslation();
   if (message.role === "user") {
     return (
@@ -318,7 +318,7 @@ function Message({ message, agentName, speech }: { message: ChatMessage; agentNa
   }
   return (
     <article className="message message--assistant" aria-label={t("chat.assistantResponse", { agent: agentName })}>
-      <div className="assistant-avatar"><BrandMark size="sm" /></div>
+      <div className="assistant-avatar"><ProfileAvatar profile={profile} /></div>
       <div className="assistant-content">
         <header><strong>{agentName}</strong><time>{message.createdAt}</time>{message.streaming ? <Badge tone="info">{t("chat.streaming")}</Badge> : null}</header>
         <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{message.content || " "}</ReactMarkdown>{message.streaming ? <span className="stream-caret" aria-hidden="true" /> : null}</div>
@@ -649,7 +649,7 @@ export function ChatView() {
       <div className="message-scroll" ref={scrollRef}>
         <div className="date-divider"><span>{t("chat.fixedDate")}</span></div>
         <div className="message-list">
-          {visibleMessages.length ? visibleMessages.map((message) => <Message key={message.id} message={message} agentName={profile?.displayName ?? t("chat.agent")} speech={{ available: speechAvailable, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : <div className="empty-chat"><BrandMark size="lg" label="Agent Control" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
+          {visibleMessages.length ? visibleMessages.map((message) => <Message key={message.id} message={message} profile={profile} agentName={profile?.displayName ?? t("chat.agent")} speech={{ available: speechAvailable, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : <div className="empty-chat"><ProfileAvatar profile={profile} size="lg" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
           <InteractionCards approvals={approvals} clarifications={clarifications} offline={offline} canApprove={canApprove} canClarify={canClarify} />
           {streamingMessageId ? waitingForResponse
             ? <p className="typing-state typing-state--waiting" role="status"><WarningCircle /><span>{t("chat.waitingForResponse", { agent: profile?.displayName ?? "Hermes" })}</span></p>
