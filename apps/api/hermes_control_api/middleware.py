@@ -91,7 +91,11 @@ class BodySizeLimitMiddleware:
                 message = messages[position]
                 position += 1
                 return message
-            return {"type": "http.request", "body": b"", "more_body": False}
+            # Streaming responses keep listening for a client disconnect after
+            # the request body has been consumed. Delegate to the original
+            # channel at that point instead of inventing endless request-body
+            # messages, which Starlette correctly treats as a protocol error.
+            return await receive()
 
         await self.app(scope, replay_receive, send)
 
@@ -115,6 +119,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             in {
                 "/api/v1/realtime/tickets",
                 "/api/v1/realtime/transcription-token",
+                "/api/v1/realtime/speech-token",
+                "/api/v1/integrations/elevenlabs/speech",
             }
         ):
             return await call_next(request)
@@ -343,7 +349,7 @@ class SecurityBoundaryMiddleware(BaseHTTPMiddleware):
             response.headers["Cache-Control"] = "public, max-age=3600"
         response.headers[
             "Content-Security-Policy"
-        ] = "default-src 'self'; connect-src 'self' wss://api.elevenlabs.io; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        ] = "default-src 'self'; connect-src 'self' wss://api.elevenlabs.io; media-src 'self' blob:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         return response
 
     @staticmethod

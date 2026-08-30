@@ -1,11 +1,12 @@
-import { CheckCircle, Key, Microphone, Trash, WarningCircle } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { CheckCircle, Key, Microphone, Pause, Play, SpeakerHigh, Trash, WarningCircle } from "@phosphor-icons/react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge, Button, Field, Panel } from "@hermes-control/ui";
-import { api, type ElevenLabsIntegrationView } from "../lib/api";
+import { api, type ElevenLabsIntegrationView, type ElevenLabsTtsModelId, type ElevenLabsVoice } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 
-type Action = "load" | "save" | "test" | "delete" | "";
+type Action = "load" | "save" | "test" | "voice" | "delete" | "";
+type PreviewState = "idle" | "loading" | "playing" | "paused" | "error";
 
 export function ElevenLabsIntegration() {
   const { t } = useTranslation();
@@ -15,11 +16,48 @@ export function ElevenLabsIntegration() {
   const hydrateBootstrap = useAppStore((state) => state.hydrateBootstrap);
   const [view, setView] = useState<ElevenLabsIntegrationView | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [voices, setVoices] = useState<ElevenLabsVoice[]>([]);
+  const [voiceId, setVoiceId] = useState("");
+  const [ttsModelId, setTtsModelId] = useState<ElevenLabsTtsModelId>("eleven_flash_v2_5");
+  const [voicesLoading, setVoicesLoading] = useState(false);
   const [action, setAction] = useState<Action>("");
+  const [previewState, setPreviewState] = useState<PreviewState>("idle");
+  const [previewVoiceId, setPreviewVoiceId] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const blocked = offline || demoMode || Boolean(action);
+
+  const releasePreview = useCallback(() => {
+    const audio = previewAudioRef.current;
+    if (!audio) return;
+    audio.onplaying = null;
+    audio.onwaiting = null;
+    audio.onpause = null;
+    audio.onended = null;
+    audio.onerror = null;
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+    previewAudioRef.current = null;
+  }, []);
+
+  const stopPreview = useCallback(() => {
+    releasePreview();
+    setPreviewState("idle");
+    setPreviewVoiceId("");
+  }, [releasePreview]);
+
+  useEffect(() => () => releasePreview(), [releasePreview]);
+
+  useEffect(() => {
+    setTtsModelId(view?.ttsModelId ?? "eleven_flash_v2_5");
+  }, [view?.ttsModelId]);
+
+  useEffect(() => {
+    if (previewVoiceId && previewVoiceId !== voiceId) stopPreview();
+  }, [previewVoiceId, stopPreview, voiceId]);
 
   useEffect(() => {
     if (offline || demoMode) return;
@@ -33,6 +71,25 @@ export function ElevenLabsIntegration() {
     return () => { active = false; };
   }, [demoMode, offline, t]);
 
+  useEffect(() => {
+    if (!view?.configured || offline || demoMode) {
+      setVoices([]);
+      setVoiceId("");
+      return;
+    }
+    let active = true;
+    setVoicesLoading(true);
+    void api.elevenLabsVoices()
+      .then(({ items }) => {
+        if (!active) return;
+        setVoices(items);
+        setVoiceId(view.voiceId ?? "");
+      })
+      .catch(() => { if (active) setError(t("integrations.voicesError")); })
+      .finally(() => { if (active) setVoicesLoading(false); });
+    return () => { active = false; };
+  }, [demoMode, offline, t, view?.configured]);
+
   const refreshFeatures = async () => {
     const bootstrap = await api.bootstrap();
     hydrateBootstrap(bootstrap);
@@ -41,6 +98,7 @@ export function ElevenLabsIntegration() {
   const save = async () => {
     const submittedKey = apiKey.trim();
     if (!submittedKey || blocked) return;
+    stopPreview();
     setAction("save");
     setNotice("");
     setError("");
@@ -74,8 +132,79 @@ export function ElevenLabsIntegration() {
     }
   };
 
+  const saveVoice = async () => {
+    if (!voiceId || blocked) return;
+    stopPreview();
+    setAction("voice");
+    setNotice("");
+    setError("");
+    try {
+      const integration = await api.saveElevenLabsVoice(voiceId, ttsModelId, csrfToken);
+      setView(integration);
+      setNotice(t("integrations.voiceSaved", {
+        voice: integration.voiceName ?? voiceId,
+        model: t(`integrations.models.${integration.ttsModelId ?? ttsModelId}`),
+      }));
+      await refreshFeatures();
+    } catch {
+      setError(t("integrations.voiceSaveError"));
+    } finally {
+      setAction("");
+    }
+  };
+
+  const previewVoice = async () => {
+    const selected = voices.find((voice) => voice.id === voiceId);
+    if (!selected?.previewAvailable || blocked) return;
+    setError("");
+
+    const current = previewAudioRef.current;
+    if (current && previewVoiceId === voiceId) {
+      if (previewState === "playing" || previewState === "loading") {
+        current.pause();
+        setPreviewState("paused");
+        return;
+      }
+      if (previewState === "paused") {
+        try {
+          await current.play();
+        } catch {
+          setPreviewState("error");
+          setError(t("integrations.previewError"));
+        }
+        return;
+      }
+    }
+
+    releasePreview();
+    const audio = new Audio(api.elevenLabsVoicePreviewUrl(voiceId));
+    audio.preload = "none";
+    previewAudioRef.current = audio;
+    setPreviewVoiceId(voiceId);
+    setPreviewState("loading");
+    audio.onplaying = () => setPreviewState("playing");
+    audio.onwaiting = () => setPreviewState("loading");
+    audio.onpause = () => {
+      if (!audio.ended) setPreviewState("paused");
+    };
+    audio.onended = stopPreview;
+    audio.onerror = () => {
+      releasePreview();
+      setPreviewState("error");
+      setError(t("integrations.previewError"));
+    };
+    try {
+      await audio.play();
+    } catch {
+      releasePreview();
+      setPreviewState("error");
+      setError(t("integrations.previewError"));
+    }
+  };
+
   const remove = async () => {
     if (!view?.configured || blocked) return;
+    stopPreview();
     setAction("delete");
     setNotice("");
     setError("");
@@ -123,6 +252,50 @@ export function ElevenLabsIntegration() {
         onChange={(event) => setApiKey(event.target.value)}
       />
       <p className="integration-settings__privacy"><WarningCircle /> {t("integrations.audioDisclosure")}</p>
+      {view?.configured ? <div className="integration-settings__voice">
+        <div className="integration-settings__voice-heading"><SpeakerHigh weight="fill" /><span><strong>{t("integrations.voice")}</strong><small>{t("integrations.voiceHint")}</small></span></div>
+        <label className="integration-settings__model">
+          <span>{t("integrations.model")}</span>
+          <select
+            aria-label={t("integrations.model")}
+            value={ttsModelId}
+            disabled={blocked}
+            onChange={(event) => setTtsModelId(event.target.value as ElevenLabsTtsModelId)}
+          >
+            <option value="eleven_flash_v2_5">{t("integrations.models.eleven_flash_v2_5")}</option>
+            <option value="eleven_multilingual_v2">{t("integrations.models.eleven_multilingual_v2")}</option>
+          </select>
+          <small>{t(`integrations.modelHints.${ttsModelId}`)}</small>
+        </label>
+        <div className="integration-settings__voice-controls">
+          <select
+            aria-label={t("integrations.voice")}
+            value={voiceId}
+            disabled={blocked || voicesLoading}
+            onChange={(event) => setVoiceId(event.target.value)}
+          >
+            <option value="">{voicesLoading ? t("integrations.loadingVoices") : t("integrations.chooseVoice")}</option>
+            {voices.map((voice) => <option key={voice.id} value={voice.id}>{voice.name}{voice.category ? ` · ${voice.category}` : ""}</option>)}
+          </select>
+          <Button
+            variant="secondary"
+            leadingIcon={previewVoiceId === voiceId && (previewState === "playing" || previewState === "loading") ? <Pause /> : <Play />}
+            disabled={blocked || voicesLoading || !voiceId || !voices.find((voice) => voice.id === voiceId)?.previewAvailable}
+            onClick={() => void previewVoice()}
+          >
+            {previewVoiceId === voiceId && previewState === "loading"
+              ? t("integrations.loadingPreview")
+              : previewVoiceId === voiceId && previewState === "playing"
+                ? t("integrations.pausePreview")
+                : previewVoiceId === voiceId && previewState === "paused"
+                  ? t("integrations.resumePreview")
+                  : t("integrations.previewVoice")}
+          </Button>
+          <Button variant="secondary" disabled={blocked || voicesLoading || !voiceId || (voiceId === view.voiceId && ttsModelId === (view.ttsModelId ?? "eleven_flash_v2_5"))} onClick={() => void saveVoice()}>{action === "voice" ? t("integrations.savingVoice") : t("integrations.saveVoice")}</Button>
+        </div>
+        {voiceId && !voicesLoading && !voices.find((voice) => voice.id === voiceId)?.previewAvailable ? <small className="form-hint">{t("integrations.previewUnavailable")}</small> : null}
+        {view.voiceName ? <small className="integration-settings__voice-current"><CheckCircle weight="fill" /> {t("integrations.currentVoice", { voice: view.voiceName, model: t(`integrations.models.${view.ttsModelId ?? "eleven_flash_v2_5"}`) })}</small> : <small className="form-hint">{t("integrations.voiceRequired")}</small>}
+      </div> : null}
       {!view?.configured && action !== "load" ? <p className="form-hint"><Microphone /> {t("integrations.nativeFallback")}</p> : null}
       {notice ? <p className="integration-settings__notice" role="status" aria-live="polite"><CheckCircle weight="fill" /> {notice}</p> : null}
       {error ? <p className="form-error" role="alert"><WarningCircle weight="fill" /> {error}</p> : null}

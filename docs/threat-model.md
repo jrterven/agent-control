@@ -3,7 +3,7 @@
 ## Activos y actores
 
 Protected assets are Hermes/API credentials, each user's ElevenLabs API key,
-single-use transcription tokens, microphone audio, the Control vault key,
+single-use transcription/TTS tokens, microphone and synthesized audio, the Control vault key,
 admin session, transcripts, agent routing, remote mutation authority and audit
 data. Relevant actors include a legitimate admin, an attacker with browser
 access, a malicious page capable of CSRF, a compromised gateway URL, an
@@ -18,8 +18,9 @@ with host access.
 | Browser learns ElevenLabs API key | Reusable credential theft and quota spend | owner-scoped write-only record, AES-GCM with bound AAD; browser receives presence plus single-use token only |
 | Transcription token is cached, replayed or captured from the provider WSS query | Unauthorized audio session or token leakage | memory only, `Cache-Control: no-store`, no service-worker/browser persistence, no idempotency ledger, no complete provider-URL logging/telemetry and a fresh token per capture |
 | Token mint abuse | Exhausted provider quota | authenticated owner, CSRF and Origin validation, per-owner rate limit, provider-side key scopes and quota |
+| TTS synthesis abuse | Character quota exhaustion or unintended text disclosure | explicit live opt-in or per-message tap, authenticated CSRF-bound proxy, 20,000-character ceiling, owner rate limit, fixed provider origin and no automatic history replay |
 | Microphone starts without informed action | Private speech leaves device unexpectedly | destination/retention notice visible before the enabled mic action, secure-context permission, explicit user gesture, visible active state and deterministic resource cleanup |
-| Broad CSP exception | Arbitrary external exfiltration | exact `wss://api.elevenlabs.io` `connect-src`, `microphone=(self)`, no wildcard scheme or remote script relaxation |
+| Broad CSP exception | Arbitrary external exfiltration | exact `wss://api.elevenlabs.io` `connect-src`, bounded `media-src 'self' blob:`, `microphone=(self)`, no wildcard scheme or remote script/media relaxation |
 | Malicious transcription event | Draft corruption, transcript disclosure or UI/resource exhaustion | reproducibly patched/pinned SDK, 65,536-UTF-16-unit textual limit before JSON parsing, no raw SDK console output, unknown-event rejection, partial/committed separation and no automatic agent submission |
 | CSRF/session theft | Unauthorized mutations | opaque HttpOnly Secure SameSite cookies, synchronizer token, Origin checks, rotation and expiry |
 | Gateway SSRF/DNS rebinding | Cloud metadata or LAN access | scheme/port policy, DNS resolution before connect and redirect, block metadata/link-local/multicast/unspecified; private destinations require explicit private/tunnel mode |
@@ -50,6 +51,12 @@ with host access.
 - Stop, background, navigation, logout and error close every microphone track,
   audio processor and transcription WebSocket. Reconnect always mints a fresh
   token after another explicit user action.
+- Live TTS receives only a single-use token; the reusable key remains encrypted
+  in Control. Navigation, disabling live reading and logout stop the socket and
+  media pipeline. Historical TTS bodies, audio and full provider URLs are not
+  stored in SQLite, audit payloads or browser caches. CSP permits only
+  same-origin and in-memory `blob:` media; it does not permit remote media
+  origins.
 - The composer accepts only committed transcript text and never sends it to an
   agent automatically. Native keyboard dictation remains available without the
   BYOK integration.

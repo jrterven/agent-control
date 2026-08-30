@@ -1,4 +1,4 @@
-import { Check, Checks, Microphone, PaperPlaneTilt, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle } from "@phosphor-icons/react";
+import { Check, Checks, Microphone, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -11,7 +11,9 @@ import { api } from "../lib/api";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
-import type { ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageMedia } from "../types";
+import { useSpeechPlayback, type LiveSpeechStatus, type SpeechPlaybackStatus } from "../hooks/useSpeechPlayback";
+import { usePwaUpdateStore } from "../lib/pwaUpdate";
+import type { ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageMedia, Profile } from "../types";
 import { BrandMark } from "./BrandMark";
 
 const emptyApprovals: ApprovalRequest[] = [];
@@ -33,7 +35,7 @@ function DeliveryIcon({ delivery }: { delivery?: ChatMessage["delivery"] }) {
   return <Check aria-label={t("chat.delivery.sending")} />;
 }
 
-function ApprovalCard({ request, offline, canRespond }: { request: ApprovalRequest; offline: boolean; canRespond: boolean }) {
+function ApprovalCard({ request, offline, canRespond, profileOverride }: { request: ApprovalRequest; offline: boolean; canRespond: boolean; profileOverride?: Profile }) {
   const { t } = useTranslation();
   const headingId = useId();
   const busy = request.state === "submitting";
@@ -59,7 +61,7 @@ function ApprovalCard({ request, offline, canRespond }: { request: ApprovalReque
             variant={choice === "deny" ? "danger" : choice === "once" ? "primary" : "secondary"}
             disabled={blocked}
             aria-busy={busy || undefined}
-            onClick={() => void respondToApproval(request.sessionId, request.requestId, choice).catch(() => undefined)}
+            onClick={() => void respondToApproval(request.sessionId, request.requestId, choice, profileOverride).catch(() => undefined)}
           >
             {busy ? t("approvals.confirming") : t(`approvals.choices.${choice}`)}
           </Button>
@@ -88,12 +90,14 @@ function ClarificationQuestionForm({
   index,
   offline,
   canRespond,
+  profileOverride,
 }: {
   request: ClarificationRequest;
   question: ClarificationQuestion;
   index: number;
   offline: boolean;
   canRespond: boolean;
+  profileOverride?: Profile;
 }) {
   const { t } = useTranslation();
   const headingId = useId();
@@ -139,6 +143,7 @@ function ClarificationQuestionForm({
       request.requestId,
       value,
       request.batch ? question.questionId : undefined,
+      profileOverride,
     ).catch(() => undefined);
   };
 
@@ -221,7 +226,7 @@ function ClarificationQuestionForm({
   );
 }
 
-function ClarificationCard({ request, offline, canRespond }: { request: ClarificationRequest; offline: boolean; canRespond: boolean }) {
+function ClarificationCard({ request, offline, canRespond, profileOverride }: { request: ClarificationRequest; offline: boolean; canRespond: boolean; profileOverride?: Profile }) {
   const { t } = useTranslation();
   const headingId = useId();
   return (
@@ -243,6 +248,7 @@ function ClarificationCard({ request, offline, canRespond }: { request: Clarific
             index={index}
             offline={offline}
             canRespond={canRespond}
+            profileOverride={profileOverride}
           />
         ))}
       </div>
@@ -253,24 +259,54 @@ function ClarificationCard({ request, offline, canRespond }: { request: Clarific
   );
 }
 
-function InteractionCards({ approvals, clarifications, offline, canApprove, canClarify }: {
+export function InteractionCards({ approvals, clarifications, offline, canApprove, canClarify, profileOverride }: {
   approvals: ApprovalRequest[];
   clarifications: ClarificationRequest[];
   offline: boolean;
   canApprove: boolean;
   canClarify: boolean;
+  profileOverride?: Profile;
 }) {
   const { t } = useTranslation();
   if (!approvals.length && !clarifications.length) return null;
   return (
     <div className="interaction-stack" aria-live="polite" aria-label={t("approvals.waitingAria")}>
-      {approvals.map((request) => <ApprovalCard key={request.requestId} request={request} offline={offline} canRespond={canApprove} />)}
-      {clarifications.map((request) => <ClarificationCard key={request.requestId} request={request} offline={offline} canRespond={canClarify} />)}
+      {approvals.map((request) => <ApprovalCard key={request.requestId} request={request} offline={offline} canRespond={canApprove} profileOverride={profileOverride} />)}
+      {clarifications.map((request) => <ClarificationCard key={request.requestId} request={request} offline={offline} canRespond={canClarify} profileOverride={profileOverride} />)}
     </div>
   );
 }
 
-function Message({ message, agentName }: { message: ChatMessage; agentName: string }) {
+type MessageSpeech = {
+  available: boolean;
+  activeMessageId?: string;
+  status: SpeechPlaybackStatus;
+  rate: number;
+  error: boolean;
+  speak: (message: ChatMessage) => Promise<void>;
+  togglePause: () => void;
+  stop: () => void;
+  setRate: (rate: number) => void;
+};
+
+function SpeechPlayer({ speech }: { speech: MessageSpeech }) {
+  const { t } = useTranslation();
+  return <div className="speech-player" role="group" aria-label={t("speech.player")}>
+    <IconButton
+      label={t(speech.status === "playing" ? "speech.pause" : "speech.play")}
+      disabled={speech.status === "loading"}
+      icon={speech.status === "playing" ? <Pause weight="fill" /> : <Play weight="fill" />}
+      onClick={speech.togglePause}
+    />
+    <IconButton label={t("speech.stop")} icon={<Stop weight="fill" />} onClick={speech.stop} />
+    <label><span>{t("speech.speed")}</span><select aria-label={t("speech.speed")} value={speech.rate} onChange={(event) => speech.setRate(Number(event.target.value))}>
+      {[0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
+    </select></label>
+    <span className={`speech-player__status speech-player__status--${speech.status}`} role="status">{t(`speech.${speech.error ? "error" : speech.status}`)}</span>
+  </div>;
+}
+
+function Message({ message, agentName, speech }: { message: ChatMessage; agentName: string; speech: MessageSpeech }) {
   const { t } = useTranslation();
   if (message.role === "user") {
     return (
@@ -298,6 +334,10 @@ function Message({ message, agentName }: { message: ChatMessage; agentName: stri
             ))}
           </div>
         ) : null}
+        {speech.available && !message.streaming && message.content.trim() ? <div className="message-speech">
+          <IconButton className="message-speech__button" label={t("speech.readResponse")} selected={speech.activeMessageId === message.id} icon={<SpeakerHigh weight="fill" />} onClick={() => void speech.speak(message)} />
+          {speech.activeMessageId === message.id ? <SpeechPlayer speech={speech} /> : null}
+        </div> : null}
       </div>
     </article>
   );
@@ -340,7 +380,7 @@ export function insertTranscriptAtSelection(value: string, transcript: string, s
   return { value: `${before}${insertion}${after}`, caret: before.length + insertion.length };
 }
 
-function Composer({ agentName, sessionId, canInterrupt, offline = false }: { agentName: string; sessionId: string; canInterrupt: boolean; offline?: boolean }) {
+function Composer({ agentName, sessionId, canInterrupt, offline = false, speechAvailable, liveSpeechEnabled, liveSpeechStatus, onLiveSpeechChange }: { agentName: string; sessionId: string; canInterrupt: boolean; offline?: boolean; speechAvailable: boolean; liveSpeechEnabled: boolean; liveSpeechStatus: LiveSpeechStatus; onLiveSpeechChange: (enabled: boolean) => void }) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
   const [dictationConsent, setDictationConsent] = useState(false);
@@ -350,6 +390,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
   const authState = useAppStore((state) => state.authState);
   const dictationConfigured = useAppStore((state) => state.features?.dictation.available === true);
   const draft = useSessionDraft(sessionId);
+  const setUpdateBlocker = usePwaUpdateStore((state) => state.setBlocker);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dictationSelectionRef = useRef<{ start: number; end: number } | null>(null);
   const insertCommitted = (transcript: string) => {
@@ -425,6 +466,16 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
   }, [authState, dictation.available]);
 
   useEffect(() => {
+    setUpdateBlocker("dictation", dictation.active);
+    return () => setUpdateBlocker("dictation", false);
+  }, [dictation.active, setUpdateBlocker]);
+
+  useEffect(() => {
+    setUpdateBlocker("draft", Boolean(value.trim()));
+    return () => setUpdateBlocker("draft", false);
+  }, [setUpdateBlocker, value]);
+
+  useEffect(() => {
     let active = true;
     dictationSelectionRef.current = null;
     setValue("");
@@ -461,13 +512,24 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false }: { age
   const onSubmit = async () => {
     const next = value.trim();
     if (!next || streamingMessageId || offline || dictation.active) return;
+    // submitPrompt marks the session as streaming synchronously before its
+    // first await. Start it before clearing the draft so an update queued for
+    // a safe moment cannot slip into the hand-off between typing and sending.
+    const submission = submitPrompt(next);
     setValue("");
     await draft.clear();
-    await submitPrompt(next);
+    await submission;
   };
 
   return (
     <div className="composer-wrap">
+      {speechAvailable ? <label className="live-speech-toggle">
+        <input type="checkbox" checked={liveSpeechEnabled} onChange={(event) => onLiveSpeechChange(event.target.checked)} />
+        <span aria-hidden="true" />
+        <SpeakerHigh weight="fill" />
+        <strong>{t("speech.autoRead")}</strong>
+        {liveSpeechStatus !== "idle" ? <small role="status">{t(`speech.live.${liveSpeechStatus}`)}</small> : null}
+      </label> : null}
       <div className="composer">
         <textarea
           ref={textareaRef}
@@ -534,6 +596,15 @@ export function ChatView() {
   // that state, even as a visual fallback.
   const session = sessions.find((item) => item.id === sessionId);
   const visibleMessages = useMemo(() => messages.filter((message) => message.sessionId === sessionId), [messages, sessionId]);
+  const speechAvailable = useAppStore((state) => state.features?.speech?.available === true);
+  const csrfToken = useAppStore((state) => state.csrfToken);
+  const streamingMessage = visibleMessages.find((message) => message.id === streamingMessageId);
+  const speech = useSpeechPlayback({
+    available: speechAvailable && authState === "authenticated",
+    sessionId,
+    csrfToken,
+    streamingMessage,
+  });
   const offline = authState === "offline";
   const canMutate = demoMode || (authState === "authenticated" && profile?.mutable === true);
   const canPrompt = canMutate && Boolean(profile?.capabilities?.prompts);
@@ -578,7 +649,7 @@ export function ChatView() {
       <div className="message-scroll" ref={scrollRef}>
         <div className="date-divider"><span>{t("chat.fixedDate")}</span></div>
         <div className="message-list">
-          {visibleMessages.length ? visibleMessages.map((message) => <Message key={message.id} message={message} agentName={profile?.displayName ?? t("chat.agent")} />) : <div className="empty-chat"><BrandMark size="lg" label="Agent Control" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
+          {visibleMessages.length ? visibleMessages.map((message) => <Message key={message.id} message={message} agentName={profile?.displayName ?? t("chat.agent")} speech={{ available: speechAvailable, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : <div className="empty-chat"><BrandMark size="lg" label="Agent Control" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
           <InteractionCards approvals={approvals} clarifications={clarifications} offline={offline} canApprove={canApprove} canClarify={canClarify} />
           {streamingMessageId ? waitingForResponse
             ? <p className="typing-state typing-state--waiting" role="status"><WarningCircle /><span>{t("chat.waitingForResponse", { agent: profile?.displayName ?? "Hermes" })}</span></p>
@@ -586,7 +657,7 @@ export function ChatView() {
             : null}
         </div>
       </div>
-      {session && (canPrompt || offline) ? <Composer agentName={profile?.displayName ?? "Hermes"} sessionId={sessionId} canInterrupt={canInterrupt} offline={offline} /> : session ? <div className="composer-unavailable"><ShieldNotice /> {t(profile?.mutable ? "chat.promptUnavailable" : "chat.profileReadOnly")}</div> : profile && !profile.mutable ? <div className="composer-unavailable"><ShieldNotice /> {t("chat.chooseTestEnvironment")}</div> : null}
+      {session && (canPrompt || offline) ? <Composer agentName={profile?.displayName ?? "Hermes"} sessionId={sessionId} canInterrupt={canInterrupt} offline={offline} speechAvailable={speechAvailable} liveSpeechEnabled={speech.liveEnabled} liveSpeechStatus={speech.liveStatus} onLiveSpeechChange={speech.setLiveEnabled} /> : session ? <div className="composer-unavailable"><ShieldNotice /> {t(profile?.mutable ? "chat.promptUnavailable" : "chat.profileReadOnly")}</div> : profile && !profile.mutable ? <div className="composer-unavailable"><ShieldNotice /> {t("chat.chooseTestEnvironment")}</div> : null}
     </section>
   );
 }

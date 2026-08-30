@@ -94,6 +94,10 @@ def test_owner_can_store_write_only_key_and_bootstrap_exposes_neutral_capability
         "configured": False,
         "provider": "elevenlabs",
         "modelId": "scribe_v2_realtime",
+        "ttsModelId": "eleven_flash_v2_5",
+        "voiceId": None,
+        "voiceName": None,
+        "speechAvailable": False,
     }
 
     stored = _put_key(client, csrf, secret)
@@ -102,6 +106,10 @@ def test_owner_can_store_write_only_key_and_bootstrap_exposes_neutral_capability
         "configured": True,
         "provider": "elevenlabs",
         "modelId": "scribe_v2_realtime",
+        "ttsModelId": "eleven_flash_v2_5",
+        "voiceId": None,
+        "voiceName": None,
+        "speechAvailable": False,
     }
     assert secret not in stored.text
 
@@ -130,6 +138,13 @@ def test_owner_can_store_write_only_key_and_bootstrap_exposes_neutral_capability
         "available": True,
         "provider": "elevenlabs",
         "modelId": "scribe_v2_realtime",
+    }
+    assert bootstrap.json()["features"]["speech"] == {
+        "available": False,
+        "provider": "elevenlabs",
+        "modelId": "eleven_flash_v2_5",
+        "voiceId": None,
+        "voiceName": None,
     }
     assert secret not in bootstrap.text
 
@@ -659,12 +674,15 @@ def test_integration_test_endpoint_shares_the_owner_token_rate_limit(
         assert [row.outcome for row in rows] == ["success", "failure"]
 
 
-def test_security_headers_allow_only_official_scribe_socket_and_self_microphone(client):
+def test_security_headers_allow_only_required_voice_origins_and_self_microphone(client):
     response = client.get("/api/v1/health")
     assert response.headers["Permissions-Policy"] == (
         "camera=(), microphone=(self), geolocation=()"
     )
     csp = response.headers["Content-Security-Policy"]
     assert "connect-src 'self' wss://api.elevenlabs.io" in csp
+    assert "media-src 'self' blob:" in csp
     assert "script-src 'self'" in csp
     assert "https://api.elevenlabs.io" not in csp
+    assert "media-src *" not in csp
+    assert "media-src 'self' data:" not in csp

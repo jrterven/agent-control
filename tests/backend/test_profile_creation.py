@@ -1,11 +1,35 @@
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from hermes_control_api.models import ProfileRef
+from hermes_control_api.schemas import ProfileCreate, PromptRequest
 from hermes_control_api.services import GatewayService
 
 from .conftest import mutation_headers
+
+
+def test_agent_setup_brief_accepts_long_prompts_with_a_bounded_safety_ceiling():
+    long_brief = "A" * 50_000
+    payload = ProfileCreate(
+        gateway_id="gateway-a",
+        technical_name="turing",
+        display_name="Turing",
+        description=long_brief,
+    )
+    assert payload.description == long_brief
+    wrapped_prompt = PromptRequest(content=f"Setup instructions\n\n{('A' * 200_000)}")
+    assert len(wrapped_prompt.content) > 200_000
+
+    with pytest.raises(ValidationError):
+        ProfileCreate(
+            gateway_id="gateway-a",
+            technical_name="too-large",
+            display_name="Too large",
+            description="A" * 200_001,
+        )
 
 
 def test_admin_can_create_use_and_refresh_an_isolated_agent(authenticated, app):

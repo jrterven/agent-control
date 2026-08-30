@@ -51,6 +51,32 @@ describe("browser API boundary", () => {
     expect((fetchMock.mock.calls[4][1] as RequestInit).method).toBe("DELETE");
   });
 
+  it("sends only an allowlisted TTS model with the selected voice", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      configured: true,
+      provider: "elevenlabs",
+      modelId: "scribe_v2_realtime",
+      ttsModelId: "eleven_multilingual_v2",
+      voiceId: "voice-aria",
+      voiceName: "Aria",
+      speechAvailable: true,
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.saveElevenLabsVoice(
+      "voice-aria",
+      "eleven_multilingual_v2",
+      "csrf-memory-only",
+    );
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/v1/integrations/elevenlabs/voice");
+    expect(JSON.parse(String(init.body))).toEqual({
+      voiceId: "voice-aria",
+      ttsModelId: "eleven_multilingual_v2",
+    });
+  });
+
   it("responds to official approval and clarification gates through same-origin Control routes", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ requestId: "approval/1", resolved: 1, status: "resolved" }), { status: 200, headers: { "Content-Type": "application/json" } }))
@@ -202,6 +228,35 @@ describe("browser API boundary", () => {
       "X-CSRF-Token": "csrf-memory-only",
       "X-Confirm-Delete": "stored-exact-42",
     }));
+  });
+
+  it("moves a session to a workspace through Control metadata", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "session-a",
+      gatewayId: "gateway-a",
+      workspaceId: "workspace-papers",
+      profileName: "jarvis",
+      profileId: "profile-jarvis",
+      storedSessionId: "stored-a",
+      runtimeSessionId: null,
+      title: "Conversation",
+      status: "idle",
+      archivedAt: null,
+      updatedAt: "2026-08-30T02:00:00Z",
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const moved = await api.moveSession("session/a", "workspace-papers", "csrf-memory-only");
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/v1/sessions/session%2Fa");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(String(init.body))).toEqual({ workspaceId: "workspace-papers" });
+    expect(init.headers).toEqual(expect.objectContaining({
+      "Idempotency-Key": expect.any(String),
+      "X-CSRF-Token": "csrf-memory-only",
+    }));
+    expect(moved.workspaceId).toBe("workspace-papers");
   });
 
   it("downloads sanitized session exports through Control", async () => {

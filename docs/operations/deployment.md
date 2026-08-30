@@ -17,12 +17,13 @@ truth for profiles, conversations, sessions and cron.
 Do not add firewall openings, Docker port publishing, Tailscale Funnel, or
 Tailscale Serve entries for `9119`/`8642`.
 
-BYOK dictation adds outbound traffic only. FastAPI needs HTTPS egress to the
-fixed `https://api.elevenlabs.io` origin to mint a single-use token, and each
-participating browser needs WSS egress to
-`wss://api.elevenlabs.io/v1/speech-to-text/realtime` for its audio stream. Audio
-does not traverse Tailscale Serve or Control, and no new inbound listener or
-Serve route is permitted.
+BYOK voice features add outbound traffic only. FastAPI needs HTTPS egress to the
+fixed `https://api.elevenlabs.io` origin to mint single-use tokens, list voices
+and proxy historical TTS audio. Voice-catalog samples additionally require
+backend HTTPS egress to `storage.googleapis.com`; redirects and all paths
+outside ElevenLabs' public preview bucket remain blocked. Each participating browser needs WSS egress to
+the official speech-to-text and text-to-speech paths for microphone capture and
+live answer playback. No new inbound listener or Serve route is permitted.
 
 The official provider handshake carries the single-use token in the WSS query.
 Do not enable browser/proxy telemetry that records complete WebSocket URLs, and
@@ -118,10 +119,12 @@ Set Control's allowed origin to the exact resulting `https://…ts.net` URL. Tes
 login, CSRF, WebSocket upgrade and logout from a second tailnet device.
 
 Production response headers must keep the existing same-origin policy and add
-only the dictation exceptions: `microphone=(self)` in Permissions Policy and
-the exact `wss://api.elevenlabs.io` source in CSP `connect-src`. Do not add a
-wildcard `wss:`, broad `https:`, remote script source or iframe permission. Test
-these headers on the built FastAPI-served PWA, not only in Vite development.
+only the voice exceptions: `microphone=(self)` in Permissions Policy, the exact
+`wss://api.elevenlabs.io` source in CSP `connect-src`, and
+`media-src 'self' blob:` for same-origin voice notes plus the in-memory audio
+objects used by response playback. Do not add a wildcard `wss:`, broad `https:`,
+remote media/script source or iframe permission. Test these headers on the built
+FastAPI-served PWA, not only in Vite development.
 
 ## Container alternative
 
@@ -185,4 +188,8 @@ or a broad mount of `/home/hermes/.hermes`.
 - Stop, background, navigation and logout release the microphone and WSS. A
   later start mints a fresh token. With the integration disabled or unavailable,
   native operating-system keyboard dictation still works as the fallback.
+- Selecting an ElevenLabs voice enables the live-response switch and the
+  per-message speaker. Verify incremental TTS on the installed PWA, then verify
+  historical play/pause, stop and speed controls. Neither the reusable key,
+  response text nor synthesized MP3 may appear in audit or idempotency records.
 - Backup timer is enabled and a restore drill has been completed.

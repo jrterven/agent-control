@@ -91,12 +91,11 @@ class FailoverProvider:
     async def list_profiles(self):
         return await self._call("list_profiles")
 
-    async def create_profile(self, *, name, display_name, description):
+    async def create_profile(self, *, name, display_name):
         return await self._call(
             "create_profile",
             name=name,
             display_name=display_name,
-            description=description,
         )
 
     async def list_sessions(self):

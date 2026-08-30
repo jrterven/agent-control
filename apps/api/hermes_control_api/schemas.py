@@ -237,7 +237,10 @@ class ProfileCreate(ApiModel):
         pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$",
     )
     display_name: str = Field(min_length=2, max_length=80)
-    description: str = Field(min_length=10, max_length=4_000)
+    # This is an operator-authored setup brief, not a routing label or SOUL
+    # document. Keep a generous application boundary while still fitting
+    # safely beneath the global one-megabyte request-body limit in UTF-8.
+    description: str = Field(min_length=10, max_length=200_000)
 
     @field_validator("technical_name")
     @classmethod
@@ -323,6 +326,17 @@ class SessionSyncRequest(ApiModel):
 class SessionUpdate(ApiModel):
     workspace_id: str | None = None
     archived: bool | None = None
+    display_title: str | None = Field(default=None, min_length=1, max_length=300)
+
+    @field_validator("display_title")
+    @classmethod
+    def normalize_display_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("Display title cannot be empty")
+        return normalized
 
 
 class SessionView(ApiModel):
@@ -356,7 +370,8 @@ class SearchResponse(ApiModel):
 
 
 class PromptRequest(ApiModel):
-    content: str = Field(min_length=1, max_length=200_000)
+    # Setup prompts may wrap a 200k operator brief with bounded instructions.
+    content: str = Field(min_length=1, max_length=205_000)
 
     @field_validator("content")
     @classmethod

@@ -14,7 +14,10 @@ ElevenLabs por el único origen WebSocket permitido. La API key de larga duraci�
 permanece cifrada en el backend y esta integración nunca se vincula a Hermes,
 OpenClaw, un gateway, un perfil o una sesión de agente.
 La decisión y sus límites están formalizados en
-[ADR 0006](adr/0006-owner-scoped-realtime-transcription.md).
+[ADR 0006](adr/0006-owner-scoped-realtime-transcription.md). La misma credencial
+puede habilitar TTS bajo el contrato separado de
+[ADR 0007](adr/0007-owner-scoped-elevenlabs-tts.md): un token de un solo uso para
+audio en vivo y un proxy autenticado para respuestas históricas.
 
 ```mermaid
 flowchart LR
@@ -24,7 +27,7 @@ flowchart LR
     C --> E[Normalizador y event hub]
     E --> B
     C --> PA[Adaptador de proveedor]
-    C -->|API key owner-scoped\nsolo para acuñar token| STT[ElevenLabs API]
+    C -->|API key owner-scoped\ntokens, voces y TTS histórico| STT[ElevenLabs API]
     B -.->|audio WSS + token single-use| STT
     PA -->|REST + JSON-RPC WS\nperfil explícito| H[Hermes serve\n127.0.0.1:9119]
     PA -.->|HTTP/SSE fallback| F[Hermes API server\n127.0.0.1:8642]
@@ -58,8 +61,12 @@ flowchart TB
 
 - **Web:** presentación, borradores y caché offline opcional. Las URLs de Control
   y de proveedores de agentes son relativas al origen de Control. La única
-  excepción es el WebSocket de dictado hacia el origen exacto de ElevenLabs,
-  autorizado por CSP y solo mientras existe una captura iniciada por el usuario.
+  excepción son los WebSockets de dictado y TTS en vivo hacia el origen exacto
+  de ElevenLabs, autorizados por CSP y solo después de una acción del usuario.
+  Un coordinador de actualización PWA mantiene el nuevo service worker en espera
+  hasta una acción explícita; dictado, streaming y borradores bloquean la recarga
+  y la selección actual se conserva solo durante ese relevo controlado. La
+  reproducción de voz también bloquea una actualización para no cortar audio.
 - **API Control:** autenticación, CSRF, autorización, metadatos, auditoría,
   idempotencia, validación SSRF y traducción de protocolos.
 - **Adaptadores de proveedor:** traducen las capacidades de cada runtime al
@@ -75,6 +82,10 @@ flowchart TB
 - **Integración de transcripción:** credencial BYOK propia de cada usuario,
   cifrada por Control y usada únicamente para solicitar tokens de un solo uso.
   No es un adaptador de agente y no participa en el routing de sesiones.
+- **Integración de voz:** reutiliza la misma credencial cifrada, conserva solo
+  el ID/nombre no secretos de la voz elegida y el modelo permitido (Flash v2.5
+  o Multilingual v2), y nunca asocia el audio a Hermes. Eleven v3 no forma parte
+  del contrato público.
 
 ## Dictado BYOK
 
@@ -114,6 +125,18 @@ incorpora al borrador editable y nunca se envía automáticamente al agente. El
 compositor parte de un renglón, crece hasta seis y después desplaza su contenido.
 El dictado nativo del teclado del sistema operativo permanece como alternativa
 cuando BYOK, el navegador o la red no están disponibles.
+
+## Lectura de respuestas
+
+Para una respuesta en curso, Control acuña un token `tts_websocket` y el
+navegador abre el WebSocket oficial con la voz verificada. El texto incremental
+saneado entra por ese canal y los fragmentos MP3 se anexan a un `MediaSource`;
+la API key reutilizable nunca llega al cliente. Para una respuesta histórica,
+el navegador envía el texto visible a un endpoint Control autenticado y con
+CSRF; FastAPI solicita el stream HTTP oficial y lo retransmite como
+`audio/mpeg`, `no-store`. Código en bloque, URLs y rutas `MEDIA:` se omiten de la
+forma hablada. Ningún texto o audio TTS se guarda en SQLite, auditoría,
+idempotencia o la caché offline.
 
 El cliente Scribe fijado en el lockfile se endurece mediante el patch reproducible
 versionado bajo `patches/`, aplicado por `patch-package` en `npm install`. Antes de

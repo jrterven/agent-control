@@ -62,6 +62,7 @@ type AppState = {
   setOfflineCacheEnabled: (enabled: boolean) => void;
   hydrateBootstrap: (data: BootstrapData) => void;
   addSession: (session: SessionSummary) => void;
+  updateSession: (sessionId: string, update: Partial<SessionSummary>) => void;
   removeSession: (sessionId: string) => void;
   setSessionUsage: (sessionId: string, usage?: SessionUsage) => void;
   upsertApproval: (request: ApprovalRequest) => void;
@@ -179,15 +180,39 @@ export const useAppStore = create<AppState>((set) => ({
     // app has loaded. Preserve it during background refreshes so sessions
     // opened from automation runs are not silently replaced by a session in
     // the first workspace.
-    const selectedWorkspaceId = state.bootstrapLoaded && state.selectedWorkspaceId === ""
-      ? ""
-      : data.workspaces.some((item) => item.id === state.selectedWorkspaceId)
-        ? state.selectedWorkspaceId
-        : data.workspaces[0]?.id ?? "";
+    const requestedSession = data.sessions.find((item) => item.id === state.selectedSessionId && item.profileId === selectedProfileId);
+    const selectedWorkspaceId = requestedSession
+      ? requestedSession.workspaceId ?? ""
+      : state.bootstrapLoaded && state.selectedWorkspaceId === ""
+        ? ""
+        : data.workspaces.some((item) => item.id === state.selectedWorkspaceId)
+          ? state.selectedWorkspaceId
+          : data.workspaces[0]?.id ?? "";
     const selectedSessionId = data.sessions.some((item) => item.id === state.selectedSessionId && item.profileId === selectedProfileId && (!selectedWorkspaceId || item.workspaceId === selectedWorkspaceId)) ? state.selectedSessionId : data.sessions.find((item) => item.profileId === selectedProfileId && (!selectedWorkspaceId || item.workspaceId === selectedWorkspaceId))?.id ?? "";
     return { ...data, bootstrapLoaded: true, selectedGatewayId, selectedProfileId, selectedWorkspaceId, selectedSessionId };
   }),
   addSession: (session) => set((state) => ({ sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)], selectedSessionId: session.id, leftDrawerOpen: false })),
+  updateSession: (sessionId, update) => set((state) => {
+    const current = state.sessions.find((session) => session.id === sessionId);
+    const previousWorkspaceId = current?.workspaceId ?? "";
+    const nextWorkspaceId = Object.prototype.hasOwnProperty.call(update, "workspaceId")
+      ? update.workspaceId ?? ""
+      : previousWorkspaceId;
+    const workspaceChanged = Boolean(current) && previousWorkspaceId !== nextWorkspaceId;
+    return {
+      sessions: state.sessions.map((session) => session.id === sessionId ? { ...session, ...update, id: session.id } : session),
+      workspaces: workspaceChanged
+        ? state.workspaces.map((workspace) => {
+          if (workspace.id === previousWorkspaceId) return { ...workspace, sessionCount: Math.max(0, workspace.sessionCount - 1) };
+          if (workspace.id === nextWorkspaceId) return { ...workspace, sessionCount: workspace.sessionCount + 1 };
+          return workspace;
+        })
+        : state.workspaces,
+      selectedWorkspaceId: workspaceChanged && state.selectedSessionId === sessionId
+        ? nextWorkspaceId
+        : state.selectedWorkspaceId,
+    };
+  }),
   removeSession: (sessionId) => set((state) => {
     const removed = state.sessions.find((session) => session.id === sessionId);
     const sessions = state.sessions.filter((session) => session.id !== sessionId);

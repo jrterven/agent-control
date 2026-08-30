@@ -1,8 +1,8 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
-  ArrowRight, CheckCircle, Clock, CloudCheck, Code,
+  ArrowClockwise, ArrowRight, CheckCircle, Clock, CloudCheck, Code,
   Database, DownloadSimple, FileText, FolderOpen, Gauge, GearSix, HardDrives,
-  Key, Lightning, MagnifyingGlass, Plus, Robot, ShieldCheck, Translate,
+  Key, Lightning, MagnifyingGlass, Plus, Robot, ShieldCheck, SpinnerGap, Translate,
   PencilSimple, Play, Pulse, SlidersHorizontal, TerminalWindow, Trash, UserCircle, WarningCircle,
 } from "@phosphor-icons/react";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -12,18 +12,20 @@ import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { Badge, Button, Field, Panel, StatusDot, Switch, cx } from "@hermes-control/ui";
-import { api, type ReadinessView } from "../lib/api";
+import { api, ApiError, type ReadinessView } from "../lib/api";
 import { clearPrivateCache, clearTranscriptCache, savePreference } from "../lib/db";
 import { createAndProvisionGateway } from "../lib/gatewayProvisioning";
 import { buildSearchResults } from "../lib/search";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useAppStore } from "../store/appStore";
-import type { Automation, AutomationRun, Gateway, Profile, SearchResult, ThemePreference } from "../types";
+import type { Automation, AutomationRun, Gateway, Profile, SearchResult, SessionSummary, ThemePreference } from "../types";
 import { BrandMark } from "../components/BrandMark";
+import { InteractionCards } from "../components/ChatView";
 import { AdminConfigScreen } from "../components/AdminConfigScreen";
 import { ElevenLabsIntegration } from "../components/ElevenLabsIntegration";
 import i18n from "../i18n";
 import { useLanguagePreference } from "../hooks/useLanguagePreference";
+import { APP_VERSION, checkForPwaUpdate, hasPwaUpdateBlockers, requestPwaUpdate, usePwaUpdateStore } from "../lib/pwaUpdate";
 
 export function PageHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
   return <header className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</header>;
@@ -89,11 +91,52 @@ type AgentCreateValues = {
   description: string;
 };
 
+const MAX_AGENT_BRIEF_CHARACTERS = 200_000;
+
+function normalizeAgentTechnicalName(value: string) {
+  return value.trim().toLowerCase().replace(/[\s_]+/g, "-").replace(/-+/g, "-");
+}
+
 const emptyAgentCreateValues: AgentCreateValues = {
   technicalName: "",
   displayName: "",
   description: "",
 };
+
+type AgentCreationPhase = "idle" | "creatingProfile" | "creatingSession" | "configuring" | "finalizing" | "error";
+
+type PendingAgentSetup = {
+  profile?: Profile;
+  setupSession?: SessionSummary;
+  operationId?: string;
+  setupComplete?: boolean;
+  setupArchived?: boolean;
+  cleanSession?: SessionSummary;
+};
+
+const emptyInteractionRequests = [] as const;
+const agentCreationSteps = ["creatingProfile", "creatingSession", "configuring", "finalizing"] as const;
+const terminalAgentSetupStatuses = new Set(["completed", "failed", "interrupted"]);
+
+async function waitForAgentSetup(
+  sessionId: string,
+  operationId: string,
+  initialStatus: string,
+): Promise<string> {
+  let status = initialStatus;
+  const deadline = Date.now() + 10 * 60 * 1_000;
+  while (!terminalAgentSetupStatuses.has(status)) {
+    if (status === "delivery_unknown") throw new Error("AGENT_SETUP_DELIVERY_UNKNOWN");
+    if (Date.now() >= deadline) throw new Error("AGENT_SETUP_TIMEOUT");
+    const operation = await api.promptOperation(sessionId, operationId);
+    status = operation.status;
+    if (!terminalAgentSetupStatuses.has(status)) {
+      if (status === "delivery_unknown") throw new Error("AGENT_SETUP_DELIVERY_UNKNOWN");
+      await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+    }
+  }
+  return status;
+}
 
 export function AgentsScreen() {
   const { t } = useTranslation();
@@ -108,6 +151,13 @@ export function AgentsScreen() {
   const hydrateBootstrap = useAppStore((state) => state.hydrateBootstrap);
   const [creatorOpen, setCreatorOpen] = useState(false);
   const [createError, setCreateError] = useState("");
+  const [pendingSetup, setPendingSetup] = useState<PendingAgentSetup | null>(null);
+  const [creationValues, setCreationValues] = useState<AgentCreateValues | null>(null);
+  const [creationPhase, setCreationPhase] = useState<AgentCreationPhase>("idle");
+  const [lastProgressPhase, setLastProgressPhase] = useState<Exclude<AgentCreationPhase, "idle" | "error">>("creatingProfile");
+  const setupSessionId = pendingSetup?.setupSession?.id ?? "";
+  const setupApprovals = useAppStore((state) => state.approvalsBySession[setupSessionId] ?? emptyInteractionRequests);
+  const setupClarifications = useAppStore((state) => state.clarificationsBySession[setupSessionId] ?? emptyInteractionRequests);
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
   const sourceProfile = selectedProfile ?? profiles.find((profile) => (
     profile.gatewayId === selectedGatewayId && profile.capabilities?.profileCreate
@@ -126,12 +176,18 @@ export function AgentsScreen() {
       .max(64, t("agentsPage.validationTechnicalName"))
       .regex(/^[a-z][a-z0-9-]*$/, t("agentsPage.validationTechnicalName"))
       .refine(
-        (value) => !profiles.some((profile) => profile.gatewayId === targetGatewayId && profile.technicalName.toLowerCase() === value.toLowerCase()),
+        (value) => !profiles.some((profile) => (
+          profile.gatewayId === targetGatewayId
+          && profile.technicalName.toLowerCase() === value.toLowerCase()
+          && profile.id !== pendingSetup?.profile?.id
+        )),
         t("agentsPage.duplicateTechnicalName"),
       ),
     displayName: z.string().trim().min(2, t("agentsPage.validationDisplayName")).max(80, t("agentsPage.validationDisplayName")),
-    description: z.string().trim().min(10, t("agentsPage.validationDescription")).max(4_000, t("agentsPage.validationDescription")),
-  }), [profiles, t, targetGatewayId]);
+    description: z.string().trim()
+      .min(10, t("agentsPage.validationDescription"))
+      .max(MAX_AGENT_BRIEF_CHARACTERS, t("agentsPage.validationDescriptionTooLong")),
+  }), [pendingSetup?.profile?.id, profiles, t, targetGatewayId]);
   const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<AgentCreateValues>({
     resolver: zodResolver(agentCreateSchema),
     defaultValues: emptyAgentCreateValues,
@@ -139,44 +195,161 @@ export function AgentsScreen() {
   const closeCreator = () => {
     setCreatorOpen(false);
     setCreateError("");
+    setPendingSetup(null);
+    setCreationValues(null);
+    setCreationPhase("idle");
+    setLastProgressPhase("creatingProfile");
     reset(emptyAgentCreateValues);
   };
-  const creatorDialog = useOverlayDialog<HTMLDivElement>({ open: creatorOpen, onClose: closeCreator, mediaQuery: "(min-width: 0px)" });
+  const creationInProgress = creationPhase !== "idle" && creationPhase !== "error";
+  const creatorDialog = useOverlayDialog<HTMLDivElement>({
+    open: creatorOpen,
+    onClose: () => {
+      if (!creationInProgress) closeCreator();
+    },
+    mediaQuery: "(min-width: 0px)",
+  });
   const openCreator = () => {
     setCreateError("");
+    setPendingSetup(null);
+    setCreationValues(null);
+    setCreationPhase("idle");
+    setLastProgressPhase("creatingProfile");
     reset(emptyAgentCreateValues);
     setCreatorOpen(true);
   };
-  const createAgent = handleSubmit(async (values) => {
+  const advanceCreation = (phase: Exclude<AgentCreationPhase, "idle" | "error">) => {
+    setLastProgressPhase(phase);
+    setCreationPhase(phase);
+  };
+  const runAgentCreation = async (values: AgentCreateValues) => {
     if (!canCreateProfile || !targetGatewayId || !sourceProfile) {
       setCreateError(t("agentsPage.createUnsupported"));
       return;
     }
+    setCreationValues(values);
     setCreateError("");
     try {
-      const created = await api.createProfile({
+      let progress = pendingSetup ?? {};
+      advanceCreation("creatingProfile");
+      const created = progress.profile ?? await api.createProfile({
         gatewayId: targetGatewayId,
         technicalName: values.technicalName,
         displayName: values.displayName,
         description: values.description,
       }, csrfToken);
+      progress = { ...progress, profile: created };
+      setPendingSetup(progress);
+
+      advanceCreation("creatingSession");
+      const setupSession = progress.setupSession ?? await api.createSession(created.id, undefined, csrfToken);
+      progress = { ...progress, setupSession };
+      setPendingSetup(progress);
+
+      advanceCreation("configuring");
+      if (!progress.setupComplete) {
+        const setupPrompt = t("agentsPage.setupPrompt", {
+          displayName: values.displayName.trim(),
+          brief: values.description.trim(),
+        });
+        const existingOperationId = progress.operationId;
+        const submittedOperationId = existingOperationId ?? crypto.randomUUID();
+        if (!existingOperationId) {
+          progress = { ...progress, operationId: submittedOperationId };
+          setPendingSetup(progress);
+        }
+        let operationStatus = "accepted";
+        let operationId = submittedOperationId;
+        if (!existingOperationId) {
+          try {
+            const receipt = await api.submitPrompt(setupSession.id, setupPrompt, submittedOperationId, csrfToken);
+            operationStatus = receipt.status;
+            operationId = receipt.operationId;
+            progress = { ...progress, operationId };
+            setPendingSetup(progress);
+          } catch (error) {
+            const definitiveClientRejection = error instanceof ApiError
+              && error.status >= 400
+              && error.status < 500
+              && !(error.status === 409 && /unknown|desconoc|delivery/i.test(`${error.code ?? ""} ${error.message}`));
+            if (definitiveClientRejection) {
+              progress = { ...progress, operationId: undefined };
+              setPendingSetup(progress);
+            }
+            throw error;
+          }
+        }
+        const terminalStatus = await waitForAgentSetup(setupSession.id, operationId, operationStatus);
+        if (terminalStatus !== "completed") {
+          progress = { ...progress, operationId: undefined };
+          setPendingSetup(progress);
+          throw new Error(terminalStatus === "interrupted" ? "AGENT_SETUP_INTERRUPTED" : "AGENT_SETUP_FAILED");
+        }
+        progress = { ...progress, setupComplete: true };
+        setPendingSetup(progress);
+      }
+
+      advanceCreation("finalizing");
+      if (!progress.setupArchived) {
+        await api.archiveSession(setupSession.id, csrfToken);
+        useAppStore.getState().clearSessionInteractions(setupSession.id);
+        progress = { ...progress, setupArchived: true };
+        setPendingSetup(progress);
+      }
+      const cleanSession = progress.cleanSession ?? await api.createSession(created.id, undefined, csrfToken);
+      progress = { ...progress, cleanSession };
+      setPendingSetup(progress);
+
       const bootstrap = await api.bootstrap();
       const refreshedProfile = bootstrap.profiles.find((profile) => (
         profile.id === created.id
         || (profile.gatewayId === targetGatewayId && profile.technicalName === created.technicalName)
       ));
       const activeProfile = refreshedProfile ?? created;
-      hydrateBootstrap(refreshedProfile ? bootstrap : {
+      const visibleSessions = [
+        cleanSession,
+        ...bootstrap.sessions.filter((session) => session.id !== setupSession.id && session.id !== cleanSession.id),
+      ];
+      hydrateBootstrap(refreshedProfile ? { ...bootstrap, sessions: visibleSessions } : {
         ...bootstrap,
         profiles: [...bootstrap.profiles.filter((profile) => profile.id !== created.id), created],
+        sessions: visibleSessions,
       });
       selectProfile(activeProfile.id);
+      useAppStore.getState().addSession(cleanSession);
+      useAppStore.getState().selectSession(cleanSession.id);
       closeCreator();
-      void navigate({ to: "/chats" });
+      await navigate({ to: "/chats" });
     } catch (error) {
-      setCreateError(error instanceof Error ? error.message : t("agentsPage.createError"));
+      const errorMessage = error instanceof Error ? error.message : "";
+      const localizedError = errorMessage === "AGENT_SETUP_DELIVERY_UNKNOWN"
+        ? t("agentsPage.progressDeliveryUnknown")
+        : errorMessage === "AGENT_SETUP_TIMEOUT"
+          ? t("agentsPage.progressTimeout")
+          : errorMessage === "AGENT_SETUP_INTERRUPTED"
+            ? t("agentsPage.progressInterrupted")
+            : errorMessage === "AGENT_SETUP_FAILED"
+              ? t("agentsPage.progressFailed")
+              : errorMessage || (pendingSetup ? t("agentsPage.setupError") : t("agentsPage.createError"));
+      setCreateError(localizedError);
+      setCreationPhase("error");
     }
-  });
+  };
+  const createAgent = handleSubmit(runAgentCreation);
+  const technicalNameField = register("technicalName");
+  const progressPhase = creationPhase === "error" ? lastProgressPhase : creationPhase;
+  const progressIndex = progressPhase === "idle" ? -1 : agentCreationSteps.indexOf(progressPhase);
+  const setupProfile = pendingSetup?.profile;
+  const canApproveSetup = Boolean(
+    setupProfile?.mutable
+    && setupProfile.capabilities?.approvals
+    && setupProfile.capabilitySet?.methods.includes("approval.respond"),
+  );
+  const canClarifySetup = Boolean(
+    setupProfile?.mutable
+    && setupProfile.capabilities?.clarifications
+    && setupProfile.capabilitySet?.methods.includes("clarify.respond"),
+  );
   return (
     <div className="page-wrap">
       <PageHeader eyebrow={t("agentsPage.eyebrow")} title={t("agentsPage.title")} description={t("agentsPage.description")} />
@@ -196,22 +369,51 @@ export function AgentsScreen() {
         <Button variant="primary" leadingIcon={<Plus />} onClick={openCreator} disabled={!canCreateProfile}>{t("agentsPage.newAgent")}</Button>
       </Panel>
       {creatorOpen ? <div ref={creatorDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="agent-creator-title" aria-describedby="agent-creator-description">
-        <button className="modal-scrim" aria-label={t("agentsPage.closeCreator")} onClick={closeCreator} />
-        <Panel className="form-modal agent-creator">
-          <span className="eyebrow">{t("agentsPage.creatorEyebrow")}</span>
-          <h2 id="agent-creator-title">{t("agentsPage.creatorTitle")}</h2>
-          <p id="agent-creator-description">{t("agentsPage.creatorDescription")}</p>
-          <form onSubmit={createAgent} noValidate>
-            <Field label={t("agentsPage.technicalName")} aria-label={t("agentsPage.technicalName")} hint={t("agentsPage.technicalNameHint")} autoCapitalize="none" autoCorrect="off" spellCheck={false} error={errors.technicalName?.message} {...register("technicalName")} />
-            <Field label={t("agentsPage.displayName")} aria-label={t("agentsPage.displayName")} autoComplete="off" error={errors.displayName?.message} {...register("displayName")} />
-            <label className="hc-field">
-              <span className="hc-field__label">{t("agentsPage.agentDescription")}</span>
-              <textarea rows={6} aria-label={t("agentsPage.agentDescription")} placeholder={t("agentsPage.agentDescriptionPlaceholder")} aria-invalid={Boolean(errors.description)} {...register("description")} />
-              {errors.description?.message ? <span className="hc-field__error">{errors.description.message}</span> : <span className="hc-field__hint">{t("agentsPage.agentDescriptionHint")}</span>}
-            </label>
-            {createError ? <p className="form-error" role="alert"><WarningCircle /> {createError}</p> : null}
-            <div><Button type="button" variant="ghost" onClick={closeCreator}>{t("agentsPage.cancel")}</Button><Button type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? t("agentsPage.creating") : t("agentsPage.createAndUse")}</Button></div>
-          </form>
+        <button className="modal-scrim" aria-label={t("agentsPage.closeCreator")} onClick={() => { if (!creationInProgress) closeCreator(); }} />
+        <Panel className={cx("form-modal agent-creator", creationPhase !== "idle" && "agent-creation-progress")}>
+          {creationPhase === "idle" ? <>
+            <span className="eyebrow">{t("agentsPage.creatorEyebrow")}</span>
+            <h2 id="agent-creator-title">{t("agentsPage.creatorTitle")}</h2>
+            <p id="agent-creator-description">{t("agentsPage.creatorDescription")}</p>
+            <form onSubmit={createAgent} noValidate>
+              <Field label={t("agentsPage.technicalName")} aria-label={t("agentsPage.technicalName")} hint={t("agentsPage.technicalNameHint")} autoCapitalize="none" autoCorrect="off" spellCheck={false} error={errors.technicalName?.message} disabled={Boolean(pendingSetup)} {...technicalNameField} onChange={(event) => {
+                event.currentTarget.value = normalizeAgentTechnicalName(event.currentTarget.value);
+                void technicalNameField.onChange(event);
+              }} />
+              <Field label={t("agentsPage.displayName")} aria-label={t("agentsPage.displayName")} autoComplete="off" error={errors.displayName?.message} disabled={Boolean(pendingSetup)} {...register("displayName")} />
+              <label className="hc-field">
+                <span className="hc-field__label">{t("agentsPage.agentDescription")}</span>
+                <textarea rows={6} aria-label={t("agentsPage.agentDescription")} placeholder={t("agentsPage.agentDescriptionPlaceholder")} aria-invalid={Boolean(errors.description)} {...register("description")} />
+                {errors.description?.message ? <span className="hc-field__error">{errors.description.message}</span> : <span className="hc-field__hint">{t("agentsPage.agentDescriptionHint")}</span>}
+              </label>
+              <div><Button type="button" variant="ghost" onClick={closeCreator}>{t("agentsPage.cancel")}</Button><Button type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? t("agentsPage.creating") : t("agentsPage.createAndUse")}</Button></div>
+            </form>
+          </> : <div aria-live="polite" aria-busy={creationInProgress || undefined}>
+            <header className="agent-creation-progress__header">
+              <span className="agent-creation-progress__icon"><Robot size={30} weight="duotone" /></span>
+              <span><span className="eyebrow">{t("agentsPage.progressEyebrow")}</span><h2 id="agent-creator-title">{t("agentsPage.progressTitle", { name: creationValues?.displayName ?? setupProfile?.displayName ?? "" })}</h2></span>
+            </header>
+            <p id="agent-creator-description">{t("agentsPage.progressDescription")}</p>
+            <ol className="agent-creation-steps">
+              {agentCreationSteps.map((step, index) => {
+                const completed = index < progressIndex;
+                const active = index === progressIndex;
+                const failed = active && creationPhase === "error";
+                return <li key={step} className={cx(completed && "is-complete", active && "is-active", failed && "is-error")}>
+                  <span>{completed ? <CheckCircle weight="fill" /> : failed ? <WarningCircle weight="fill" /> : active ? <SpinnerGap className="is-spinning" /> : <Clock />}</span>
+                  <div><strong>{t(`agentsPage.progressSteps.${step}.title`)}</strong><small>{t(`agentsPage.progressSteps.${step}.description`)}</small></div>
+                </li>;
+              })}
+            </ol>
+            {setupApprovals.length || setupClarifications.length ? <div className="agent-creation-progress__attention">
+              <p><WarningCircle weight="fill" /> {t("agentsPage.progressNeedsAttention")}</p>
+              <InteractionCards approvals={[...setupApprovals]} clarifications={[...setupClarifications]} offline={offline} canApprove={canApproveSetup} canClarify={canClarifySetup} profileOverride={setupProfile} />
+            </div> : null}
+            {creationPhase === "error" ? <div className="agent-creation-progress__error">
+              <p className="form-error" role="alert"><WarningCircle /> {createError}</p>
+              <div><Button type="button" variant="ghost" onClick={closeCreator}>{t("agentsPage.cancel")}</Button><Button type="button" variant="primary" onClick={() => { if (creationValues) void runAgentCreation(creationValues); }}>{t("agentsPage.progressRetry")}</Button></div>
+            </div> : <p className="agent-creation-progress__waiting"><SpinnerGap className="is-spinning" /> {t("agentsPage.progressWaiting")}</p>}
+          </div>}
         </Panel>
       </div> : null}
     </div>
@@ -789,6 +991,9 @@ export function SettingsScreen() {
   const csrfToken = useAppStore((state) => state.csrfToken);
   const userName = useAppStore((state) => state.userName);
   const resetPrivateState = useAppStore((state) => state.resetPrivateState);
+  const updateStatus = usePwaUpdateStore((state) => state.status);
+  const updateDeferred = usePwaUpdateStore((state) => state.deferred);
+  const updateBlockers = usePwaUpdateStore((state) => state.blockers);
   const [loggingOut, setLoggingOut] = useState(false);
   const setThemePreference = (next: ThemePreference) => { setTheme(next); void savePreference("theme", next); };
   const changeCache = (enabled: boolean) => {
@@ -802,7 +1007,57 @@ export function SettingsScreen() {
     await clearPrivateCache().catch(() => undefined);
     resetPrivateState();
   };
-  return <div className="page-wrap"><PageHeader eyebrow={t("settingsPage.eyebrow")} title={t("settingsPage.title")} description={t("settingsPage.description")} /><div className="settings-layout"><Panel className="settings-section"><header><Translate /><div><strong>{t("settingsPage.language")}</strong><p>{t("settingsPage.languageDescription")}</p></div></header><label className="hc-field"><span>{t("settingsPage.languageLabel")}</span><select value={language} onChange={(event) => void changeLanguage(event.target.value as typeof language)}>{languageOptions.map((option) => <option key={option.code} value={option.code}>{option.nativeName}</option>)}</select></label></Panel><Panel className="settings-section"><header><SlidersHorizontal /><div><strong>{t("settingsPage.appearance")}</strong><p>{t("settingsPage.appearanceDescription")}</p></div></header><div className="theme-grid">{(["dark", "light", "auto"] as ThemePreference[]).map((option) => <button type="button" key={option} className={theme === option ? "is-active" : ""} onClick={() => setThemePreference(option)}><span className={`theme-preview theme-preview--${option}`}><i /><i /><i /></span><strong>{option === "dark" ? t("settingsPage.dark") : option === "light" ? t("settingsPage.light") : t("settingsPage.auto")}</strong></button>)}</div></Panel><ElevenLabsIntegration /><Panel className="settings-section"><header><Database /><div><strong>{t("settingsPage.offline")}</strong><p>{t("settingsPage.offlineDescription")}</p></div></header><Switch checked={cacheEnabled} onChange={changeCache} label={t("settingsPage.encryptedCache")} description={t("settingsPage.cacheLimits")} /><Button variant="ghost" onClick={() => void clearPrivateCache()}>{t("settingsPage.clearLocal")}</Button></Panel><Panel className="settings-section"><header><UserCircle /><div><strong>{t("settingsPage.session")}</strong><p>{t("settingsPage.cookieAuth", { user: userName })}</p></div></header><Button variant="danger" disabled={loggingOut} onClick={() => void logout()}>{loggingOut ? t("settingsPage.loggingOut") : t("settingsPage.logout")}</Button></Panel></div></div>;
+  const updateAvailable = updateStatus === "available";
+  const updateBlocked = hasPwaUpdateBlockers(updateBlockers);
+  const updateMessage = updateDeferred
+    ? "updates.deferred"
+    : updateStatus === "checking"
+      ? "updates.checking"
+      : updateStatus === "current"
+        ? "updates.current"
+        : updateStatus === "available"
+          ? "updates.available"
+          : updateStatus === "applying"
+            ? "updates.applying"
+            : updateStatus === "error"
+              ? "updates.error"
+              : "updates.idle";
+  const updateButton = updateStatus === "checking"
+    ? "updates.checking"
+    : updateStatus === "applying"
+      ? "updates.applying"
+      : updateAvailable
+        ? updateBlocked ? "updates.updateWhenReady" : "updates.updateNow"
+        : "updates.checkNow";
+  const handleUpdate = () => updateAvailable ? requestPwaUpdate() : checkForPwaUpdate();
+
+  return <div className="page-wrap">
+    <PageHeader eyebrow={t("settingsPage.eyebrow")} title={t("settingsPage.title")} description={t("settingsPage.description")} />
+    <div className="settings-layout">
+      <Panel className="settings-section">
+        <header><Translate /><div><strong>{t("settingsPage.language")}</strong><p>{t("settingsPage.languageDescription")}</p></div></header>
+        <label className="hc-field"><span>{t("settingsPage.languageLabel")}</span><select value={language} onChange={(event) => void changeLanguage(event.target.value as typeof language)}>{languageOptions.map((option) => <option key={option.code} value={option.code}>{option.nativeName}</option>)}</select></label>
+      </Panel>
+      <Panel className="settings-section">
+        <header><SlidersHorizontal /><div><strong>{t("settingsPage.appearance")}</strong><p>{t("settingsPage.appearanceDescription")}</p></div></header>
+        <div className="theme-grid">{(["dark", "light", "auto"] as ThemePreference[]).map((option) => <button type="button" key={option} className={theme === option ? "is-active" : ""} onClick={() => setThemePreference(option)}><span className={`theme-preview theme-preview--${option}`}><i /><i /><i /></span><strong>{option === "dark" ? t("settingsPage.dark") : option === "light" ? t("settingsPage.light") : t("settingsPage.auto")}</strong></button>)}</div>
+      </Panel>
+      <Panel className="settings-section update-settings">
+        <header><ArrowClockwise /><div><strong>{t("updates.settingsTitle")}</strong><p>{t("updates.settingsDescription")}</p></div></header>
+        <div className="update-settings__row">
+          <span><strong>{t("updates.installedVersion")}</strong><Badge>v{APP_VERSION}</Badge><small role="status" aria-live="polite">{t(updateMessage)}</small></span>
+          <Button
+            disabled={updateStatus === "checking" || updateStatus === "applying" || updateDeferred}
+            leadingIcon={<ArrowClockwise className={updateStatus === "checking" || updateStatus === "applying" ? "spin" : undefined} />}
+            onClick={() => void handleUpdate()}
+          >{t(updateButton)}</Button>
+        </div>
+      </Panel>
+      <ElevenLabsIntegration />
+      <Panel className="settings-section"><header><Database /><div><strong>{t("settingsPage.offline")}</strong><p>{t("settingsPage.offlineDescription")}</p></div></header><Switch checked={cacheEnabled} onChange={changeCache} label={t("settingsPage.encryptedCache")} description={t("settingsPage.cacheLimits")} /><Button variant="ghost" onClick={() => void clearPrivateCache()}>{t("settingsPage.clearLocal")}</Button></Panel>
+      <Panel className="settings-section"><header><UserCircle /><div><strong>{t("settingsPage.session")}</strong><p>{t("settingsPage.cookieAuth", { user: userName })}</p></div></header><Button variant="danger" disabled={loggingOut} onClick={() => void logout()}>{loggingOut ? t("settingsPage.loggingOut") : t("settingsPage.logout")}</Button></Panel>
+    </div>
+  </div>;
 }
 
 export function MoreScreen() {
@@ -815,7 +1070,7 @@ export function MoreScreen() {
     { to: "/admin", title: t("morePage.security"), description: t("morePage.securityDescription"), icon: ShieldCheck },
     { to: "/settings", title: t("morePage.preferences"), description: t("morePage.preferencesDescription"), icon: SlidersHorizontal },
   ] as const;
-  return <div className="page-wrap"><PageHeader eyebrow={t("morePage.eyebrow")} title={t("morePage.title")} description={t("morePage.description")} /><div className="more-grid">{moreItems.map(({ to, title, description, icon: Icon }) => <Link key={to} to={to}><span><Icon weight="duotone" /></span><div><strong>{title}</strong><small>{description}</small></div><ArrowRight /></Link>)}</div><Panel className="about-panel"><BrandMark size="md" /><div><strong>Agent Control</strong><p>{t("morePage.about")}</p></div><Badge>v0.1.0</Badge></Panel></div>;
+  return <div className="page-wrap"><PageHeader eyebrow={t("morePage.eyebrow")} title={t("morePage.title")} description={t("morePage.description")} /><div className="more-grid">{moreItems.map(({ to, title, description, icon: Icon }) => <Link key={to} to={to}><span><Icon weight="duotone" /></span><div><strong>{title}</strong><small>{description}</small></div><ArrowRight /></Link>)}</div><Panel className="about-panel"><BrandMark size="md" /><div><strong>Agent Control</strong><p>{t("morePage.about")}</p></div><Badge>v{APP_VERSION}</Badge></Panel></div>;
 }
 
 export function AdminScreen() {

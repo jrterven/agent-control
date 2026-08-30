@@ -258,7 +258,14 @@ def session_view(db: Session, row: SessionLink) -> SessionView:
             ProfileRef.profile_name == row.profile_name,
         )
     )
-    return SessionView.model_validate(row).model_copy(update={"profile_id": profile_id})
+    return SessionView.model_validate(row).model_copy(
+        update={
+            "profile_id": profile_id,
+            # A rename is intentionally a Control-side label. Hermes remains
+            # the source of truth for the canonical title and conversation.
+            "title": row.display_title or row.title,
+        }
+    )
 
 
 @router.get("/health")
@@ -452,9 +459,9 @@ def bootstrap(
     """Mobile-shell projection; canonical resources remain independently addressable."""
     gateways = list(db.scalars(select(Gateway).order_by(Gateway.created_at)).all())
     app_services = services(request)
-    dictation_available = UserIntegrationService(
+    integration_configuration = UserIntegrationService(
         app_services.vault
-    ).is_configured(db, user)
+    ).configuration(db, user)
     mutable_profiles = app_services.settings.mutable_profiles
     interactive_profiles = app_services.settings.interactive_profiles
     capability_observed_at = datetime.now(timezone.utc)
@@ -532,10 +539,17 @@ def bootstrap(
     return {
         "features": {
             "dictation": {
-                "available": dictation_available,
+                "available": integration_configuration["configured"],
                 "provider": ELEVENLABS_PROVIDER,
                 "modelId": SCRIBE_REALTIME_MODEL_ID,
-            }
+            },
+            "speech": {
+                "available": integration_configuration["speech_available"],
+                "provider": ELEVENLABS_PROVIDER,
+                "modelId": integration_configuration["tts_model_id"],
+                "voiceId": integration_configuration["voice_id"],
+                "voiceName": integration_configuration["voice_name"],
+            },
         },
         "gateways": [
             {
@@ -641,7 +655,7 @@ def bootstrap(
                     if profile_by_route.get((row.gateway_id, row.profile_name))
                     else None
                 ),
-                "title": row.title or "Conversación",
+                "title": row.display_title or row.title or "Conversación",
                 "preview": "",
                 "updatedAt": row.updated_at.isoformat(),
                 "unread": False,
@@ -1148,7 +1162,8 @@ def update_session(
         setattr(row, key, value)
     if archived is not None:
         row.archived_at = datetime.now(timezone.utc) if archived else None
-    audit(db, actor=user, action="session.update", target_type="session", target_id=row.id)
+    action = "session.rename" if "display_title" in values else "session.update"
+    audit(db, actor=user, action=action, target_type="session", target_id=row.id)
     db.commit()
     db.refresh(row)
     return session_view(db, row)

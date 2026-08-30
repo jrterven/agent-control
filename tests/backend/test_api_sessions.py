@@ -414,6 +414,49 @@ def test_session_title_cannot_be_overridden_only_in_control(authenticated):
     assert current["title"] != "Control-only title"
 
 
+def test_session_can_have_a_control_only_display_title(authenticated, app):
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "Hermes owns this title")
+
+    renamed = client.patch(
+        f"/api/v1/sessions/{session['id']}",
+        headers=mutation_headers(csrf, "rename-local-display-title"),
+        json={"displayTitle": "  Proyecto   Turing  "},
+    )
+
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["title"] == "Proyecto Turing"
+    with app.state.session_factory() as db:
+        row = db.get(SessionLink, session["id"])
+        assert row.title == session["title"]
+        assert row.display_title == "Proyecto Turing"
+
+    refreshed = client.get("/api/v1/bootstrap")
+    current = next(
+        item for item in refreshed.json()["sessions"] if item["id"] == session["id"]
+    )
+    assert current["title"] == "Proyecto Turing"
+
+
+def test_session_display_title_rejects_blank_and_oversized_values(authenticated):
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "display-title-validation")
+
+    blank = client.patch(
+        f"/api/v1/sessions/{session['id']}",
+        headers=mutation_headers(csrf, "rename-local-blank"),
+        json={"displayTitle": "   "},
+    )
+    oversized = client.patch(
+        f"/api/v1/sessions/{session['id']}",
+        headers=mutation_headers(csrf, "rename-local-oversized"),
+        json={"displayTitle": "x" * 301},
+    )
+
+    assert blank.status_code == 422
+    assert oversized.status_code == 422
+
+
 def test_sync_archives_only_links_missing_from_complete_hermes_inventory(
     authenticated, app
 ):

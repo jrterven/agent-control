@@ -121,7 +121,7 @@ describe("session actions", () => {
     expect(screen.getByRole("status")).toHaveTextContent("se archivó solo en Agent Control");
   });
 
-  it("requires the exact stored id before deleting from Hermes", async () => {
+  it("shows an irreversible warning before deleting from Hermes", async () => {
     const fixture = prepare(true, ["session.delete"]);
     const remove = vi.spyOn(api, "deleteSessionFromHermes").mockResolvedValue(undefined);
     const user = userEvent.setup();
@@ -129,17 +129,11 @@ describe("session actions", () => {
 
     await user.click(screen.getByRole("button", { name: "Eliminar…" }));
     const dialog = screen.getByRole("dialog", { name: "Eliminar “Sesión mutable”" });
-    const confirmation = within(dialog).getByRole("textbox", { name: /ID persistente/ });
     const submit = within(dialog).getByRole("button", { name: "Eliminar de Hermes" });
-    expect(submit).toBeDisabled();
-    expect((await axe.run(container)).violations).toHaveLength(0);
-
-    await user.type(confirmation, "stored-incorrecto");
-    expect(confirmation).toHaveAttribute("aria-invalid", "true");
-    expect(submit).toBeDisabled();
-    await user.clear(confirmation);
-    await user.type(confirmation, fixture.session.storedSessionId);
+    expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Esta acción no se puede deshacer");
     expect(submit).toBeEnabled();
+    expect((await axe.run(container)).violations).toHaveLength(0);
     await user.click(submit);
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith("session-a", "stored-exact-42", "csrf-memory-only"));

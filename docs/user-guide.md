@@ -71,8 +71,19 @@ During a conversation Agent Control can:
 - keep drafts on the device and optionally cache a bounded encrypted snapshot;
 - show context use, tools, subagents and recent activity in the pulse panel or
   mobile context sheet;
+- open the three-dot menu beside any conversation to give it a local friendly
+  name or begin a permanent deletion;
 - export a sanitized conversation, archive it normally, or perform a separately
   confirmed provider deletion when the capability is verified.
+
+Renaming and moving a chat between workspaces change only the organization
+shown and searched by Agent Control. The three-dot conversation menu can move a
+chat to any workspace or back to **No workspace**. Hermes keeps its canonical
+session title and history untouched. Permanent deletion is
+shown only when the provider contract confirms `session.delete`; a dedicated
+warning names the conversation and requires a separate destructive
+confirmation. Agent Control still supplies the exact persistent session ID
+internally so the backend cannot delete a different conversation.
 
 The empty composer starts at one line, grows line by line up to six visible
 lines, and then scrolls. Tool execution detail is kept in the activity panel so
@@ -121,6 +132,39 @@ If no ElevenLabs key is configured, the app hides its own microphone control.
 The dictation button in the phone's native keyboard remains the no-cost
 fallback and does not require an Agent Control integration.
 
+## Listen to agent responses with ElevenLabs
+
+The same write-only ElevenLabs key can synthesize agent responses:
+
+1. Open **More → Settings → Integrations**, choose **Flash v2.5** for the
+   lowest latency or **Multilingual v2** for more natural, stable long-form
+   speech, and choose a voice from the catalog available to your ElevenLabs
+   account. Agent Control intentionally does not offer Eleven v3. Press
+   **Try voice** to play the
+   provider's sample before saving it; the preview can be paused and resumed
+   and does not change the active voice.
+2. In a chat, enable **Listen to responses live** to hear new answers while the
+   agent is still generating them. This preference is local to the device and
+   defaults to off.
+3. To hear an older answer, press the speaker below that answer. The inline
+   player provides play/pause, stop and 0.75×–2× speed controls.
+
+The selected model applies to both live and historical playback. Live reading
+uses the provider's TTS WebSocket and a fresh, short-lived,
+single-use `tts_websocket` token. Agent Control sends incremental answer text;
+audio chunks return directly to the PWA and begin playing as they arrive.
+Historical playback sends the selected answer to an authenticated Control
+endpoint, which streams the resulting MP3 without disclosing the reusable key.
+Only visible assistant text is synthesized: code blocks, URLs and private
+`MEDIA:` paths are removed from the spoken form.
+
+Changing the API key clears the selected voice because the replacement key may
+belong to another ElevenLabs workspace. Select a voice again to re-enable
+playback. Audio synthesis consumes the quota and follows the retention settings
+of the owner's ElevenLabs account. Catalog previews reuse ElevenLabs' existing
+sample audio instead of synthesizing new text, so testing a voice does not spend
+TTS characters.
+
 ## Agents
 
 The **Agents** screen lists profiles discovered through the selected gateway.
@@ -133,20 +177,34 @@ hidden rather than failing optimistically.
 
 Use **Create agent** at the bottom of the Agents screen. Provide:
 
-- a lowercase technical profile name used for routing;
+- a technical profile name used for routing (the form normalizes capitals,
+  spaces and underscores to lowercase hyphens);
 - a friendly display name;
-- a plain-language description of the agent's role and behavior.
+- a plain-language setup brief describing the agent's role, rules and behavior.
+  Long prompts are supported up to a broad transport-safety boundary.
 
 <p align="center">
   <img src="assets/screenshots/mobile-new-agent.jpg" alt="Create an agent dialog" width="330">
 </p>
 
-The backend asks the provider to create a fresh isolated profile, writes the
-generated agent instructions through the audited administration contract and
-makes the new profile selectable when discovery confirms it. New profiles
-start with empty memory and history and use the gateway-managed inference
-authentication pool. A Telegram bot or channel is not created automatically;
-channel setup remains a separate provider administration task.
+The backend first asks the provider to create a fresh isolated profile without
+sending the brief as `description` or `soul`. Agent Control then shows a guided
+progress screen while it opens an internal setup session and submits the brief
+with bounded safety instructions. Hermes analyzes the request and decides what
+identity, working rules and configuration to persist; Agent Control never
+copies the text directly into `SOUL.md`. If Hermes requests approval or
+clarification, the progress screen presents the verified response controls.
+
+After Hermes confirms completion, Agent Control archives the internal setup
+session, activates the new profile and creates a second, empty conversation.
+The app only then navigates to **Chats**, so the operator starts with the new
+agent active and a clean composer instead of seeing the technical setup brief.
+If transport becomes ambiguous, retry resumes checking the same operation and
+does not automatically resend the brief.
+
+New profiles start with empty memory and history and use the gateway-managed
+inference authentication pool. A Telegram bot or channel is not created
+automatically; channel setup remains a separate provider administration task.
 
 ## Configuration and agent functions
 
@@ -207,6 +265,18 @@ encrypted offline snapshot is limited to the latest workspace, 200 items,
 application shell, not API responses, and Background Sync never resends
 messages. **Clear local data** removes device-side preferences, drafts and
 cached presentation data without deleting provider conversations.
+
+The installed PWA checks for a new Agent Control release when it opens, when it
+returns to the foreground and periodically while it remains active. A cyan dot
+on the activity button announces an available release; open that panel and use
+**Update now**. **More → Settings → App updates** also shows the installed
+version and provides **Check for updates**.
+
+Agent Control never reloads in the middle of voice dictation, a streaming agent
+response or an unsent draft. In that case the action becomes **Update when
+finished** and activation waits for a safe moment. The selected gateway,
+workspace, agent and conversation are restored after the controlled reload;
+drafts remain in the existing encrypted/local draft store.
 
 ## Mobile installation with Tailscale Serve
 

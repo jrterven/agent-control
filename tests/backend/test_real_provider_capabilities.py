@@ -234,7 +234,7 @@ async def test_audited_real_provider_uses_rest_cron_probe_and_hides_memory(
 
 
 @pytest.mark.asyncio
-async def test_profile_creation_uses_fresh_shared_auth_contract_once(monkeypatch):
+async def test_profile_creation_uses_fresh_shared_auth_without_writing_soul(monkeypatch):
     provider = HermesGatewayProvider(
         _connection(trusted_source_sha=AUDITED_0205_SHA)
     )
@@ -259,7 +259,6 @@ async def test_profile_creation_uses_fresh_shared_auth_contract_once(monkeypatch
         created = await provider.create_profile(
             name="researcher",
             display_name="Researcher",
-            description="Research primary sources and explain uncertainty.",
         )
     finally:
         await provider.close()
@@ -274,7 +273,8 @@ async def test_profile_creation_uses_fresh_shared_auth_contract_once(monkeypatch
     assert params["share_auth"] is True
     assert params["clone_all"] is False
     assert "clone_from" not in params
-    assert params["description"] in params["soul"]
+    assert "description" not in params
+    assert "soul" not in params
 
 
 @pytest.mark.asyncio
@@ -300,7 +300,6 @@ async def test_profile_creation_marks_partial_setup_degraded(monkeypatch):
         created = await provider.create_profile(
             name="researcher",
             display_name="Researcher",
-            description="Research primary sources and explain uncertainty.",
         )
     finally:
         await provider.close()

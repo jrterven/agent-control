@@ -22,6 +22,7 @@ import type {
   ChatMessage,
   ClarificationQuestion,
   ClarificationRequest,
+  Profile,
   RealtimeEvent,
   SessionUsage,
   ToolRun,
@@ -56,12 +57,13 @@ function sessionSupportsInteraction(
   sessionId: string,
   flag: "approvals" | "clarifications",
   method: "approval.respond" | "clarify.respond",
+  profileOverride?: Profile,
 ) {
   const session = state.sessions.find((item) => item.id === sessionId);
-  const profile = session && state.profiles.find((item) => (
+  const profile = profileOverride ?? (session && state.profiles.find((item) => (
     item.id === session.profileId
     || (item.gatewayId === session.gatewayId && item.technicalName === session.profileName)
-  ));
+  )));
   return profile?.mutable === true
     && profile.capabilities?.[flag] === true
     && profile.capabilitySet?.methods.includes(method) === true;
@@ -932,7 +934,7 @@ function interactionErrorMessage(error: unknown) {
   return i18n.t("runtimeMessages.responseFailed");
 }
 
-export async function respondToApproval(sessionId: string, requestId: string, choice: ApprovalChoice) {
+export async function respondToApproval(sessionId: string, requestId: string, choice: ApprovalChoice, profileOverride?: Profile) {
   const state = useAppStore.getState();
   const request = state.approvalsBySession[sessionId]?.find((item) => item.requestId === requestId);
   if (
@@ -940,7 +942,7 @@ export async function respondToApproval(sessionId: string, requestId: string, ch
     || request.state === "submitting"
     || request.state === "ambiguous"
     || !approvalChoices.has(choice)
-    || !sessionSupportsInteraction(state, sessionId, "approvals", "approval.respond")
+    || !sessionSupportsInteraction(state, sessionId, "approvals", "approval.respond", profileOverride)
   ) return;
   state.updateApproval(sessionId, requestId, { state: "submitting", error: undefined });
   try {
@@ -974,6 +976,7 @@ export async function respondToClarification(
   requestId: string,
   answer: string | string[],
   questionId?: string,
+  profileOverride?: Profile,
 ) {
   const state = useAppStore.getState();
   const request = state.clarificationsBySession[sessionId]?.find((item) => item.requestId === requestId);
@@ -982,7 +985,7 @@ export async function respondToClarification(
     || request.state === "submitting"
     || request.state === "ambiguous"
     || (typeof answer === "string" ? !answer.trim() : answer.length === 0)
-    || !sessionSupportsInteraction(state, sessionId, "clarifications", "clarify.respond")
+    || !sessionSupportsInteraction(state, sessionId, "clarifications", "clarify.respond", profileOverride)
   ) return;
   const submittingQuestionId = questionId ?? "single";
   state.updateClarification(sessionId, requestId, {

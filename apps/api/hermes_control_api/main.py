@@ -24,8 +24,10 @@ from .config import Settings, get_settings
 from .database import Base, build_engine, build_session_factory
 from .eventing import EventHub
 from .integrations import (
+    ElevenLabsSpeechClient,
     ElevenLabsScribeClient,
     IntegrationError,
+    SpeechRateLimiter,
     TranscriptionTokenLimiter,
 )
 from .middleware import BodySizeLimitMiddleware, IdempotencyMiddleware, SecurityBoundaryMiddleware
@@ -279,9 +281,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.session_factory = session_factory
     app.state.services = service_container
     app.state.elevenlabs_scribe_client = ElevenLabsScribeClient()
+    app.state.elevenlabs_speech_client = ElevenLabsSpeechClient()
     app.state.transcription_token_limiter = TranscriptionTokenLimiter(
         limit=settings.transcription_token_rate_limit,
         window_seconds=settings.transcription_token_rate_window_seconds,
+    )
+    app.state.speech_rate_limiter = SpeechRateLimiter(
+        limit=settings.speech_rate_limit,
+        window_seconds=settings.speech_rate_window_seconds,
     )
     app.state.automation_route_health = automation_route_health
     app.state.capability_refresh_health = capability_refresh_health

@@ -1036,7 +1036,6 @@ class ProfileService:
                 created_profile = await provider.create_profile(
                     name=payload.technical_name,
                     display_name=payload.display_name,
-                    description=payload.description,
                 )
             except JsonRpcError as exc:
                 if exc.code == 4062:
@@ -1173,7 +1172,8 @@ class SearchService:
 
         if kind in {"all", "session"}:
             for row in owned_sessions:
-                haystack = f"{row.title or ''} {row.stored_session_id}".casefold()
+                visible_title = row.display_title or row.title
+                haystack = f"{visible_title or ''} {row.stored_session_id}".casefold()
                 if needle not in haystack:
                     continue
                 display_name = profiles.get(
@@ -1184,7 +1184,7 @@ class SearchService:
                         "id": f"session:{row.id}",
                         "targetId": row.id,
                         "kind": "session",
-                        "title": self._compact(row.title or "Conversación de Hermes", 200),
+                        "title": self._compact(visible_title or "Conversación de Hermes", 200),
                         "excerpt": "Conversación persistente en Hermes",
                         "meta": f"{display_name} · {row.updated_at.isoformat()}",
                     }

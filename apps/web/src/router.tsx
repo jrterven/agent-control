@@ -1,4 +1,4 @@
-import { createRootRoute, createRoute, createRouter, Navigate, Outlet, useRouterState } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, Navigate, Outlet } from "@tanstack/react-router";
 import { AppShell } from "./components/AppShell";
 import { ChatView } from "./components/ChatView";
 import { useAuthBootstrap, useBootstrapData, useOfflineTranscriptCache, useRealtimeConnection, useSessionHistory, useThemePreference } from "./hooks";
@@ -18,7 +18,10 @@ function RootLayout() {
   useOfflineTranscriptCache();
   const authState = useAppStore((state) => state.authState);
   const bootstrapLoaded = useAppStore((state) => state.bootstrapLoaded);
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  // Route transitions already re-render the root match. Reading the browser
+  // location avoids a second external-store subscription that loops with
+  // React 19 while the auth bootstrap redirects between `/` and `/login`.
+  const pathname = window.location.pathname;
   if (authState === "checking") return <main className="boot-screen"><BrandMark size="lg" label="Agent Control" /><p>Preparando tu centro de control…</p></main>;
   if (authState === "unauthenticated" && pathname !== "/login") return <Navigate to="/login" replace />;
   if ((authState === "authenticated" || authState === "offline") && pathname === "/login") return <Navigate to="/chats" replace />;

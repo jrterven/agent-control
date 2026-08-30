@@ -62,6 +62,10 @@ class UserIntegration(Base, Timestamped):
             "api_key_ciphertext LIKE 'v1.%'",
             name="ck_user_integrations_encrypted_api_key",
         ),
+        CheckConstraint(
+            "tts_model_id IN ('eleven_flash_v2_5', 'eleven_multilingual_v2')",
+            name="ck_user_integrations_supported_tts_model",
+        ),
         Index("ix_user_integrations_owner_provider", "owner_id", "provider"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -70,6 +74,17 @@ class UserIntegration(Base, Timestamped):
     )
     provider: Mapped[str] = mapped_column(String(40), nullable=False)
     api_key_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    # TTS preferences are deliberately non-secret.  Keeping them beside the
+    # owner-scoped credential means a shared installation never leaks one
+    # user's selected voice into another user's chat.
+    tts_voice_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    tts_voice_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    tts_model_id: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        default="eleven_flash_v2_5",
+        server_default="eleven_flash_v2_5",
+    )
 
 
 class AuthSession(Base):
@@ -173,6 +188,10 @@ class SessionLink(Base, Timestamped):
     runtime_session_id: Mapped[str | None] = mapped_column(String(255))
     runtime_generation: Mapped[str | None] = mapped_column(String(96))
     title: Mapped[str | None] = mapped_column(String(300))
+    # Owner-selected label used only by Agent Control. ``title`` remains the
+    # canonical value reported by Hermes and continues to be refreshed during
+    # synchronization.
+    display_title: Mapped[str | None] = mapped_column(String(300))
     status: Mapped[str] = mapped_column(String(30), default="idle")
     # Hermes 0.20.5/0.20.6 does not persist an RPC-created session until its
     # first prompt. This marker is the sole authority for treating that one
