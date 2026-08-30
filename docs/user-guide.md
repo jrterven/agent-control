@@ -76,8 +76,10 @@ During a conversation Agent Control can:
 - export a sanitized conversation, archive it normally, or perform a separately
   confirmed provider deletion when the capability is verified.
 
-Renaming changes only the label shown and searched by Agent Control. Hermes
-keeps its canonical session title and history untouched. Permanent deletion is
+Renaming and moving a chat between workspaces change only the organization
+shown and searched by Agent Control. The three-dot conversation menu can move a
+chat to any workspace or back to **No workspace**. Hermes keeps its canonical
+session title and history untouched. Permanent deletion is
 shown only when the provider contract confirms `session.delete`; a dedicated
 warning names the conversation and requires a separate destructive
 confirmation. Agent Control still supplies the exact persistent session ID

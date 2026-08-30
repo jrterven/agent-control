@@ -230,6 +230,35 @@ describe("browser API boundary", () => {
     }));
   });
 
+  it("moves a session to a workspace through Control metadata", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "session-a",
+      gatewayId: "gateway-a",
+      workspaceId: "workspace-papers",
+      profileName: "jarvis",
+      profileId: "profile-jarvis",
+      storedSessionId: "stored-a",
+      runtimeSessionId: null,
+      title: "Conversation",
+      status: "idle",
+      archivedAt: null,
+      updatedAt: "2026-08-30T02:00:00Z",
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const moved = await api.moveSession("session/a", "workspace-papers", "csrf-memory-only");
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/v1/sessions/session%2Fa");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(String(init.body))).toEqual({ workspaceId: "workspace-papers" });
+    expect(init.headers).toEqual(expect.objectContaining({
+      "Idempotency-Key": expect.any(String),
+      "X-CSRF-Token": "csrf-memory-only",
+    }));
+    expect(moved.workspaceId).toBe("workspace-papers");
+  });
+
   it("downloads sanitized session exports through Control", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response("{}", {
       status: 200,

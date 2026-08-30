@@ -37,6 +37,14 @@ const session: SessionSummary = {
   updatedAt: "ahora",
 };
 
+const workspace = {
+  id: "workspace-papers",
+  name: "Papers",
+  description: "Investigación",
+  sessionCount: 0,
+  updatedAt: "ahora",
+};
+
 describe("sidebar session menu", () => {
   beforeEach(() => {
     useAppStore.getState().resetPrivateState();
@@ -47,7 +55,7 @@ describe("sidebar session menu", () => {
       leftDrawerOpen: true,
       gateways: [{ id: "gateway-a", name: "Hermes", location: "Privado", status: "connected", version: "0.20.6", sha: "test-sha", capabilities: capabilityFlags }],
       profiles: [profile],
-      workspaces: [],
+      workspaces: [workspace],
       sessions: [session],
       automations: [],
       selectedGatewayId: "gateway-a",
@@ -78,6 +86,25 @@ describe("sidebar session menu", () => {
     expect(useAppStore.getState().sessions[0].title).toBe("Proyecto Turing");
     expect(useAppStore.getState().selectedSessionId).toBe("session-a");
     expect(screen.getByRole("status")).toHaveTextContent("ahora se llama “Proyecto Turing”");
+  });
+
+  it("moves a chat to a workspace and keeps the active chat selected", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "moveSession").mockResolvedValue({ ...session, workspaceId: workspace.id, updatedAt: "después" });
+    render(<LeftSidebar />);
+
+    await user.click(screen.getByRole("button", { name: "Opciones de “Conversación”" }));
+    await user.click(screen.getByRole("menuitem", { name: "Mover a espacio de trabajo…" }));
+    const dialog = screen.getByRole("dialog", { name: "Mover chat" });
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Espacio de trabajo" }), workspace.id);
+    await user.click(within(dialog).getByRole("button", { name: "Mover" }));
+
+    await waitFor(() => expect(api.moveSession).toHaveBeenCalledWith("session-a", workspace.id, "csrf-memory-only"));
+    expect(useAppStore.getState().sessions[0].workspaceId).toBe(workspace.id);
+    expect(useAppStore.getState().selectedWorkspaceId).toBe(workspace.id);
+    expect(useAppStore.getState().selectedSessionId).toBe("session-a");
+    expect(useAppStore.getState().workspaces[0].sessionCount).toBe(1);
+    expect(screen.getByRole("status")).toHaveTextContent("se movió a Papers");
   });
 
   it("requires a clear irreversible warning before permanent deletion", async () => {

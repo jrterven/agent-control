@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Archive, CaretDown, ChatTeardropText, DotsThree, DotsThreeVertical, GearSix, Lightning, MagnifyingGlass, PencilSimple, Plus, Robot, Trash, WarningCircle, X } from "@phosphor-icons/react";
+import { Archive, CaretDown, ChatTeardropText, DotsThree, DotsThreeVertical, FolderSimple, GearSix, Lightning, MagnifyingGlass, PencilSimple, Plus, Robot, Trash, WarningCircle, X } from "@phosphor-icons/react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Badge, Button, IconButton, StatusDot, cx } from "@hermes-control/ui";
 import { useTranslation } from "react-i18next";
@@ -47,6 +47,10 @@ export function LeftSidebar() {
   const [renameTitle, setRenameTitle] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState("");
+  const [moveTarget, setMoveTarget] = useState<SessionSummary | null>(null);
+  const [moveWorkspaceId, setMoveWorkspaceId] = useState("");
+  const [moveBusy, setMoveBusy] = useState(false);
+  const [moveError, setMoveError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<SessionSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
@@ -60,7 +64,7 @@ export function LeftSidebar() {
     && selectedProfile?.mutable === true
     && Boolean(selectedProfile.capabilities?.sessions)
   );
-  const sessionDialogOpen = Boolean(renameTarget || deleteTarget);
+  const sessionDialogOpen = Boolean(renameTarget || moveTarget || deleteTarget);
   const mutationsDisabled = authState !== "authenticated" || demoMode;
   const drawer = useOverlayDialog<HTMLElement>({ open: open && !sessionDialogOpen, onClose: () => close(false), mediaQuery: "(max-width: 779px)" });
   const closeWorkspaceEditor = () => {
@@ -81,7 +85,14 @@ export function LeftSidebar() {
     setDeleteTarget(null);
     setDeleteError("");
   };
+  const closeMoveDialog = () => {
+    if (moveBusy) return;
+    setMoveTarget(null);
+    setMoveWorkspaceId("");
+    setMoveError("");
+  };
   const renameDialog = useOverlayDialog<HTMLDivElement>({ open: Boolean(renameTarget), onClose: closeRenameDialog, mediaQuery: "(min-width: 0px)" });
+  const moveDialog = useOverlayDialog<HTMLDivElement>({ open: Boolean(moveTarget), onClose: closeMoveDialog, mediaQuery: "(min-width: 0px)" });
   const deleteDialog = useOverlayDialog<HTMLDivElement>({ open: Boolean(deleteTarget), onClose: closeDeleteDialog, mediaQuery: "(min-width: 0px)" });
 
   useEffect(() => {
@@ -126,6 +137,34 @@ export function LeftSidebar() {
       setRenameError(error instanceof Error ? error.message : t("sidebar.renameError"));
     } finally {
       setRenameBusy(false);
+    }
+  };
+
+  const openMoveDialog = (session: SessionSummary) => {
+    closeSessionMenu();
+    setMoveTarget(session);
+    setMoveWorkspaceId(session.workspaceId ?? "");
+    setMoveError("");
+    setSessionAnnouncement("");
+  };
+
+  const moveSession = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!moveTarget || moveBusy || mutationsDisabled || moveWorkspaceId === (moveTarget.workspaceId ?? "")) return;
+    const target = moveTarget;
+    const destinationName = workspaces.find((workspace) => workspace.id === moveWorkspaceId)?.name ?? t("sidebar.noWorkspace");
+    setMoveBusy(true);
+    setMoveError("");
+    try {
+      const moved = await api.moveSession(target.id, moveWorkspaceId || null, csrfToken);
+      updateSession(target.id, { workspaceId: moved.workspaceId, updatedAt: moved.updatedAt });
+      setMoveTarget(null);
+      setMoveWorkspaceId("");
+      setSessionAnnouncement(t("sidebar.movedAnnouncement", { title: target.title, workspace: destinationName }));
+    } catch (error) {
+      setMoveError(error instanceof Error ? error.message : t("sidebar.moveError"));
+    } finally {
+      setMoveBusy(false);
     }
   };
 
@@ -306,6 +345,7 @@ export function LeftSidebar() {
                   }}
                 >
                   <button type="button" role="menuitem" onClick={() => openRenameDialog(session)}><PencilSimple size={18} /> {t("sidebar.renameConversation")}</button>
+                  <button type="button" role="menuitem" onClick={() => openMoveDialog(session)}><FolderSimple size={18} /> {t("sidebar.moveConversation")}</button>
                   {canDeleteSession(session) ? <button type="button" role="menuitem" className="is-danger" onClick={() => openDeleteDialog(session)}><Trash size={18} /> {t("activity.deleteEllipsis")}</button> : null}
                 </div> : null}
               </div>
@@ -324,6 +364,7 @@ export function LeftSidebar() {
       <p className="session-action-announcement" role="status" aria-live="polite">{sessionAnnouncement}</p>
       {workspaceEditorOpen ? <div ref={workspaceDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="workspace-editor-title"><button className="modal-scrim" aria-label={t("sidebar.closeWorkspaceEditor")} onClick={closeWorkspaceEditor} /><div className="hc-panel form-modal workspace-editor"><span className="eyebrow">{t("sidebar.localOrganization")}</span><h2 id="workspace-editor-title">{editingWorkspace ? t("sidebar.editWorkspaceTitle") : t("sidebar.newWorkspaceTitle")}</h2><p>{t("sidebar.workspaceExplanation")}</p><form onSubmit={(event) => void saveWorkspace(event)}><label className="hc-field"><span>{t("sidebar.name")}</span><input autoFocus maxLength={200} value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} /></label><label className="hc-field"><span>{t("sidebar.description")}</span><textarea rows={3} maxLength={4000} value={workspaceDescription} onChange={(event) => setWorkspaceDescription(event.target.value)} /></label>{workspaceError ? <p className="form-error" role="alert">{workspaceError}</p> : null}<div>{editingWorkspace ? <Button type="button" variant="danger" disabled={workspaceBusy} leadingIcon={<Archive />} onClick={() => void archiveWorkspace()}>{t("sidebar.archive")}</Button> : <span />}<span><Button type="button" variant="ghost" disabled={workspaceBusy} onClick={closeWorkspaceEditor}>{t("sidebar.cancel")}</Button><Button type="submit" variant="primary" disabled={workspaceBusy || !workspaceName.trim()}>{workspaceBusy ? t("sidebar.saving") : t("sidebar.save")}</Button></span></div></form></div></div> : null}
       {renameTarget ? <div className="modal-layer" role="presentation"><button className="modal-scrim" aria-label={t("sidebar.closeRenameEditor")} onClick={closeRenameDialog} /><div ref={renameDialog.containerRef} tabIndex={-1} className="hc-panel form-modal session-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="session-rename-title" aria-describedby="session-rename-description"><span className="eyebrow">{t("sidebar.localOrganization")}</span><h2 id="session-rename-title">{t("sidebar.renameTitle")}</h2><p id="session-rename-description">{t("sidebar.renameDescription")}</p><form onSubmit={(event) => void saveSessionTitle(event)}><label className="hc-field"><span>{t("sidebar.conversationName")}</span><input autoFocus maxLength={300} value={renameTitle} onChange={(event) => setRenameTitle(event.target.value)} /></label>{renameError ? <p className="form-error" role="alert"><WarningCircle /> {renameError}</p> : null}<div><Button type="button" variant="ghost" disabled={renameBusy} onClick={closeRenameDialog}>{t("sidebar.cancel")}</Button><Button type="submit" variant="primary" disabled={renameBusy || !renameTitle.trim()}>{t(renameBusy ? "sidebar.renaming" : "sidebar.rename")}</Button></div></form></div></div> : null}
+      {moveTarget ? <div className="modal-layer" role="presentation"><button className="modal-scrim" aria-label={t("sidebar.closeMoveEditor")} onClick={closeMoveDialog} /><div ref={moveDialog.containerRef} tabIndex={-1} className="hc-panel form-modal session-move-dialog" role="dialog" aria-modal="true" aria-labelledby="session-move-title" aria-describedby="session-move-description"><span className="eyebrow">{t("sidebar.localOrganization")}</span><h2 id="session-move-title">{t("sidebar.moveTitle")}</h2><p id="session-move-description">{t("sidebar.moveDescription", { title: moveTarget.title })}</p><form onSubmit={(event) => void moveSession(event)}><label className="hc-field"><span>{t("sidebar.workspaceDestination")}</span><select autoFocus value={moveWorkspaceId} onChange={(event) => setMoveWorkspaceId(event.target.value)}><option value="">{t("sidebar.noWorkspace")}</option>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label>{moveError ? <p className="form-error" role="alert"><WarningCircle /> {moveError}</p> : null}<div><Button type="button" variant="ghost" disabled={moveBusy} onClick={closeMoveDialog}>{t("sidebar.cancel")}</Button><Button type="submit" variant="primary" disabled={moveBusy || moveWorkspaceId === (moveTarget.workspaceId ?? "")} leadingIcon={<FolderSimple />}>{t(moveBusy ? "sidebar.moving" : "sidebar.move")}</Button></div></form></div></div> : null}
       {deleteTarget ? <div className="modal-layer" role="presentation"><button className="modal-scrim" aria-label={t("activity.cancelDeleteAria")} onClick={closeDeleteDialog} /><div ref={deleteDialog.containerRef} tabIndex={-1} className="hc-panel form-modal session-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="sidebar-session-delete-title" aria-describedby="sidebar-session-delete-description"><span className="eyebrow">{t("activity.irreversible")}</span><h2 id="sidebar-session-delete-title">{t("activity.deleteTitle", { title: deleteTarget.title })}</h2><p id="sidebar-session-delete-description">{t("activity.deleteDialogDescription")}</p><form onSubmit={(event) => void deleteSession(event)}>{deleteError ? <p className="form-error" role="alert"><WarningCircle /> {deleteError}</p> : null}<div><Button type="button" variant="ghost" disabled={deleteBusy} onClick={closeDeleteDialog}>{t("activity.cancel")}</Button><Button type="submit" variant="danger" disabled={deleteBusy} leadingIcon={<Trash />}>{t(deleteBusy ? "activity.deleting" : "activity.deleteFromHermes")}</Button></div></form></div></div> : null}
     </>
   );
