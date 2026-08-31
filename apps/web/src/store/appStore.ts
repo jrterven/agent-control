@@ -24,6 +24,7 @@ type AppState = {
   demoMode: boolean;
   leftDrawerOpen: boolean;
   activityOpen: boolean;
+  desktopContextOpen: boolean;
   notificationsOpen: boolean;
   commandOpen: boolean;
   gatewayMenuOpen: boolean;
@@ -51,6 +52,7 @@ type AppState = {
   setAuth: (state: AuthState, userName?: string, csrfToken?: string, demoMode?: boolean) => void;
   setLeftDrawerOpen: (open: boolean) => void;
   setActivityOpen: (open: boolean) => void;
+  setDesktopContextOpen: (open: boolean) => void;
   setNotificationsOpen: (open: boolean) => void;
   setCommandOpen: (open: boolean) => void;
   setGatewayMenuOpen: (open: boolean) => void;
@@ -111,6 +113,7 @@ export const useAppStore = create<AppState>((set) => ({
   authState: "checking",
   leftDrawerOpen: false,
   activityOpen: false,
+  desktopContextOpen: true,
   notificationsOpen: false,
   commandOpen: false,
   gatewayMenuOpen: false,
@@ -128,6 +131,7 @@ export const useAppStore = create<AppState>((set) => ({
         offlineCacheEnabled: state.offlineCacheEnabled,
         leftDrawerOpen: false,
         activityOpen: false,
+        desktopContextOpen: true,
         notificationsOpen: false,
         commandOpen: false,
         gatewayMenuOpen: false,
@@ -149,20 +153,21 @@ export const useAppStore = create<AppState>((set) => ({
   }),
   setLeftDrawerOpen: (leftDrawerOpen) => set({ leftDrawerOpen }),
   setActivityOpen: (activityOpen) => set({ activityOpen }),
+  setDesktopContextOpen: (desktopContextOpen) => set({ desktopContextOpen }),
   setNotificationsOpen: (notificationsOpen) => set({ notificationsOpen }),
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   setGatewayMenuOpen: (gatewayMenuOpen) => set({ gatewayMenuOpen }),
   selectGateway: (selectedGatewayId) => set((state) => {
     const selectedProfileId = state.profiles.find((item) => item.gatewayId === selectedGatewayId)?.id ?? "";
-    const selectedSessionId = state.sessions.find((item) => item.profileId === selectedProfileId && (!state.selectedWorkspaceId || item.workspaceId === state.selectedWorkspaceId))?.id ?? "";
+    const selectedSessionId = state.sessions.find((item) => item.profileId === selectedProfileId && (item.workspaceId ?? "") === state.selectedWorkspaceId)?.id ?? "";
     return { selectedGatewayId, selectedProfileId, selectedSessionId, gatewayMenuOpen: false };
   }),
   selectProfile: (selectedProfileId) => set((state) => {
     const profile = state.profiles.find((item) => item.id === selectedProfileId);
-    const selectedSessionId = state.sessions.find((item) => item.profileId === selectedProfileId && (!state.selectedWorkspaceId || item.workspaceId === state.selectedWorkspaceId))?.id ?? "";
+    const selectedSessionId = state.sessions.find((item) => item.profileId === selectedProfileId && (item.workspaceId ?? "") === state.selectedWorkspaceId)?.id ?? "";
     return { selectedProfileId, selectedGatewayId: profile?.gatewayId ?? state.selectedGatewayId, selectedSessionId };
   }),
-  selectWorkspace: (selectedWorkspaceId) => set((state) => ({ selectedWorkspaceId, selectedSessionId: state.sessions.find((item) => item.workspaceId === selectedWorkspaceId && item.profileId === state.selectedProfileId)?.id ?? "" })),
+  selectWorkspace: (selectedWorkspaceId) => set((state) => ({ selectedWorkspaceId, selectedSessionId: state.sessions.find((item) => (item.workspaceId ?? "") === selectedWorkspaceId && item.profileId === state.selectedProfileId)?.id ?? "" })),
   selectSession: (selectedSessionId) => set((state) => {
     const session = state.sessions.find((item) => item.id === selectedSessionId);
     const profile = session ? state.profiles.find((item) => item.id === session.profileId) : undefined;
@@ -194,7 +199,7 @@ export const useAppStore = create<AppState>((set) => ({
         : data.workspaces.some((item) => item.id === state.selectedWorkspaceId)
           ? state.selectedWorkspaceId
           : data.workspaces[0]?.id ?? "";
-    const selectedSessionId = data.sessions.some((item) => item.id === state.selectedSessionId && item.profileId === selectedProfileId && (!selectedWorkspaceId || item.workspaceId === selectedWorkspaceId)) ? state.selectedSessionId : data.sessions.find((item) => item.profileId === selectedProfileId && (!selectedWorkspaceId || item.workspaceId === selectedWorkspaceId))?.id ?? "";
+    const selectedSessionId = data.sessions.some((item) => item.id === state.selectedSessionId && item.profileId === selectedProfileId && (item.workspaceId ?? "") === selectedWorkspaceId) ? state.selectedSessionId : data.sessions.find((item) => item.profileId === selectedProfileId && (item.workspaceId ?? "") === selectedWorkspaceId)?.id ?? "";
     return { ...data, bootstrapLoaded: true, selectedGatewayId, selectedProfileId, selectedWorkspaceId, selectedSessionId };
   }),
   addSession: (session) => set((state) => ({ sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)], selectedSessionId: session.id, leftDrawerOpen: false })),
@@ -366,6 +371,7 @@ export const useAppStore = create<AppState>((set) => ({
     offlineCacheEnabled: state.offlineCacheEnabled,
     leftDrawerOpen: false,
     activityOpen: false,
+    desktopContextOpen: true,
     notificationsOpen: false,
     commandOpen: false,
     gatewayMenuOpen: false,

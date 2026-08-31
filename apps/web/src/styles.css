@@ -92,7 +92,7 @@ button { color: inherit; }
 .skip-link:focus { top: 12px; }
 .eyebrow { display: block; color: var(--accent); font-size: 11px; font-weight: 780; letter-spacing: .12em; text-transform: uppercase; }
 
-.app-shell { height: 100dvh; display: grid; grid-template-columns: 282px minmax(0, 1fr) 320px; overflow: hidden; background: var(--bg); }
+.app-shell { height: 100dvh; display: grid; grid-template-columns: 282px minmax(0, 1fr) 320px; overflow: hidden; background: var(--bg); transition: grid-template-columns 180ms ease; }
 .app-center { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .main-content { min-height: 0; flex: 1; overflow: auto; background: var(--bg); }
 .main-content--conversation { overflow: hidden; }
@@ -118,8 +118,20 @@ button { color: inherit; }
 .identity-button { display: grid; grid-template-columns: auto auto; align-items: center; gap: 0 8px; min-height: 44px; border: 0; padding: 0; text-align: left; background: transparent; cursor: pointer; }
 .identity-button__name { font-size: 17px; font-weight: 760; letter-spacing: -.02em; }
 .identity-button__status { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
-.workspace-switcher { min-height: 44px; max-width: 320px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--border); border-radius: 11px; padding: 0 14px; overflow: hidden; color: var(--text-soft); background: var(--surface-1); cursor: pointer; }
+.workspace-switcher-wrap { position: relative; min-width: 0; width: 100%; max-width: 320px; }
+.workspace-switcher { width: 100%; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--border); border-radius: 11px; padding: 0 14px; overflow: hidden; color: var(--text-soft); background: var(--surface-1); cursor: pointer; }
 .workspace-switcher span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.workspace-switcher-wrap.is-open .workspace-switcher { border-color: var(--border-accent); color: var(--text); box-shadow: 0 0 0 3px var(--accent-soft); }
+.workspace-switcher__menu { position: absolute; z-index: 82; top: calc(100% + 8px); right: 0; width: min(360px, calc(100vw - 32px)); max-height: min(420px, calc(100dvh - 96px)); display: grid; gap: 3px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--border-strong); border-radius: 15px; padding: 7px; background: var(--surface-elevated); box-shadow: var(--shadow); scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.workspace-switcher__option { width: 100%; min-height: 58px; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto 22px; align-items: center; gap: 9px; border: 1px solid transparent; border-radius: 11px; padding: 7px 9px; color: var(--muted-strong); text-align: left; background: transparent; cursor: pointer; }
+.workspace-switcher__option:hover, .workspace-switcher__option:focus-visible, .workspace-switcher__option.is-active { border-color: var(--border); color: var(--text); background: var(--surface-2); }
+.workspace-switcher__icon { width: 34px; height: 34px; display: inline-grid; place-items: center; flex: 0 0 auto; border-radius: 9px; color: var(--accent); background: var(--accent-soft); }
+.workspace-switcher__copy { min-width: 0; display: grid; gap: 1px; }
+.workspace-switcher__copy strong, .workspace-switcher__copy small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.workspace-switcher__copy strong { font-size: 13px; font-weight: 690; }
+.workspace-switcher__copy small { color: var(--muted); font-size: 10px; }
+.workspace-switcher__check { visibility: hidden; color: var(--accent); }
+.workspace-switcher__option.is-active .workspace-switcher__check { visibility: visible; }
 .top-bar__notification-wrap { position: relative; display: inline-grid; place-items: center; }
 .top-bar__notification-count { position: absolute; top: -5px; right: -6px; min-width: 19px; height: 19px; display: inline-grid; place-items: center; border: 2px solid var(--surface-0); border-radius: 999px; padding-inline: 3px; color: #04141c; background: var(--accent); font-size: 9px; font-weight: 850; line-height: 1; pointer-events: none; }
 
@@ -284,6 +296,12 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .activity-panel__footer { margin-top: auto; padding: 18px 16px; border-top: 1px solid var(--border); }
 .activity-panel__footer code { display: block; margin-top: 10px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; }
 .scrim { position: fixed; z-index: 44; inset: 0; display: none; border: 0; background: rgb(0 0 0 / .58); }
+
+@media (min-width: 1200px) {
+  .app-shell.is-context-collapsed { grid-template-columns: 282px minmax(0, 1fr) 0; }
+  .app-shell.is-context-collapsed > .activity-panel { visibility: hidden; overflow: hidden; border-left: 0; opacity: 0; pointer-events: none; }
+  .app-shell.is-context-collapsed > .notification-menu { right: 18px; }
+}
 
 .connection-banner { min-height: 36px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px 14px; color: var(--warning-text); border-bottom: 1px solid var(--warning-border); background: var(--warning-surface); font-size: 12px; }
 .connection-banner--demo { color: var(--muted-strong); border-color: var(--border); background: var(--surface-1); }
@@ -835,7 +853,10 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
   .top-bar__sidebar { display: none !important; }
   .top-bar__identity { min-width: 0; }
   .identity-button__name { font-size: 16px; }
-  .workspace-switcher { grid-column: 1 / -1; grid-row: 2; width: 100%; max-width: none; justify-content: space-between; border: 0; border-radius: 0; padding: 0 3px; color: var(--text); background: transparent; font-size: 15px; font-weight: 690; }
+  .workspace-switcher-wrap { grid-column: 1 / -1; grid-row: 2; width: 100%; max-width: none; }
+  .workspace-switcher { justify-content: space-between; border: 0; border-radius: 0; padding: 0 3px; color: var(--text); background: transparent; font-size: 15px; font-weight: 690; }
+  .workspace-switcher-wrap.is-open .workspace-switcher { border-color: transparent; box-shadow: none; }
+  .workspace-switcher__menu { top: calc(100% - 2px); right: 0; width: 100%; max-height: min(360px, calc(100dvh - 142px - env(safe-area-inset-bottom))); }
   .top-bar__notifications { border-color: var(--border); background: var(--surface-1); }
   .top-bar__notification-count { border-color: var(--surface-1); }
   .notification-scrim { display: block; }

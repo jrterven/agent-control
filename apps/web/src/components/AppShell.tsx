@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { hasPwaUpdateBlockers, requestPwaUpdate, usePwaUpdateStore } from "../lib/pwaUpdate";
 import { useAppStore } from "../store/appStore";
+import { cx } from "@hermes-control/ui";
 import { ActivityPanel } from "./ActivityPanel";
 import { BottomNav } from "./BottomNav";
 import { CommandPalette } from "./CommandPalette";
@@ -17,6 +18,7 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
   const updateDeferred = usePwaUpdateStore((state) => state.deferred);
   const updateBlockers = usePwaUpdateStore((state) => state.blockers);
   const setUpdateBlocker = usePwaUpdateStore((state) => state.setBlocker);
+  const desktopContextOpen = useAppStore((state) => state.desktopContextOpen);
 
   useEffect(() => {
     setUpdateBlocker("streaming", hasStreamingResponse);
@@ -30,7 +32,7 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
   }, [updateBlockers, updateDeferred, updateStatus]);
 
   return (
-    <div className="app-shell">
+    <div className={cx("app-shell", !desktopContextOpen && "is-context-collapsed")}>
       <a className="skip-link" href="#main-content">{t("nav.skipToContent")}</a>
       <LeftSidebar />
       <div className="app-center">

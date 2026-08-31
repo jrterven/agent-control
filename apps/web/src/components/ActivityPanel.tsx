@@ -19,6 +19,7 @@ export function ActivityPanel() {
   const formatUsageNumber = (value: number) => usageNumber.format(value);
   const open = useAppStore((state) => state.activityOpen);
   const close = useAppStore((state) => state.setActivityOpen);
+  const desktopContextOpen = useAppStore((state) => state.desktopContextOpen);
   const advancedMode = useAppStore((state) => state.advancedMode);
   const setAdvancedMode = useAppStore((state) => state.setAdvancedMode);
   const profileId = useAppStore((state) => state.selectedProfileId);
@@ -81,6 +82,7 @@ export function ActivityPanel() {
     setDeleteError("");
   };
   const drawer = useOverlayDialog<HTMLElement>({ open: open && !deleteTarget, onClose: () => close(false), mediaQuery: "(max-width: 1199px)" });
+  const panelHidden = drawer.isOverlay ? !open : !desktopContextOpen;
   const deleteDialog = useOverlayDialog<HTMLDivElement>({ open: Boolean(deleteTarget), onClose: closeDeleteDialog, mediaQuery: "(min-width: 0px)" });
 
   const refreshBootstrap = async () => {
@@ -163,12 +165,12 @@ export function ActivityPanel() {
       <aside
         id="activity-panel"
         ref={drawer.containerRef}
-        className={cx("activity-panel", open && "is-open")}
+        className={cx("activity-panel", open && "is-open", !desktopContextOpen && "is-desktop-closed")}
         aria-label={t("activity.panelAria")}
-        aria-hidden={deleteTarget || (drawer.isOverlay && !open) ? true : undefined}
+        aria-hidden={deleteTarget || panelHidden ? true : undefined}
         aria-modal={drawer.active ? true : undefined}
         role={drawer.isOverlay ? "dialog" : undefined}
-        inert={Boolean(deleteTarget) || (drawer.isOverlay && !open)}
+        inert={Boolean(deleteTarget) || panelHidden}
         tabIndex={drawer.active ? -1 : undefined}
       >
         <header>
