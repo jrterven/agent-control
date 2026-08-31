@@ -15,6 +15,7 @@ from hermes_control_api.services import (
     INTERACTIVE_MUTATION_CAPABILITIES,
     UPSTREAM_MUTATION_CAPABILITIES,
     capabilities_for_profile,
+    require_capability,
     require_mutable_profile,
 )
 
@@ -486,6 +487,94 @@ def test_operator_allowlist_can_select_custom_profile_without_enabling_8642(
     connection = client.portal.call(staging_connection)
     assert connection.api_url is None
     assert connection.api_key is None
+
+
+def test_control_managed_authorization_is_scoped_to_gateway_route(
+    authenticated, app
+):
+    client, csrf = authenticated
+    app.state.services.settings.mutable_profiles = ["control-dev"]
+    app.state.services.settings.interactive_profiles = ["default"]
+    with app.state.session_factory() as db:
+        primary_gateway = db.query(Gateway).filter(Gateway.env_managed.is_(True)).one()
+        primary_gateway_id = primary_gateway.id
+
+    secondary = client.post(
+        "/api/v1/gateways",
+        headers=mutation_headers(csrf, "create-homonym-secondary-gateway"),
+        json={
+            "name": "Homonym secondary gateway",
+            "restUrl": "http://127.0.0.1:49119",
+            "wsUrl": "ws://127.0.0.1:49119/api/ws",
+            "connectionMode": "tunnel",
+            "trustedSourceSha": "e" * 40,
+        },
+    )
+    assert secondary.status_code == 201, secondary.text
+    secondary_gateway_id = secondary.json()["id"]
+
+    now = datetime.now(timezone.utc)
+    advertised = {
+        "protocol": "dashboard-jsonrpc",
+        "version": "mock-1",
+        "sourceSha": "in-memory",
+        "methods": ["profiles.create"],
+        "features": [],
+    }
+    with app.state.session_factory() as db:
+        db.add_all(
+            [
+                ProfileRef(
+                    gateway_id=primary_gateway_id,
+                    profile_name="homonymous-managed",
+                    display_name="Managed on primary",
+                    managed_by_control=True,
+                    status="online",
+                    capabilities=advertised,
+                    last_seen_at=now,
+                    capabilities_checked_at=now,
+                ),
+                ProfileRef(
+                    gateway_id=secondary_gateway_id,
+                    profile_name="homonymous-managed",
+                    display_name="Unmanaged on secondary",
+                    managed_by_control=False,
+                    status="online",
+                    capabilities=advertised,
+                    last_seen_at=now,
+                    capabilities_checked_at=now,
+                ),
+            ]
+        )
+        db.commit()
+        GatewayService(app.state.services).seed_environment_gateway(db)
+
+    assert app.state.services.settings.mutable_profiles == ["control-dev"]
+    assert app.state.services.settings.interactive_profiles == ["default"]
+    bootstrap_profiles = [
+        item
+        for item in client.get("/api/v1/bootstrap").json()["profiles"]
+        if item["technicalName"] == "homonymous-managed"
+    ]
+    by_gateway = {item["gatewayId"]: item for item in bootstrap_profiles}
+    assert by_gateway[primary_gateway_id]["mutable"] is True
+    assert by_gateway[primary_gateway_id]["capabilities"]["profileCreate"] is True
+    assert by_gateway[secondary_gateway_id]["mutable"] is False
+    assert by_gateway[secondary_gateway_id]["capabilities"]["profileCreate"] is False
+
+    async def require_profile_create(gateway_id: str):
+        with app.state.session_factory() as db:
+            await require_capability(
+                db,
+                app.state.services,
+                gateway_id=gateway_id,
+                profile_name="homonymous-managed",
+                method="profiles.create",
+            )
+
+    client.portal.call(require_profile_create, primary_gateway_id)
+    with pytest.raises(ConflictError, match="operator"):
+        client.portal.call(require_profile_create, secondary_gateway_id)
 
 
 def test_stale_capability_cache_never_announces_mutability(authenticated, app):

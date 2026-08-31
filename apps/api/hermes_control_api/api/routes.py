@@ -117,6 +117,7 @@ def public_capability_set(
     mutable_profiles: list[str] | tuple[str, ...] | frozenset[str] = (),
     interactive_profiles: list[str] | tuple[str, ...] | frozenset[str] = (),
     trusted_source_sha_configured: bool = False,
+    managed_by_control: bool = False,
 ) -> dict[str, Any]:
     """Return the exact, non-secret fields the UI may use for control gating."""
 
@@ -138,6 +139,7 @@ def public_capability_set(
                     method,
                     mutable_profiles,
                     interactive_profiles,
+                    managed_by_control=managed_by_control,
                 )
             }
     features = sorted(
@@ -168,6 +170,7 @@ def public_profile_mutable(
     mutable_profiles: list[str] | tuple[str, ...] | frozenset[str],
     interactive_profiles: list[str] | tuple[str, ...] | frozenset[str] = (),
     trusted_source_sha_configured: bool,
+    managed_by_control: bool = False,
 ) -> bool:
     """Expose mutation eligibility only after all three safety gates pass."""
 
@@ -179,6 +182,7 @@ def public_profile_mutable(
         mutable_profiles=mutable_profiles,
         interactive_profiles=interactive_profiles,
         trusted_source_sha_configured=True,
+        managed_by_control=managed_by_control,
     )
     return bool(set(projected["methods"]) & UPSTREAM_MUTATION_CAPABILITIES)
 
@@ -214,6 +218,7 @@ def gateway_capability_set(
             mutable_profiles=mutable_profiles,
             interactive_profiles=interactive_profiles,
             trusted_source_sha_configured=trusted_source_sha_configured,
+            managed_by_control=row.managed_by_control,
         )
         for row in rows
     ]
@@ -552,6 +557,7 @@ def bootstrap(
             trusted_source_sha_configured=trusted_gateways.get(
                 row.gateway_id, False
             ),
+            managed_by_control=row.managed_by_control,
         )
         for row in profiles
     }
@@ -658,6 +664,7 @@ def bootstrap(
                         trusted_source_sha_configured=trusted_gateways.get(
                             row.gateway_id, False
                         ),
+                        managed_by_control=row.managed_by_control,
                     )
                 ),
                 "capabilities": profile_capabilities[row.id],
@@ -669,6 +676,7 @@ def bootstrap(
                     trusted_source_sha_configured=trusted_gateways.get(
                         row.gateway_id, False
                     ),
+                    managed_by_control=row.managed_by_control,
                 ),
             }
             for row in profiles
@@ -742,6 +750,7 @@ def public_capability_flags(
     mutable_profiles: list[str] | tuple[str, ...] | frozenset[str] = (),
     interactive_profiles: list[str] | tuple[str, ...] | frozenset[str] = (),
     trusted_source_sha_configured: bool = False,
+    managed_by_control: bool = False,
 ) -> dict[str, bool]:
     raw = public_capability_set(
         capability,
@@ -749,6 +758,7 @@ def public_capability_flags(
         mutable_profiles=mutable_profiles,
         interactive_profiles=interactive_profiles,
         trusted_source_sha_configured=trusted_source_sha_configured,
+        managed_by_control=managed_by_control,
     )
     methods = set(raw["methods"])
     features = set(raw["features"])
@@ -874,12 +884,19 @@ async def read_capabilities(
     gateway_service = GatewayService(services(request))
     connection = await gateway_service.connection(db, gateway_id, profile_name)
     provider = await services(request).provider_pool.get(connection)
+    profile = db.scalar(
+        select(ProfileRef).where(
+            ProfileRef.gateway_id == gateway_id,
+            ProfileRef.profile_name == profile_name,
+        )
+    )
     capability = capabilities_for_profile(
         await provider.capabilities(),
         profile_name,
         services(request).settings.mutable_profiles,
         interactive_profiles=services(request).settings.interactive_profiles,
         trusted_source_sha_configured=bool(connection.trusted_source_sha),
+        managed_by_control=bool(profile and profile.managed_by_control),
     )
     return CapabilitiesView(
         gateway_id=gateway_id,
@@ -935,6 +952,7 @@ async def list_profiles(
                 mutable_profiles=mutable_profiles,
                 interactive_profiles=interactive_profiles,
                 trusted_source_sha_configured=trusted,
+                managed_by_control=row.managed_by_control,
             ),
             capabilities=public_capability_set(
                 fresh_capabilities[row.id],
@@ -942,6 +960,7 @@ async def list_profiles(
                 mutable_profiles=mutable_profiles,
                 interactive_profiles=interactive_profiles,
                 trusted_source_sha_configured=trusted,
+                managed_by_control=row.managed_by_control,
             ),
             capability_set=public_capability_set(
                 fresh_capabilities[row.id],
@@ -949,6 +968,7 @@ async def list_profiles(
                 mutable_profiles=mutable_profiles,
                 interactive_profiles=interactive_profiles,
                 trusted_source_sha_configured=trusted,
+                managed_by_control=row.managed_by_control,
             ),
         )
         for row in rows
@@ -981,6 +1001,7 @@ async def create_profile(
         mutable_profiles=app_services.settings.mutable_profiles,
         interactive_profiles=app_services.settings.interactive_profiles,
         trusted_source_sha_configured=trusted,
+        managed_by_control=row.managed_by_control,
     )
     health = profile_health_state(
         row,
@@ -1001,6 +1022,7 @@ async def create_profile(
             mutable_profiles=app_services.settings.mutable_profiles,
             interactive_profiles=app_services.settings.interactive_profiles,
             trusted_source_sha_configured=trusted,
+            managed_by_control=row.managed_by_control,
         ),
         capabilities=public_capability_flags(
             capability,
@@ -1008,6 +1030,7 @@ async def create_profile(
             mutable_profiles=app_services.settings.mutable_profiles,
             interactive_profiles=app_services.settings.interactive_profiles,
             trusted_source_sha_configured=trusted,
+            managed_by_control=row.managed_by_control,
         ),
         capability_set=capability_set,
     )
@@ -1131,6 +1154,7 @@ async def refresh_profiles(
                 mutable_profiles=mutable_profiles,
                 interactive_profiles=interactive_profiles,
                 trusted_source_sha_configured=trusted,
+                managed_by_control=row.managed_by_control,
             ),
             capabilities=public_capability_set(
                 fresh_capabilities[row.id],
@@ -1138,6 +1162,7 @@ async def refresh_profiles(
                 mutable_profiles=mutable_profiles,
                 interactive_profiles=interactive_profiles,
                 trusted_source_sha_configured=trusted,
+                managed_by_control=row.managed_by_control,
             ),
             capability_set=public_capability_set(
                 fresh_capabilities[row.id],
@@ -1145,6 +1170,7 @@ async def refresh_profiles(
                 mutable_profiles=mutable_profiles,
                 interactive_profiles=interactive_profiles,
                 trusted_source_sha_configured=trusted,
+                managed_by_control=row.managed_by_control,
             ),
         )
         for row in rows

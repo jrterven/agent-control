@@ -88,6 +88,7 @@ function profileWritePolicy(profile: Profile, t: (key: string) => string) {
 }
 
 type AgentCreateValues = {
+  gatewayId: string;
   technicalName: string;
   displayName: string;
   description: string;
@@ -100,6 +101,7 @@ function normalizeAgentTechnicalName(value: string) {
 }
 
 const emptyAgentCreateValues: AgentCreateValues = {
+  gatewayId: "",
   technicalName: "",
   displayName: "",
   description: "",
@@ -148,6 +150,7 @@ export function AgentsScreen() {
   const navigate = useNavigate();
   const selectedProfileId = useAppStore((state) => state.selectedProfileId);
   const selectProfile = useAppStore((state) => state.selectProfile);
+  const gateways = useAppStore((state) => state.gateways);
   const profiles = useAppStore((state) => state.profiles);
   const selectedGatewayId = useAppStore((state) => state.selectedGatewayId);
   const csrfToken = useAppStore((state) => state.csrfToken);
@@ -171,37 +174,48 @@ export function AgentsScreen() {
   const setupSessionId = pendingSetup?.setupSession?.id ?? "";
   const setupApprovals = useAppStore((state) => state.approvalsBySession[setupSessionId] ?? emptyInteractionRequests);
   const setupClarifications = useAppStore((state) => state.clarificationsBySession[setupSessionId] ?? emptyInteractionRequests);
-  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
-  const sourceProfile = selectedProfile ?? profiles.find((profile) => (
-    profile.gatewayId === selectedGatewayId && profile.capabilities?.profileCreate
-  ));
-  const targetGatewayId = sourceProfile?.gatewayId ?? selectedGatewayId;
+  const eligibleGatewayIds = useMemo(() => new Set(
+    profiles
+      .filter((profile) => profile.capabilities?.profileCreate)
+      .map((profile) => profile.gatewayId),
+  ), [profiles]);
+  const eligibleGateways = useMemo(
+    () => gateways.filter((gateway) => eligibleGatewayIds.has(gateway.id)),
+    [eligibleGatewayIds, gateways],
+  );
+  const defaultCreateGatewayId = eligibleGatewayIds.has(selectedGatewayId)
+    ? selectedGatewayId
+    : eligibleGateways[0]?.id ?? "";
   const canCreateProfile = Boolean(
-    targetGatewayId
-    && sourceProfile?.capabilities?.profileCreate
+    eligibleGateways.length
     && !offline
     && !demoMode,
   );
   const canEditAvatars = authState === "authenticated" && !demoMode;
   const agentCreateSchema = useMemo(() => z.object({
+    gatewayId: z.string().refine((value) => eligibleGatewayIds.has(value), t("agentsPage.validationGateway")),
     technicalName: z.string()
       .trim()
       .min(2, t("agentsPage.validationTechnicalName"))
       .max(64, t("agentsPage.validationTechnicalName"))
-      .regex(/^[a-z][a-z0-9-]*$/, t("agentsPage.validationTechnicalName"))
-      .refine(
-        (value) => !profiles.some((profile) => (
-          profile.gatewayId === targetGatewayId
-          && profile.technicalName.toLowerCase() === value.toLowerCase()
-          && profile.id !== pendingSetup?.profile?.id
-        )),
-        t("agentsPage.duplicateTechnicalName"),
-      ),
+      .regex(/^[a-z][a-z0-9-]*$/, t("agentsPage.validationTechnicalName")),
     displayName: z.string().trim().min(2, t("agentsPage.validationDisplayName")).max(80, t("agentsPage.validationDisplayName")),
     description: z.string().trim()
       .min(10, t("agentsPage.validationDescription"))
       .max(MAX_AGENT_BRIEF_CHARACTERS, t("agentsPage.validationDescriptionTooLong")),
-  }), [pendingSetup?.profile?.id, profiles, t, targetGatewayId]);
+  }).superRefine((values, context) => {
+    if (profiles.some((profile) => (
+      profile.gatewayId === values.gatewayId
+      && profile.technicalName.toLowerCase() === values.technicalName.toLowerCase()
+      && profile.id !== pendingSetup?.profile?.id
+    ))) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: t("agentsPage.duplicateTechnicalName"),
+        path: ["technicalName"],
+      });
+    }
+  }), [eligibleGatewayIds, pendingSetup?.profile?.id, profiles, t]);
   const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<AgentCreateValues>({
     resolver: zodResolver(agentCreateSchema),
     defaultValues: emptyAgentCreateValues,
@@ -260,7 +274,7 @@ export function AgentsScreen() {
     setLastProgressPhase("creatingProfile");
     setCreateAvatarError("");
     setNewAgentAvatar(null);
-    reset(emptyAgentCreateValues);
+    reset({ ...emptyAgentCreateValues, gatewayId: defaultCreateGatewayId });
     setCreatorOpen(true);
   };
   const advanceCreation = (phase: Exclude<AgentCreationPhase, "idle" | "error">) => {
@@ -268,7 +282,10 @@ export function AgentsScreen() {
     setCreationPhase(phase);
   };
   const runAgentCreation = async (values: AgentCreateValues) => {
-    if (!canCreateProfile || !targetGatewayId || !sourceProfile) {
+    const sourceProfile = profiles.find((profile) => (
+      profile.gatewayId === values.gatewayId && profile.capabilities?.profileCreate
+    ));
+    if (!canCreateProfile || !sourceProfile) {
       setCreateError(t("agentsPage.createUnsupported"));
       return;
     }
@@ -278,7 +295,7 @@ export function AgentsScreen() {
       let progress = pendingSetup ?? {};
       advanceCreation("creatingProfile");
       let created = progress.profile ?? await api.createProfile({
-        gatewayId: targetGatewayId,
+        gatewayId: values.gatewayId,
         technicalName: values.technicalName,
         displayName: values.displayName,
         description: values.description,
@@ -355,7 +372,7 @@ export function AgentsScreen() {
       const bootstrap = await api.bootstrap();
       const refreshedProfile = bootstrap.profiles.find((profile) => (
         profile.id === created.id
-        || (profile.gatewayId === targetGatewayId && profile.technicalName === created.technicalName)
+        || (profile.gatewayId === values.gatewayId && profile.technicalName === created.technicalName)
       ));
       const activeProfile = refreshedProfile ?? created;
       const visibleSessions = [
@@ -470,6 +487,13 @@ export function AgentsScreen() {
             <h2 id="agent-creator-title">{t("agentsPage.creatorTitle")}</h2>
             <p id="agent-creator-description">{t("agentsPage.creatorDescription")}</p>
             <form onSubmit={createAgent} noValidate>
+              <label className="hc-field">
+                <span className="hc-field__label">{t("agentsPage.gateway")}</span>
+                <select aria-label={t("agentsPage.gateway")} disabled={Boolean(pendingSetup)} {...register("gatewayId")}>
+                  {eligibleGateways.map((gateway) => <option key={gateway.id} value={gateway.id}>{gateway.name}</option>)}
+                </select>
+                {errors.gatewayId?.message ? <span className="hc-field__error">{errors.gatewayId.message}</span> : <span className="hc-field__hint">{t("agentsPage.gatewayHint")}</span>}
+              </label>
               <Field label={t("agentsPage.technicalName")} aria-label={t("agentsPage.technicalName")} hint={t("agentsPage.technicalNameHint")} autoCapitalize="none" autoCorrect="off" spellCheck={false} error={errors.technicalName?.message} disabled={Boolean(pendingSetup)} {...technicalNameField} onChange={(event) => {
                 event.currentTarget.value = normalizeAgentTechnicalName(event.currentTarget.value);
                 void technicalNameField.onChange(event);

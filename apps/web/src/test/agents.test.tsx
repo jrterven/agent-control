@@ -35,6 +35,12 @@ const gateway: Gateway = {
   },
 };
 
+const secondaryGateway: Gateway = {
+  ...gateway,
+  id: "gateway-b",
+  name: "Gateway B",
+};
+
 const sourceProfile: Profile = {
   id: "profile-default",
   gatewayId: gateway.id,
@@ -48,6 +54,14 @@ const sourceProfile: Profile = {
     config: false,
     profileCreate: true,
   },
+};
+
+const secondarySourceProfile: Profile = {
+  ...sourceProfile,
+  id: "profile-primary-b",
+  gatewayId: secondaryGateway.id,
+  technicalName: "primary",
+  displayName: "Turing",
 };
 
 const createdProfile: Profile = {
@@ -76,8 +90,12 @@ const cleanSession: SessionSummary = {
   runtimeSessionId: "runtime-researcher-clean",
 };
 
-function bootstrap(profiles: Profile[], sessions: SessionSummary[] = []): BootstrapData {
-  return { gateways: [gateway], profiles, workspaces: [], sessions, automations: [] };
+function bootstrap(
+  profiles: Profile[],
+  sessions: SessionSummary[] = [],
+  gateways: Gateway[] = [gateway],
+): BootstrapData {
+  return { gateways, profiles, workspaces: [], sessions, automations: [] };
 }
 
 describe("new agent flow", () => {
@@ -167,6 +185,77 @@ describe("new agent flow", () => {
     expect(useAppStore.getState().messages.filter((message) => message.sessionId === cleanSession.id)).toHaveLength(0);
     expect(navigate).toHaveBeenCalledWith({ to: "/chats" });
     expect(screen.queryByRole("dialog", { name: "Crear un agente" })).not.toBeInTheDocument();
+  });
+
+  it("creates and configures an agent on the explicitly selected gateway", async () => {
+    const gatewayAExistingProfile: Profile = {
+      ...sourceProfile,
+      id: "profile-ada-a",
+      technicalName: "ada",
+      displayName: "Ada on Gateway A",
+    };
+    const gatewayBCreatedProfile: Profile = {
+      ...secondarySourceProfile,
+      id: "profile-ada-b",
+      technicalName: "ada",
+      displayName: "Ada",
+    };
+    const gatewayBSetupSession: SessionSummary = {
+      ...setupSession,
+      id: "session-ada-setup",
+      gatewayId: secondaryGateway.id,
+      profileId: gatewayBCreatedProfile.id,
+      profileName: gatewayBCreatedProfile.technicalName,
+      storedSessionId: "stored-ada-setup",
+      runtimeSessionId: "runtime-ada-setup",
+    };
+    const gatewayBCleanSession: SessionSummary = {
+      ...gatewayBSetupSession,
+      id: "session-ada-clean",
+      storedSessionId: "stored-ada-clean",
+      runtimeSessionId: "runtime-ada-clean",
+    };
+    useAppStore.setState({
+      gateways: [gateway, secondaryGateway],
+      profiles: [sourceProfile, gatewayAExistingProfile, secondarySourceProfile],
+    });
+    const create = vi.spyOn(api, "createProfile").mockResolvedValue(gatewayBCreatedProfile);
+    const createSession = vi.spyOn(api, "createSession")
+      .mockResolvedValueOnce(gatewayBSetupSession)
+      .mockResolvedValueOnce(gatewayBCleanSession);
+    vi.spyOn(api, "submitPrompt").mockResolvedValue({ operationId: "setup-ada", status: "completed" });
+    vi.spyOn(api, "archiveSession").mockResolvedValue(gatewayBSetupSession);
+    vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrap(
+      [sourceProfile, gatewayAExistingProfile, secondarySourceProfile, gatewayBCreatedProfile],
+      [],
+      [gateway, secondaryGateway],
+    ));
+    const user = userEvent.setup();
+
+    render(<AgentsScreen />);
+    await user.click(screen.getByRole("button", { name: "Nuevo agente" }));
+    const dialog = screen.getByRole("dialog", { name: "Crear un agente" });
+    const gatewaySelect = within(dialog).getByLabelText("Gateway");
+    expect(gatewaySelect).toHaveValue(gateway.id);
+    expect(within(gatewaySelect).getAllByRole("option")).toHaveLength(2);
+    await user.selectOptions(gatewaySelect, secondaryGateway.id);
+    await user.type(within(dialog).getByLabelText("Nombre técnico"), "ada");
+    await user.type(within(dialog).getByLabelText("Nombre visible"), "Ada");
+    await user.type(within(dialog).getByLabelText("Descripción del agente"), "Diseña sistemas confiables y documenta sus decisiones.");
+    await user.click(within(dialog).getByRole("button", { name: "Crear y configurar" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith({
+      gatewayId: secondaryGateway.id,
+      technicalName: "ada",
+      displayName: "Ada",
+      description: "Diseña sistemas confiables y documenta sus decisiones.",
+    }, "csrf-memory-only"));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: "/chats" }));
+    expect(createSession).toHaveBeenNthCalledWith(1, gatewayBCreatedProfile.id, undefined, "csrf-memory-only");
+    expect(createSession).toHaveBeenNthCalledWith(2, gatewayBCreatedProfile.id, undefined, "csrf-memory-only");
+    expect(useAppStore.getState().selectedGatewayId).toBe(secondaryGateway.id);
+    expect(useAppStore.getState().selectedProfileId).toBe(gatewayBCreatedProfile.id);
+    expect(useAppStore.getState().selectedSessionId).toBe(gatewayBCleanSession.id);
   });
 
   it("validates identifiers and keeps creation hidden behind the verified capability", async () => {

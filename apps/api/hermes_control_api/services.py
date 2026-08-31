@@ -181,10 +181,12 @@ def mutation_allowed_for_profile(
     capability: str,
     mutable_profiles: list[str] | tuple[str, ...] | frozenset[str],
     interactive_profiles: list[str] | tuple[str, ...] | frozenset[str] = (),
+    *,
+    managed_by_control: bool = False,
 ) -> bool:
     if capability not in UPSTREAM_MUTATION_CAPABILITIES:
         return True
-    if profile_name in mutable_profiles:
+    if managed_by_control or profile_name in mutable_profiles:
         return True
     return (
         capability in INTERACTIVE_MUTATION_CAPABILITIES
@@ -197,12 +199,15 @@ def require_mutable_profile(
     capability: str,
     mutable_profiles: list[str] | tuple[str, ...] | frozenset[str],
     interactive_profiles: list[str] | tuple[str, ...] | frozenset[str] = (),
+    *,
+    managed_by_control: bool = False,
 ) -> None:
     if not mutation_allowed_for_profile(
         profile_name,
         capability,
         mutable_profiles,
         interactive_profiles,
+        managed_by_control=managed_by_control,
     ):
         raise ConflictError(
             "Hermes mutations are not allowed for this profile by the operator"
@@ -216,6 +221,7 @@ def capabilities_for_profile(
     *,
     interactive_profiles: list[str] | tuple[str, ...] | frozenset[str] = (),
     trusted_source_sha_configured: bool,
+    managed_by_control: bool = False,
 ) -> CapabilitySet:
     methods = capabilities.methods
     if not trusted_source_sha_configured:
@@ -233,6 +239,7 @@ def capabilities_for_profile(
                 method,
                 mutable_profiles,
                 interactive_profiles,
+                managed_by_control=managed_by_control,
             )
         )
     return CapabilitySet(
@@ -281,22 +288,6 @@ class AppServices:
     session_router: HermesSessionRouter
     session_factory: Any | None = None
     profile_creation_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
-
-
-def grant_control_managed_profile(services: AppServices, profile_name: str) -> None:
-    """Make a Control-created profile usable across the audited operations.
-
-    The durable authority is ``ProfileRef.managed_by_control``. These in-memory
-    lists feed the existing profile guard and are rebuilt from that marker on
-    every process start.
-    """
-
-    for configured in (
-        services.settings.mutable_profiles,
-        services.settings.interactive_profiles,
-    ):
-        if profile_name not in configured:
-            configured.append(profile_name)
 
 
 def record_profile_health(
@@ -361,11 +352,18 @@ async def require_capability(
     profile_name: str,
     method: str,
 ) -> None:
+    profile = db.scalar(
+        select(ProfileRef).where(
+            ProfileRef.gateway_id == gateway_id,
+            ProfileRef.profile_name == profile_name,
+        )
+    )
     require_mutable_profile(
         profile_name,
         method,
         services.settings.mutable_profiles,
         services.settings.interactive_profiles,
+        managed_by_control=bool(profile and profile.managed_by_control),
     )
     trusted_source_sha = trusted_gateway_source_sha(
         db, services, gateway_id
@@ -377,12 +375,6 @@ async def require_capability(
         raise ConflictError(
             "Hermes mutations require an operator-trusted full source SHA for this gateway"
         )
-    profile = db.scalar(
-        select(ProfileRef).where(
-            ProfileRef.gateway_id == gateway_id,
-            ProfileRef.profile_name == profile_name,
-        )
-    )
     now = utc_now()
     cached_capabilities = fresh_profile_capabilities(
         profile,
@@ -414,6 +406,7 @@ async def require_capability(
             services.settings.mutable_profiles,
             interactive_profiles=services.settings.interactive_profiles,
             trusted_source_sha_configured=trusted_source_sha is not None,
+            managed_by_control=bool(profile and profile.managed_by_control),
         )
         methods = set(capabilities.methods)
         if profile is not None:
@@ -466,12 +459,6 @@ class GatewayService:
 
     def seed_environment_gateway(self, db: Session) -> Gateway:
         settings = self.services.settings
-        for managed_name in db.scalars(
-            select(ProfileRef.profile_name).where(
-                ProfileRef.managed_by_control.is_(True)
-            )
-        ).all():
-            grant_control_managed_profile(self.services, managed_name)
         configured_dashboard_token = settings.hermes_dashboard_token or None
         configured_api_key = settings.hermes_api_key or None
         gateway = db.scalar(select(Gateway).where(Gateway.env_managed.is_(True)))
@@ -816,6 +803,7 @@ class GatewayService:
                 self.services.settings.mutable_profiles,
                 interactive_profiles=self.services.settings.interactive_profiles,
                 trusted_source_sha_configured=bool(connection.trusted_source_sha),
+                managed_by_control=bool(profile and profile.managed_by_control),
             )
             update_health("online")
             if profile is not None:
@@ -878,7 +866,14 @@ class ProfileService:
         self.services = services
         self.gateway_service = GatewayService(services)
 
-    async def sync(self, db: Session, gateway_id: str, profile_name: str = "default") -> list[ProfileRef]:
+    async def sync(
+        self,
+        db: Session,
+        gateway_id: str,
+        profile_name: str = "default",
+        *,
+        pending_managed_profiles: frozenset[str] = frozenset(),
+    ) -> list[ProfileRef]:
         discovery_connection = await self.gateway_service.connection(
             db, gateway_id, profile_name
         )
@@ -887,6 +882,15 @@ class ProfileService:
         profiles = list({profile.name: profile for profile in discovered}.values())
         now = utc_now()
         gateway = db.get(Gateway, gateway_id)
+        managed_profiles = set(
+            db.scalars(
+                select(ProfileRef.profile_name).where(
+                    ProfileRef.gateway_id == gateway_id,
+                    ProfileRef.managed_by_control.is_(True),
+                )
+            ).all()
+        )
+        managed_profiles.update(pending_managed_profiles)
         scoped_capabilities: dict[str, Any] = {}
         for profile in profiles:
             try:
@@ -904,6 +908,7 @@ class ProfileService:
                     trusted_source_sha_configured=bool(
                         scoped_connection.trusted_source_sha
                     ),
+                    managed_by_control=profile.name in managed_profiles,
                 )
             except Exception:
                 # Discovery remains useful, but an unverified profile must not
@@ -1067,11 +1072,11 @@ class ProfileService:
                         "Agent creation outcome is unknown; refresh agents before retrying"
                     ) from exc
 
-            grant_control_managed_profile(self.services, payload.technical_name)
             rows = await self.sync(
                 db,
                 payload.gateway_id,
                 profile_name=management_profile.profile_name,
+                pending_managed_profiles=frozenset({payload.technical_name}),
             )
             row = next(
                 (
