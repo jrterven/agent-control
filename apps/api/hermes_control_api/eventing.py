@@ -593,6 +593,51 @@ class EventHub:
         async with self._lock:
             self._subscriptions.discard(subscription)
 
+    async def purge_profile(self, gateway_id: str, profile_name: str) -> None:
+        """Remove buffered realtime state for a deleted or migrated profile."""
+
+        prefix = (gateway_id, profile_name)
+        async with self._lock:
+            for key in tuple(self._replay):
+                if key[:2] == prefix:
+                    self._replay.pop(key, None)
+            for route_key in tuple(self._buffers):
+                if self._split_route_key(route_key)[:2] == prefix:
+                    self._drop_buffer(route_key)
+            for key, journal in tuple(self._correlated_runs.items()):
+                if key[:2] == prefix:
+                    self._correlated_runs.pop(key, None)
+                    self._correlated_run_bytes = max(
+                        0,
+                        self._correlated_run_bytes
+                        - sum(item_size for _, item_size in journal),
+                    )
+            for key in tuple(self._interactions):
+                if key[:2] == prefix:
+                    self._interactions.pop(key, None)
+
+            # Events already queued for a browser must not appear after the
+            # lifecycle response commits. Preserve order and accounting for
+            # every unrelated route while draining each bounded queue once.
+            for subscription in self._subscriptions:
+                retained: list[tuple[dict, int]] = []
+                retained_bytes = 0
+                while True:
+                    try:
+                        payload, size = subscription.queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    if (
+                        str(payload.get("gatewayId") or "") == gateway_id
+                        and str(payload.get("profileName") or "") == profile_name
+                    ):
+                        continue
+                    retained.append((payload, size))
+                    retained_bytes += size
+                for item in retained:
+                    subscription.queue.put_nowait(item)
+                subscription.queued_bytes = retained_bytes
+
     async def next_event(self, subscription: Subscription) -> dict:
         payload, size = await subscription.queue.get()
         subscription.queued_bytes = max(0, subscription.queued_bytes - size)

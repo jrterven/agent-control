@@ -1,6 +1,6 @@
 const es = {
   adminConfig: {
-    tabs: { general: "General", identity: "Identidad", tools: "Herramientas", integrations: "Integraciones", secrets: "Secretos" },
+    tabs: { general: "General", identity: "Identidad", tools: "Herramientas", integrations: "Integraciones", secrets: "Secretos", management: "Administrar agente" },
     common: {
       editable: "editable", readOnly: "solo lectura", configured: "configurado", incomplete: "incompleto", active: "activo", inactive: "inactivo", protected: "protegido",
       updated: "{{name}} actualizado.", deleted: "{{name}} eliminado.", testComplete: "Prueba de {{name}} completada.",
@@ -30,6 +30,18 @@ const es = {
       title: "Secretos de solo escritura", description: "La interfaz solo conoce si un valor está configurado. Nunca recibe ni muestra su contenido.", managedValue: "Valor administrado por Hermes",
       newValue: "Nuevo valor para {{name}}", save: "Guardar valor", delete: "Eliminar", deleteConfirm: "¿Eliminar {{name}}? Hermes dejará de tener acceso a este valor.", empty: "Hermes no anunció secretos configurables.", saved: "{{name}} guardado sin exponer su valor.",
     },
+    management: {
+      title: "Administrar agente", description: "Mueve este agente a otro gateway o elimínalo de Hermes.", protected: "protegido", managed: "administrado",
+      agent: "Agente", currentGateway: "Gateway actual", transferDisclosure: "Al moverlo se conservan identidad, memoria, sesiones, skills y automatizaciones cron. Las credenciales no se copian; las rutas y herramientas locales pueden requerir ajustes en el gateway destino.",
+      defaultProtected: "El perfil default es esencial para administrar Hermes y no se puede mover ni eliminar desde Agent Control.",
+      reconcileBlocked: "Las operaciones de este agente están bloqueadas en este dispositivo hasta recargar Agent Control y verificar su estado.",
+      moveTitle: "Mover a otro gateway", moveDescription: "Transfiere el agente y conserva su contenido en un gateway compatible.", noDestination: "No hay otro gateway compatible con importación y rollback/eliminación de perfiles verificados.", move: "Mover agente",
+      deleteTitle: "Eliminar agente", deleteDescription: "Elimina de forma permanente el perfil y los datos asociados que Hermes indique.", delete: "Eliminar agente",
+      warningsTitle: "La operación terminó con avisos", moveEyebrow: "Transferencia de perfil", moveDialogTitle: "Mover a {{name}}", moveDialogDescription: "Elige el gateway destino y confirma con el nombre técnico exacto.", destinationGateway: "Gateway destino",
+      typeToConfirm: "Escribe {{name}} para confirmar", cancel: "Cancelar", cancelMove: "Cancelar transferencia", moving: "Moviendo…", confirmMove: "Confirmar transferencia",
+      deleteEyebrow: "Acción irreversible", deleteDialogTitle: "Eliminar a {{name}}", deleteDialogDescription: "Hermes eliminará este agente. Esta acción no se puede deshacer; confirma con el nombre técnico exacto.", cancelDelete: "Cancelar eliminación", deleting: "Eliminando…", confirmDelete: "Eliminar definitivamente",
+      moved: "{{name}} se movió al gateway destino.", deleted: "{{name}} se eliminó.", localCacheWarning: "No se pudo limpiar por completo el caché local de este dispositivo; bórralo desde Ajustes.", committedRefreshError: "El agente ya fue {{action}}, pero no se pudo actualizar esta pantalla. Recarga Agent Control.", outcomeUnknown: "Hermes no confirmó el resultado. Agent Control reconcilió el estado disponible y bloqueó el reenvío. Verifica dónde está el agente antes de iniciar otra operación.", outcomeUnknownRefresh: "Hermes no confirmó el resultado y Agent Control no pudo reconciliarlo. No repitas la operación: recarga Agent Control y verifica el agente primero.", movedAction: "movido", deletedAction: "eliminado",
+    },
     route: { aria: "Destino de configuración", gateway: "Gateway", profile: "Perfil Hermes", contract: "Contrato", unverified: "sin verificar", exactMethods: "{{count}} métodos exactos" },
     offline: "Administración bloqueada sin conexión. Los datos visibles pueden estar desactualizados.",
     errors: { read: "No se pudo leer la configuración de Hermes.", rejected: "Hermes rechazó la operación.", heading: "No se completó la operación" },
@@ -40,7 +52,7 @@ const es = {
 
 const en = {
   adminConfig: {
-    tabs: { general: "General", identity: "Identity", tools: "Tools", integrations: "Integrations", secrets: "Secrets" },
+    tabs: { general: "General", identity: "Identity", tools: "Tools", integrations: "Integrations", secrets: "Secrets", management: "Manage agent" },
     common: {
       editable: "editable", readOnly: "read only", configured: "configured", incomplete: "incomplete", active: "active", inactive: "inactive", protected: "protected",
       updated: "{{name}} updated.", deleted: "{{name}} deleted.", testComplete: "{{name}} test completed.",
@@ -70,6 +82,18 @@ const en = {
       title: "Write-only secrets", description: "The interface only knows whether a value is configured. It never receives or displays its contents.", managedValue: "Value managed by Hermes",
       newValue: "New value for {{name}}", save: "Save value", delete: "Delete", deleteConfirm: "Delete {{name}}? Hermes will no longer have access to this value.", empty: "Hermes did not report any configurable secrets.", saved: "{{name}} saved without exposing its value.",
     },
+    management: {
+      title: "Manage agent", description: "Move this agent to another gateway or delete it from Hermes.", protected: "protected", managed: "managed",
+      agent: "Agent", currentGateway: "Current gateway", transferDisclosure: "Moving preserves identity, memory, sessions, skills, and cron automations. Credentials are not copied; local routes and tools may need adjustment on the destination gateway.",
+      defaultProtected: "The default profile is essential for administering Hermes and cannot be moved or deleted from Agent Control.",
+      reconcileBlocked: "Operations for this agent are blocked on this device until you reload Agent Control and verify its state.",
+      moveTitle: "Move to another gateway", moveDescription: "Transfer the agent and preserve its content on a compatible gateway.", noDestination: "No other compatible gateway has verified profile import and rollback/deletion support.", move: "Move agent",
+      deleteTitle: "Delete agent", deleteDescription: "Permanently delete the profile and the associated data reported by Hermes.", delete: "Delete agent",
+      warningsTitle: "The operation completed with warnings", moveEyebrow: "Profile transfer", moveDialogTitle: "Move {{name}}", moveDialogDescription: "Choose the destination gateway and confirm with the exact technical name.", destinationGateway: "Destination gateway",
+      typeToConfirm: "Type {{name}} to confirm", cancel: "Cancel", cancelMove: "Cancel transfer", moving: "Moving…", confirmMove: "Confirm transfer",
+      deleteEyebrow: "Irreversible action", deleteDialogTitle: "Delete {{name}}", deleteDialogDescription: "Hermes will delete this agent. This cannot be undone; confirm with the exact technical name.", cancelDelete: "Cancel deletion", deleting: "Deleting…", confirmDelete: "Delete permanently",
+      moved: "{{name}} was moved to the destination gateway.", deleted: "{{name}} was deleted.", localCacheWarning: "This device's local cache could not be fully cleared; clear it from Settings.", committedRefreshError: "The agent was already {{action}}, but this screen could not be refreshed. Reload Agent Control.", outcomeUnknown: "Hermes did not confirm the outcome. Agent Control reconciled the available state and blocked resubmission. Verify where the agent is before starting another operation.", outcomeUnknownRefresh: "Hermes did not confirm the outcome and Agent Control could not reconcile it. Do not repeat the operation: reload Agent Control and verify the agent first.", movedAction: "moved", deletedAction: "deleted",
+    },
     route: { aria: "Configuration target", gateway: "Gateway", profile: "Hermes profile", contract: "Contract", unverified: "unverified", exactMethods: "{{count}} exact methods" },
     offline: "Administration is blocked while offline. Visible data may be out of date.",
     errors: { read: "The Hermes configuration could not be read.", rejected: "Hermes rejected the operation.", heading: "The operation could not be completed" },
@@ -80,7 +104,7 @@ const en = {
 
 const fr = {
   adminConfig: {
-    tabs: { general: "Général", identity: "Identité", tools: "Outils", integrations: "Intégrations", secrets: "Secrets" },
+    tabs: { general: "Général", identity: "Identité", tools: "Outils", integrations: "Intégrations", secrets: "Secrets", management: "Gérer l’agent" },
     common: {
       editable: "modifiable", readOnly: "lecture seule", configured: "configuré", incomplete: "incomplet", active: "actif", inactive: "inactif", protected: "protégé",
       updated: "{{name}} mis à jour.", deleted: "{{name}} supprimé.", testComplete: "Test de {{name}} terminé.",
@@ -110,6 +134,18 @@ const fr = {
       title: "Secrets en écriture seule", description: "L’interface sait uniquement si une valeur est configurée. Elle ne reçoit ni n’affiche jamais son contenu.", managedValue: "Valeur gérée par Hermes",
       newValue: "Nouvelle valeur pour {{name}}", save: "Enregistrer la valeur", delete: "Supprimer", deleteConfirm: "Supprimer {{name}} ? Hermes n’aura plus accès à cette valeur.", empty: "Hermes n’a signalé aucun secret configurable.", saved: "{{name}} enregistré sans exposer sa valeur.",
     },
+    management: {
+      title: "Gérer l’agent", description: "Déplacez cet agent vers une autre gateway ou supprimez-le de Hermes.", protected: "protégé", managed: "géré",
+      agent: "Agent", currentGateway: "Gateway actuelle", transferDisclosure: "Le déplacement conserve l’identité, la mémoire, les sessions, les skills et les automatisations cron. Les identifiants ne sont pas copiés ; les chemins et outils locaux peuvent nécessiter des ajustements sur la gateway de destination.",
+      defaultProtected: "Le profil default est essentiel à l’administration de Hermes et ne peut pas être déplacé ni supprimé depuis Agent Control.",
+      reconcileBlocked: "Les opérations de cet agent sont bloquées sur cet appareil jusqu’au rechargement de Agent Control et à la vérification de son état.",
+      moveTitle: "Déplacer vers une autre gateway", moveDescription: "Transférez l’agent et conservez son contenu sur une gateway compatible.", noDestination: "Aucune autre gateway compatible ne dispose d’un import et d’un rollback/suppression de profils vérifiés.", move: "Déplacer l’agent",
+      deleteTitle: "Supprimer l’agent", deleteDescription: "Supprimez définitivement le profil et les données associées signalées par Hermes.", delete: "Supprimer l’agent",
+      warningsTitle: "L’opération s’est terminée avec des avertissements", moveEyebrow: "Transfert de profil", moveDialogTitle: "Déplacer {{name}}", moveDialogDescription: "Choisissez la gateway de destination et confirmez avec le nom technique exact.", destinationGateway: "Gateway de destination",
+      typeToConfirm: "Saisissez {{name}} pour confirmer", cancel: "Annuler", cancelMove: "Annuler le transfert", moving: "Déplacement…", confirmMove: "Confirmer le transfert",
+      deleteEyebrow: "Action irréversible", deleteDialogTitle: "Supprimer {{name}}", deleteDialogDescription: "Hermes supprimera cet agent. Cette action est irréversible ; confirmez avec le nom technique exact.", cancelDelete: "Annuler la suppression", deleting: "Suppression…", confirmDelete: "Supprimer définitivement",
+      moved: "{{name}} a été déplacé vers la gateway de destination.", deleted: "{{name}} a été supprimé.", localCacheWarning: "Le cache local de cet appareil n’a pas pu être entièrement vidé ; effacez-le dans les réglages.", committedRefreshError: "L’agent a déjà été {{action}}, mais cet écran n’a pas pu être actualisé. Rechargez Agent Control.", outcomeUnknown: "Hermes n’a pas confirmé le résultat. Agent Control a rapproché l’état disponible et bloqué le renvoi. Vérifiez où se trouve l’agent avant toute autre opération.", outcomeUnknownRefresh: "Hermes n’a pas confirmé le résultat et Agent Control n’a pas pu le rapprocher. Ne répétez pas l’opération : rechargez Agent Control et vérifiez d’abord l’agent.", movedAction: "déplacé", deletedAction: "supprimé",
+    },
     route: { aria: "Cible de configuration", gateway: "Gateway", profile: "Profil Hermes", contract: "Contrat", unverified: "non vérifié", exactMethods: "{{count}} méthodes exactes" },
     offline: "L’administration est bloquée hors ligne. Les données visibles peuvent être obsolètes.",
     errors: { read: "Impossible de lire la configuration Hermes.", rejected: "Hermes a rejeté l’opération.", heading: "L’opération n’a pas pu être terminée" },
@@ -120,7 +156,7 @@ const fr = {
 
 const de = {
   adminConfig: {
-    tabs: { general: "Allgemein", identity: "Identität", tools: "Werkzeuge", integrations: "Integrationen", secrets: "Geheimnisse" },
+    tabs: { general: "Allgemein", identity: "Identität", tools: "Werkzeuge", integrations: "Integrationen", secrets: "Geheimnisse", management: "Agent verwalten" },
     common: {
       editable: "bearbeitbar", readOnly: "schreibgeschützt", configured: "konfiguriert", incomplete: "unvollständig", active: "aktiv", inactive: "inaktiv", protected: "geschützt",
       updated: "{{name}} aktualisiert.", deleted: "{{name}} gelöscht.", testComplete: "Test von {{name}} abgeschlossen.",
@@ -150,6 +186,18 @@ const de = {
       title: "Nur beschreibbare Geheimnisse", description: "Die Oberfläche weiß nur, ob ein Wert konfiguriert ist. Sein Inhalt wird niemals empfangen oder angezeigt.", managedValue: "Von Hermes verwalteter Wert",
       newValue: "Neuer Wert für {{name}}", save: "Wert speichern", delete: "Löschen", deleteConfirm: "{{name}} löschen? Hermes hat danach keinen Zugriff mehr auf diesen Wert.", empty: "Hermes hat keine konfigurierbaren Geheimnisse gemeldet.", saved: "{{name}} gespeichert, ohne den Wert offenzulegen.",
     },
+    management: {
+      title: "Agent verwalten", description: "Verschieben Sie diesen Agenten auf ein anderes Gateway oder löschen Sie ihn aus Hermes.", protected: "geschützt", managed: "verwaltet",
+      agent: "Agent", currentGateway: "Aktuelles Gateway", transferDisclosure: "Beim Verschieben bleiben Identität, Speicher, Sitzungen, Skills und Cron-Automatisierungen erhalten. Zugangsdaten werden nicht kopiert; lokale Pfade und Werkzeuge müssen am Ziel-Gateway möglicherweise angepasst werden.",
+      defaultProtected: "Das Profil default ist für die Verwaltung von Hermes unverzichtbar und kann in Agent Control weder verschoben noch gelöscht werden.",
+      reconcileBlocked: "Vorgänge für diesen Agenten sind auf diesem Gerät gesperrt, bis Agent Control neu geladen und sein Status geprüft wurde.",
+      moveTitle: "Auf ein anderes Gateway verschieben", moveDescription: "Übertragen Sie den Agenten samt Inhalt auf ein kompatibles Gateway.", noDestination: "Kein anderes kompatibles Gateway verfügt über verifizierten Profilimport und verifiziertes Rollback/Löschen.", move: "Agent verschieben",
+      deleteTitle: "Agent löschen", deleteDescription: "Löscht das Profil und die von Hermes gemeldeten zugehörigen Daten dauerhaft.", delete: "Agent löschen",
+      warningsTitle: "Der Vorgang wurde mit Warnungen abgeschlossen", moveEyebrow: "Profilübertragung", moveDialogTitle: "{{name}} verschieben", moveDialogDescription: "Wählen Sie das Ziel-Gateway und bestätigen Sie mit dem exakten technischen Namen.", destinationGateway: "Ziel-Gateway",
+      typeToConfirm: "Geben Sie zur Bestätigung {{name}} ein", cancel: "Abbrechen", cancelMove: "Übertragung abbrechen", moving: "Wird verschoben…", confirmMove: "Übertragung bestätigen",
+      deleteEyebrow: "Unwiderrufliche Aktion", deleteDialogTitle: "{{name}} löschen", deleteDialogDescription: "Hermes löscht diesen Agenten. Dies kann nicht rückgängig gemacht werden; bestätigen Sie mit dem exakten technischen Namen.", cancelDelete: "Löschen abbrechen", deleting: "Wird gelöscht…", confirmDelete: "Endgültig löschen",
+      moved: "{{name}} wurde auf das Ziel-Gateway verschoben.", deleted: "{{name}} wurde gelöscht.", localCacheWarning: "Der lokale Cache dieses Geräts konnte nicht vollständig geleert werden; löschen Sie ihn in den Einstellungen.", committedRefreshError: "Der Agent wurde bereits {{action}}, aber diese Ansicht konnte nicht aktualisiert werden. Laden Sie Agent Control neu.", outcomeUnknown: "Hermes hat das Ergebnis nicht bestätigt. Agent Control hat den verfügbaren Stand abgeglichen und ein erneutes Senden blockiert. Prüfen Sie den Standort des Agenten vor einem weiteren Vorgang.", outcomeUnknownRefresh: "Hermes hat das Ergebnis nicht bestätigt und Agent Control konnte es nicht abgleichen. Wiederholen Sie den Vorgang nicht: Laden Sie Agent Control neu und prüfen Sie zuerst den Agenten.", movedAction: "verschoben", deletedAction: "gelöscht",
+    },
     route: { aria: "Konfigurationsziel", gateway: "Gateway", profile: "Hermes-Profil", contract: "Vertrag", unverified: "nicht verifiziert", exactMethods: "{{count}} exakte Methoden" },
     offline: "Die Verwaltung ist offline gesperrt. Sichtbare Daten können veraltet sein.",
     errors: { read: "Die Hermes-Konfiguration konnte nicht gelesen werden.", rejected: "Hermes hat den Vorgang abgelehnt.", heading: "Der Vorgang konnte nicht abgeschlossen werden" },
@@ -160,7 +208,7 @@ const de = {
 
 const pt = {
   adminConfig: {
-    tabs: { general: "Geral", identity: "Identidade", tools: "Ferramentas", integrations: "Integrações", secrets: "Segredos" },
+    tabs: { general: "Geral", identity: "Identidade", tools: "Ferramentas", integrations: "Integrações", secrets: "Segredos", management: "Gerenciar agente" },
     common: {
       editable: "editável", readOnly: "somente leitura", configured: "configurado", incomplete: "incompleto", active: "ativo", inactive: "inativo", protected: "protegido",
       updated: "{{name}} atualizado.", deleted: "{{name}} excluído.", testComplete: "Teste de {{name}} concluído.",
@@ -189,6 +237,18 @@ const pt = {
     secrets: {
       title: "Segredos somente para gravação", description: "A interface sabe apenas se um valor está configurado. Ela nunca recebe nem mostra seu conteúdo.", managedValue: "Valor gerenciado pelo Hermes",
       newValue: "Novo valor para {{name}}", save: "Salvar valor", delete: "Excluir", deleteConfirm: "Excluir {{name}}? O Hermes deixará de ter acesso a este valor.", empty: "O Hermes não informou segredos configuráveis.", saved: "{{name}} salvo sem expor seu valor.",
+    },
+    management: {
+      title: "Gerenciar agente", description: "Mova este agente para outro gateway ou exclua-o do Hermes.", protected: "protegido", managed: "gerenciado",
+      agent: "Agente", currentGateway: "Gateway atual", transferDisclosure: "Ao mover, são preservados identidade, memória, sessões, skills e automações cron. As credenciais não são copiadas; caminhos e ferramentas locais podem exigir ajustes no gateway de destino.",
+      defaultProtected: "O perfil default é essencial para administrar o Hermes e não pode ser movido nem excluído pelo Agent Control.",
+      reconcileBlocked: "As operações deste agente estão bloqueadas neste dispositivo até recarregar o Agent Control e verificar seu estado.",
+      moveTitle: "Mover para outro gateway", moveDescription: "Transfira o agente e preserve seu conteúdo em um gateway compatível.", noDestination: "Nenhum outro gateway compatível tem importação e rollback/exclusão de perfis verificados.", move: "Mover agente",
+      deleteTitle: "Excluir agente", deleteDescription: "Exclui permanentemente o perfil e os dados associados informados pelo Hermes.", delete: "Excluir agente",
+      warningsTitle: "A operação terminou com avisos", moveEyebrow: "Transferência de perfil", moveDialogTitle: "Mover {{name}}", moveDialogDescription: "Escolha o gateway de destino e confirme com o nome técnico exato.", destinationGateway: "Gateway de destino",
+      typeToConfirm: "Digite {{name}} para confirmar", cancel: "Cancelar", cancelMove: "Cancelar transferência", moving: "Movendo…", confirmMove: "Confirmar transferência",
+      deleteEyebrow: "Ação irreversível", deleteDialogTitle: "Excluir {{name}}", deleteDialogDescription: "O Hermes excluirá este agente. Esta ação não pode ser desfeita; confirme com o nome técnico exato.", cancelDelete: "Cancelar exclusão", deleting: "Excluindo…", confirmDelete: "Excluir definitivamente",
+      moved: "{{name}} foi movido para o gateway de destino.", deleted: "{{name}} foi excluído.", localCacheWarning: "Não foi possível limpar totalmente o cache local deste dispositivo; limpe-o nas Configurações.", committedRefreshError: "O agente já foi {{action}}, mas não foi possível atualizar esta tela. Recarregue o Agent Control.", outcomeUnknown: "O Hermes não confirmou o resultado. O Agent Control reconciliou o estado disponível e bloqueou o reenvio. Verifique onde está o agente antes de iniciar outra operação.", outcomeUnknownRefresh: "O Hermes não confirmou o resultado e o Agent Control não conseguiu reconciliá-lo. Não repita a operação: recarregue o Agent Control e verifique o agente primeiro.", movedAction: "movido", deletedAction: "excluído",
     },
     route: { aria: "Destino da configuração", gateway: "Gateway", profile: "Perfil Hermes", contract: "Contrato", unverified: "não verificado", exactMethods: "{{count}} métodos exatos" },
     offline: "A administração está bloqueada sem conexão. Os dados visíveis podem estar desatualizados.",

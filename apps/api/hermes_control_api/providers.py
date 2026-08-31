@@ -55,17 +55,20 @@ class FailoverProvider:
     def session_inventory_complete(self) -> bool:
         return bool(getattr(self.active, "session_inventory_complete", False))
 
-    async def _call(self, name: str, *args, prompt: bool = False, **kwargs):
-        if self.active is self.fallback and name == "capabilities":
+    async def _call(self, operation: str, *args, prompt: bool = False, **kwargs):
+        if self.active is self.fallback and operation == "capabilities":
             try:
                 result = await self.real.capabilities()
                 self.active = self.real
                 return result
             except (ConnectionError, OSError, TimeoutError):
                 pass
-        if self.active is self.fallback and name not in {"capabilities", "list_profiles"}:
+        if self.active is self.fallback and operation not in {
+            "capabilities",
+            "list_profiles",
+        }:
             raise ConnectionError("Mock fallback is read-only; select explicit mock mode")
-        method = getattr(self.active, name)
+        method = getattr(self.active, operation)
         try:
             return await method(*args, **kwargs)
         except RuntimeError as exc:
@@ -77,13 +80,13 @@ class FailoverProvider:
         except (ConnectionError, OSError, TimeoutError):
             if not self.allow_fallback:
                 raise
-            if name not in {"capabilities", "list_profiles"}:
+            if operation not in {"capabilities", "list_profiles"}:
                 # Never move a real session, prompt or cron operation to a
                 # synthetic identity. Full mock operation is explicit.
                 raise
         if prompt:
             raise ConnectionError("Prompt fallback requires explicit mock mode")
-        return await getattr(self.fallback, name)(*args, **kwargs)
+        return await getattr(self.fallback, operation)(*args, **kwargs)
 
     async def capabilities(self):
         return await self._call("capabilities")
@@ -96,6 +99,21 @@ class FailoverProvider:
             "create_profile",
             name=name,
             display_name=display_name,
+        )
+
+    async def delete_profile(self, name):
+        return await self._call("delete_profile", name)
+
+    async def transfer_profile_to(self, destination, *, name):
+        target = (
+            destination.real
+            if isinstance(destination, FailoverProvider)
+            else destination
+        )
+        return await self._call(
+            "transfer_profile_to",
+            target,
+            name=name,
         )
 
     async def list_sessions(self):

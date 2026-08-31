@@ -16,6 +16,29 @@
   expose their complete verified contract, including cron and administration.
   Operators can still narrow `HERMES_CONTROL_MUTABLE_PROFILES` when deploying
   a shared or less-trusted installation.
+- Native profile deletion and transfer are enabled only for exact revisions
+  whose deletion remains durable while the multiplex cron scheduler is
+  running. Hermes 0.20.5 (`791e2ae…`) is excluded because a stale heartbeat can
+  recreate a deleted profile directory; it is not accepted as either side of
+  a move because destination rollback also requires safe deletion. Native
+  delete is currently audited for Hermes 0.20.6 revisions `9978706e…` and
+  `4209d371…`; transfer is narrower and the only audited move pair is
+  `4209d371… → 4209d371…`. Profile archives are limited to 100 MiB and exclude
+  credentials; local files and tools are not made portable automatically.
+- Hermes 0.20.6 can keep a same-name import hidden when that technical profile
+  name was previously deleted on the destination because the native import
+  does not clear its `.deleted-profiles` tombstone. Control fails verification,
+  keeps the source agent, and does not publish a cutover. A hidden imported
+  directory may still require native operator cleanup before retrying with a
+  different destination or technical name.
+- After a native delete, a just-finished runtime inside multiplexed `hermes
+  serve` can briefly recreate a tombstoned shell containing only an empty
+  `state.db` and its lock. Hermes does not list or serve that shell and the
+  audited live check retained no sessions, messages, routing, configuration,
+  SOUL or cron data. Agent Control deliberately does not bypass Hermes to
+  remove provider files; an operator who requires physical forensic cleanup
+  must stop the owning serve process, verify the exact shell is empty, and use
+  the Hermes host's maintenance procedure.
 - Agents created in Control start with empty memory and history and share the
   gateway-managed inference authentication pool. They do not automatically
   receive a Telegram bot/channel; messaging-channel setup remains a separate

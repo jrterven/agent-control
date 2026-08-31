@@ -54,6 +54,15 @@ Before accepting a new revision for Control:
 - run all mutations only under `control-dev`;
 - keep unsupported capabilities disabled until verified.
 
+Profile lifecycle support needs a separate destructive-contract review. In
+particular, do not infer safe deletion from the presence of
+`DELETE /api/profiles/{name}`. Hermes 0.20.5 keeps deleted profile homes in the
+multiplex cron ticker snapshot and can recreate them on heartbeat; Control must
+not advertise delete or accept that revision on either side of a transfer.
+Only add a revision/pair after proving durable deletion beyond a scheduler
+heartbeat, safe import rollback, session/history preservation and cleanup of
+both temporary archives.
+
 No Control startup, deploy or health check may execute `hermes update`.
 
 ## Transcription integration change

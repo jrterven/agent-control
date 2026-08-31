@@ -5,7 +5,7 @@ import base64
 import logging
 import random
 from collections import OrderedDict, defaultdict
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
@@ -26,6 +26,7 @@ from .admin import (
 )
 from .limits import (
     UpstreamPayloadError,
+    UpstreamPayloadTooLarge,
     bounded_empty_request,
     bounded_json_request,
 )
@@ -69,6 +70,41 @@ _MAX_MESSAGES = 5_000
 _MAX_AUTOMATIONS = 1_000
 _MAX_ADMIN_ROWS = 2_000
 _MAX_SEARCH_RESULTS = 100
+_MAX_PROFILE_ARCHIVE_BYTES = 100 * 1024 * 1024
+_MAX_PROFILE_MUTATION_RESPONSE_BYTES = 64 * 1024
+_MAX_REMOTE_PATH_LENGTH = 4_096
+_PROFILE_MUTATION_TIMEOUT = httpx.Timeout(180.0, connect=15.0)
+
+_PROFILE_MANAGEMENT_METHODS_BY_REVISION: dict[str, frozenset[str]] = {
+    # Hermes 0.20.5 has no deletion tombstone and its stale multiplex cron
+    # heartbeat can recreate a removed profile (#47368).  Creation remains
+    # usable, but do not expose any operation whose success or rollback needs
+    # a reliable profile delete on this revision.
+    "791e2ae3257e211d14ca77e654dfe10ee1976a1c": frozenset(
+        {"profiles.create"}
+    ),
+    # This exact upstream 0.20.6 revision contains both the deletion tombstone
+    # and the stale-scheduler home filter.  Its archive primitives are safe to
+    # expose independently, but cross-gateway transfer remains restricted to
+    # the fully audited deployed revision below.
+    "9978706e9303dbf990d90e744b131361449d73b9": frozenset(
+        {
+            "profiles.create",
+            "profiles.delete",
+            "profiles.export",
+            "profiles.import",
+        }
+    ),
+    "4209d371aa1bb8840ce8447555bdd863a1a96c38": frozenset(
+        {
+            "profiles.create",
+            "profiles.delete",
+            "profiles.export",
+            "profiles.import",
+            "profiles.transfer",
+        }
+    ),
+}
 
 _ACTIVE_RUNTIME_STATUSES = frozenset(
     {
@@ -127,6 +163,63 @@ def _bounded_rows(
     if any(not isinstance(item, Mapping) for item in rows):
         raise UpstreamPayloadError(f"Hermes {label} contain an invalid item")
     return list(rows)
+
+
+def _bounded_remote_path(value: Any, *, label: str) -> str:
+    if not isinstance(value, str):
+        raise UpstreamPayloadError(f"Hermes {label} path is invalid")
+    path = value.strip()
+    if (
+        not path
+        or len(path) > _MAX_REMOTE_PATH_LENGTH
+        or "\x00" in path
+        or "\n" in path
+        or "\r" in path
+    ):
+        raise UpstreamPayloadError(f"Hermes {label} path is invalid")
+    is_posix_absolute = path.startswith("/")
+    is_windows_absolute = (
+        len(path) >= 3
+        and path[0].isalpha()
+        and path[1] == ":"
+        and path[2] in {"/", "\\"}
+    )
+    if not is_posix_absolute and not is_windows_absolute:
+        raise UpstreamPayloadError(f"Hermes {label} path must be absolute")
+    return path
+
+
+def _bounded_profile_mutation_response(value: Any, *, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping) or len(value) > 16:
+        raise UpstreamPayloadError(f"Hermes {label} response must be an object")
+    if value.get("ok") is not True:
+        raise UpstreamPayloadError(f"Hermes did not confirm {label}")
+    return value
+
+
+def _profile_transport_error(exc: BaseException) -> bool:
+    return isinstance(
+        exc,
+        (httpx.TransportError, ConnectionError, OSError, TimeoutError),
+    )
+
+
+def _multipart_profile_prefix(boundary: str, remote_path: str) -> bytes:
+    return (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="path"\r\n\r\n'
+        f"{remote_path}\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="overwrite"\r\n\r\n'
+        "false\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="profile.tar.gz"\r\n'
+        "Content-Type: application/gzip\r\n\r\n"
+    ).encode("utf-8")
+
+
+def _multipart_profile_suffix(boundary: str) -> bytes:
+    return f"\r\n--{boundary}--\r\n".encode("ascii")
 
 
 _AUDITED_REVISIONS: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
@@ -310,6 +403,13 @@ class HermesProvider(Protocol):
         *,
         name: str,
         display_name: str,
+    ) -> HermesProfile: ...
+    async def delete_profile(self, name: str) -> None: ...
+    async def transfer_profile_to(
+        self,
+        destination: HermesProvider,
+        *,
+        name: str,
     ) -> HermesProfile: ...
     async def list_sessions(self) -> list[HermesSession]: ...
     async def search_sessions(
@@ -994,7 +1094,11 @@ class HermesGatewayProvider:
                 if "session.list" in methods:
                     methods.update(audited[1])
                 if "profiles.list" in methods:
-                    methods.add("profiles.create")
+                    methods.update(
+                        _PROFILE_MANAGEMENT_METHODS_BY_REVISION.get(
+                            str(trusted_source_sha or "").lower(), frozenset()
+                        )
+                    )
                 # The official Hermes cron contract uses the profile's
                 # configured timezone and falls back to the host's local zone
                 # when that value is empty. Its dashboard and Telegram clients
@@ -1172,6 +1276,242 @@ class HermesGatewayProvider:
             display_name=display_name,
             status="unknown" if setup_ready else "degraded",
         )
+
+    async def _profile_mutation_json(
+        self,
+        method: str,
+        path: str,
+        **kwargs: Any,
+    ) -> Any:
+        """Send one native profile mutation without reconnecting or retrying."""
+
+        try:
+            return await bounded_json_request(
+                self.http,
+                method,
+                path,
+                max_bytes=_MAX_PROFILE_MUTATION_RESPONSE_BYTES,
+                timeout=_PROFILE_MUTATION_TIMEOUT,
+                **kwargs,
+            )
+        except BaseException as exc:
+            if _profile_transport_error(exc):
+                raise RuntimeError("MUTATION_DELIVERY_UNKNOWN") from exc
+            raise
+
+    async def delete_profile(self, name: str) -> None:
+        profile_name = _bounded_text(
+            name,
+            label="profile name",
+            max_length=120,
+        )
+        raw = await self._profile_mutation_json(
+            "DELETE",
+            f"/api/profiles/{quote(profile_name, safe='')}",
+        )
+        response = _bounded_profile_mutation_response(raw, label="profile deletion")
+        if response.get("path") is not None:
+            _bounded_remote_path(response["path"], label="deleted profile")
+
+    async def _cleanup_profile_transfer_file(self, remote_path: str) -> bool:
+        try:
+            raw = await bounded_json_request(
+                self.http,
+                "DELETE",
+                "/api/files",
+                max_bytes=_MAX_PROFILE_MUTATION_RESPONSE_BYTES,
+                timeout=_PROFILE_MUTATION_TIMEOUT,
+                json={"path": remote_path, "recursive": False},
+            )
+            _bounded_profile_mutation_response(raw, label="transfer cleanup")
+            return True
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return True
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+        _LOGGER.warning("Hermes profile-transfer cleanup failed")
+        return False
+
+    async def _profile_transfer_destination_path(self, operation_id: str) -> str:
+        raw = await bounded_json_request(
+            self.http,
+            "GET",
+            "/api/files",
+            max_bytes=_MAX_PROFILE_MUTATION_RESPONSE_BYTES,
+            timeout=_PROFILE_MUTATION_TIMEOUT,
+        )
+        if not isinstance(raw, Mapping) or len(raw) > 32:
+            raise UpstreamPayloadError(
+                "Hermes managed-files response must be an object"
+            )
+        root_value = raw.get("locked_root") or raw.get("root") or raw.get("path")
+        root = _bounded_remote_path(root_value, label="managed files root")
+        separator = (
+            "\\"
+            if len(root) >= 3 and root[1] == ":" and root[2] in {"/", "\\"}
+            else "/"
+        )
+        clean_root = root.rstrip("/\\")
+        destination_path = (
+            f"{clean_root}{separator}.agent-control-transfers"
+            f"{separator}{operation_id}.tar.gz"
+        )
+        return _bounded_remote_path(
+            destination_path,
+            label="profile transfer destination",
+        )
+
+    async def _upload_profile_archive(
+        self,
+        destination: HermesGatewayProvider,
+        *,
+        source_path: str,
+        destination_path: str,
+    ) -> None:
+        try:
+            async with self.http.stream(
+                "GET",
+                "/api/files/download",
+                params={"path": source_path},
+                timeout=_PROFILE_MUTATION_TIMEOUT,
+            ) as source_response:
+                source_response.raise_for_status()
+                content_length = source_response.headers.get("content-length")
+                if content_length:
+                    try:
+                        declared_size = int(content_length)
+                    except ValueError as exc:
+                        raise UpstreamPayloadError(
+                            "Hermes returned an invalid profile archive Content-Length"
+                        ) from exc
+                    if declared_size <= 0:
+                        raise UpstreamPayloadError("Hermes profile archive is empty")
+                    if declared_size > _MAX_PROFILE_ARCHIVE_BYTES:
+                        raise UpstreamPayloadTooLarge("Hermes profile archive is too large")
+
+                boundary = f"agent-control-{uuid4().hex}"
+                transferred = 0
+
+                async def multipart_body() -> AsyncIterator[bytes]:
+                    nonlocal transferred
+                    yield _multipart_profile_prefix(boundary, destination_path)
+                    async for chunk in source_response.aiter_bytes():
+                        if not chunk:
+                            continue
+                        transferred += len(chunk)
+                        if transferred > _MAX_PROFILE_ARCHIVE_BYTES:
+                            raise UpstreamPayloadTooLarge(
+                                "Hermes profile archive is too large"
+                            )
+                        yield chunk
+                    yield _multipart_profile_suffix(boundary)
+
+                upload_raw = await destination._profile_mutation_json(
+                    "POST",
+                    "/api/files/upload-stream",
+                    headers={
+                        "Content-Type": f"multipart/form-data; boundary={boundary}"
+                    },
+                    content=multipart_body(),
+                )
+                if transferred <= 0:
+                    raise UpstreamPayloadError("Hermes profile archive is empty")
+                upload = _bounded_profile_mutation_response(
+                    upload_raw,
+                    label="profile archive upload",
+                )
+                uploaded_path = _bounded_remote_path(
+                    upload.get("path"),
+                    label="uploaded profile archive",
+                )
+                if uploaded_path != destination_path:
+                    raise UpstreamPayloadError(
+                        "Hermes returned a different profile archive path"
+                    )
+        except BaseException as exc:
+            if _profile_transport_error(exc):
+                raise RuntimeError("MUTATION_DELIVERY_UNKNOWN") from exc
+            raise
+
+    async def transfer_profile_to(
+        self,
+        destination: HermesProvider,
+        *,
+        name: str,
+    ) -> HermesProfile:
+        if not isinstance(destination, HermesGatewayProvider):
+            raise TypeError("Native profile transfer requires a Hermes gateway destination")
+        if destination is self or (
+            destination.connection.gateway_id == self.connection.gateway_id
+        ):
+            raise ValueError("Profile destination must be a different gateway")
+
+        profile_name = _bounded_text(
+            name,
+            label="profile name",
+            max_length=120,
+        )
+        if profile_name == "default":
+            raise ValueError("The default Hermes profile cannot be transferred")
+
+        operation_id = uuid4().hex
+        destination_path = await destination._profile_transfer_destination_path(
+            operation_id
+        )
+        source_path: str | None = None
+        try:
+            export_raw = await self._profile_mutation_json(
+                "POST",
+                f"/api/profiles/{quote(profile_name, safe='')}/export",
+                json={"output": "", "extra_files": {}},
+            )
+            export = _bounded_profile_mutation_response(
+                export_raw,
+                label="profile export",
+            )
+            source_path = _bounded_remote_path(
+                export.get("archive"),
+                label="exported profile archive",
+            )
+
+            await self._upload_profile_archive(
+                destination,
+                source_path=source_path,
+                destination_path=destination_path,
+            )
+
+            import_raw = await destination._profile_mutation_json(
+                "POST",
+                "/api/profiles/import",
+                json={"archive": destination_path, "name": profile_name},
+            )
+            imported = _bounded_profile_mutation_response(
+                import_raw,
+                label="profile import",
+            )
+            imported_name = _bounded_text(
+                imported.get("name"),
+                label="imported profile name",
+                max_length=120,
+            )
+            if imported_name != profile_name:
+                raise UpstreamPayloadError(
+                    "Hermes returned a different imported profile identity"
+                )
+            if imported.get("path") is not None:
+                _bounded_remote_path(imported["path"], label="imported profile")
+
+            return HermesProfile(
+                name=imported_name,
+                display_name=imported_name,
+                status="unknown",
+            )
+        finally:
+            if source_path is not None:
+                await self._cleanup_profile_transfer_file(source_path)
+            await destination._cleanup_profile_transfer_file(destination_path)
 
     async def list_sessions(self) -> list[HermesSession]:
         self._session_inventory_complete = False
@@ -2680,6 +3020,10 @@ class InMemoryHermesProvider:
                 {
                     "profiles.list",
                     "profiles.create",
+                    "profiles.delete",
+                    "profiles.export",
+                    "profiles.import",
+                    "profiles.transfer",
                     "session.list",
                     "session.create",
                     "session.resume",
@@ -2734,7 +3078,8 @@ class InMemoryHermesProvider:
         own = HermesProfile(
             self.connection.profile_name, label, "online", "mock-model"
         )
-        return [own, *self._created_profiles.values()]
+        own_rows = [] if getattr(self, "_own_profile_deleted", False) else [own]
+        return [*own_rows, *self._created_profiles.values()]
 
     async def create_profile(
         self,
@@ -2747,6 +3092,50 @@ class InMemoryHermesProvider:
         profile = HermesProfile(name, display_name, "online", "mock-model")
         self._created_profiles[name] = profile
         return profile
+
+    async def delete_profile(self, name: str) -> None:
+        if name == "default":
+            raise ValueError("The default Hermes profile cannot be deleted")
+        if name in self._created_profiles:
+            del self._created_profiles[name]
+            return
+        if name == self.connection.profile_name and not getattr(
+            self, "_own_profile_deleted", False
+        ):
+            self._own_profile_deleted = True
+            return
+        raise FileNotFoundError(f"Profile '{name}' does not exist")
+
+    async def transfer_profile_to(
+        self,
+        destination: HermesProvider,
+        *,
+        name: str,
+    ) -> HermesProfile:
+        if not isinstance(destination, InMemoryHermesProvider):
+            raise TypeError("Mock profile transfer requires a mock destination")
+        if destination.connection.gateway_id == self.connection.gateway_id:
+            raise ValueError("Profile destination must be a different gateway")
+        if name == "default":
+            raise ValueError("The default Hermes profile cannot be transferred")
+
+        source_profile = next(
+            (profile for profile in await self.list_profiles() if profile.name == name),
+            None,
+        )
+        if source_profile is None:
+            raise FileNotFoundError(f"Profile '{name}' does not exist")
+        if any(profile.name == name for profile in await destination.list_profiles()):
+            raise FileExistsError(f"Profile '{name}' already exists")
+
+        imported = HermesProfile(
+            name=source_profile.name,
+            display_name=source_profile.display_name,
+            status="online",
+            model=source_profile.model,
+        )
+        destination._created_profiles[name] = imported
+        return imported
 
     async def list_sessions(self) -> list[HermesSession]:
         return sorted(self._sessions.values(), key=lambda row: row.updated_at, reverse=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,8 +29,9 @@ from hermes_client import (
     validate_endpoint,
 )
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, InvalidRequestError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import ObjectDeletedError
 
 from .config import Settings
 from .eventing import EventHub
@@ -52,7 +54,19 @@ from .models import (
 from .notifications import completion_for_session
 from .providers import authoritative_provider_read
 from .realtime import persist_normalized_event
-from .schemas import AutomationCreate, GatewayCreate, GatewayUpdate, ProfileCreate, SessionCreate, WorkspaceCreate
+from .schemas import (
+    AutomationCreate,
+    GatewayCreate,
+    GatewayUpdate,
+    ProfileCreate,
+    ProfileDelete,
+    ProfileDeleteView,
+    ProfileLifecycleCounts,
+    ProfileMove,
+    ProfileMoveView,
+    SessionCreate,
+    WorkspaceCreate,
+)
 from .security import SecretVault, random_token, token_hash
 
 
@@ -66,6 +80,10 @@ class ConflictError(RuntimeError):
 
 class UpstreamUnavailableError(ConnectionError):
     pass
+
+
+class ProfileDeleteOutcomeUnknown(UpstreamUnavailableError):
+    """A profile DELETE was sent but its authoritative reconcile failed."""
 
 
 _AUDIO_MEDIA_TYPES: dict[str, str] = {
@@ -103,6 +121,29 @@ _ACTIVE_RUNTIME_STATUSES = {
     "working",
     "waiting",
 }
+_ACTIVE_PROMPT_OPERATION_STATUSES = {
+    "pending",
+    "accepted",
+    "streaming",
+    "delivery_unknown",
+}
+
+# Profile archives were inspected against these exact Hermes revisions.  The
+# transfer contract is deliberately an allowlist, not a semver range: archive
+# layout, SQLite state and import validation are implementation details.
+_AUDITED_PROFILE_TRANSFER_REVISIONS: dict[str, str] = {
+    "791e2ae3257e211d14ca77e654dfe10ee1976a1c": "0.20.5",
+    "9978706e9303dbf990d90e744b131361449d73b9": "0.20.6",
+    "4209d371aa1bb8840ce8447555bdd863a1a96c38": "0.20.6",
+}
+_AUDITED_PROFILE_TRANSFER_PAIRS = frozenset(
+    {
+        (
+            "4209d371aa1bb8840ce8447555bdd863a1a96c38",
+            "4209d371aa1bb8840ce8447555bdd863a1a96c38",
+        )
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -172,6 +213,10 @@ UPSTREAM_MUTATION_CAPABILITIES: frozenset[str] = frozenset(
         "secrets.set",
         "secrets.delete",
         "profiles.create",
+        "profiles.delete",
+        "profiles.export",
+        "profiles.import",
+        "profiles.transfer",
     }
 )
 
@@ -292,6 +337,44 @@ def fresh_profile_capabilities(
     return dict(profile.capabilities or {})
 
 
+class ProfileMutationBarrier:
+    """Writer-preferring async barrier for one gateway/profile route."""
+
+    def __init__(self) -> None:
+        self._condition = asyncio.Condition()
+        self._active_operations = 0
+        self._lifecycle_waiters = 0
+        self._lifecycle_active = False
+
+    async def acquire_operation(self) -> None:
+        async with self._condition:
+            while self._lifecycle_active or self._lifecycle_waiters:
+                await self._condition.wait()
+            self._active_operations += 1
+
+    async def release_operation(self) -> None:
+        async with self._condition:
+            self._active_operations -= 1
+            if self._active_operations == 0:
+                self._condition.notify_all()
+
+    async def acquire_lifecycle(self) -> None:
+        async with self._condition:
+            self._lifecycle_waiters += 1
+            try:
+                while self._lifecycle_active or self._active_operations:
+                    await self._condition.wait()
+                self._lifecycle_active = True
+            finally:
+                self._lifecycle_waiters -= 1
+                self._condition.notify_all()
+
+    async def release_lifecycle(self) -> None:
+        async with self._condition:
+            self._lifecycle_active = False
+            self._condition.notify_all()
+
+
 @dataclass(slots=True)
 class AppServices:
     settings: Settings
@@ -302,6 +385,114 @@ class AppServices:
     session_factory: Any | None = None
     push_notifications: Any | None = None
     profile_creation_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
+    profile_route_locks: dict[tuple[str, str], ProfileMutationBarrier] = field(
+        default_factory=dict
+    )
+
+
+@asynccontextmanager
+async def profile_lifecycle_guard(
+    services: AppServices,
+    gateway_ids: list[str] | tuple[str, ...] | set[str],
+    *,
+    profile_name: str | None = None,
+):
+    """Serialize profile discovery and lifecycle mutations in gateway order.
+
+    ``profile_creation_locks`` predates delete/move.  Reusing that same map is
+    intentional so a watcher sync cannot resurrect a profile while its native
+    Hermes mutation is in flight.  Sorting prevents source/destination moves
+    from deadlocking when two administrators submit opposite moves.
+    """
+
+    namespace_locks = [
+        services.profile_creation_locks.setdefault(gateway_id, asyncio.Lock())
+        for gateway_id in sorted(set(gateway_ids))
+    ]
+    route_barriers = (
+        [
+            services.profile_route_locks.setdefault(
+                (gateway_id, profile_name), ProfileMutationBarrier()
+            )
+            for gateway_id in sorted(set(gateway_ids))
+        ]
+        if profile_name is not None
+        else []
+    )
+    acquired_namespaces: list[asyncio.Lock] = []
+    acquired_routes: list[ProfileMutationBarrier] = []
+    try:
+        # Lifecycle operations always take namespace locks before route locks;
+        # normal chat/admin/cron operations take only one route lock. No code
+        # acquires them in the opposite direction.
+        for lock in namespace_locks:
+            await lock.acquire()
+            acquired_namespaces.append(lock)
+        for barrier in route_barriers:
+            await barrier.acquire_lifecycle()
+            acquired_routes.append(barrier)
+        yield
+    finally:
+        for barrier in reversed(acquired_routes):
+            await barrier.release_lifecycle()
+        for lock in reversed(acquired_namespaces):
+            lock.release()
+
+
+@asynccontextmanager
+async def profile_route_guard(
+    services: AppServices, gateway_id: str, profile_name: str
+):
+    """Serialize one profile mutation without blocking sibling agents."""
+
+    barrier = services.profile_route_locks.setdefault(
+        (gateway_id, profile_name), ProfileMutationBarrier()
+    )
+    acquired = False
+    try:
+        await barrier.acquire_operation()
+        acquired = True
+        yield
+    finally:
+        if acquired:
+            await barrier.release_operation()
+
+
+@asynccontextmanager
+async def profile_row_route_guard(
+    services: AppServices, db: Session, row: ProfileRef | SessionLink | Automation
+):
+    """Lock the row's current route, retrying after a concurrent cutover."""
+
+    while True:
+        gateway_id = row.gateway_id
+        profile_name = row.profile_name
+        async with profile_route_guard(services, gateway_id, profile_name):
+            try:
+                db.refresh(row)
+            except (InvalidRequestError, ObjectDeletedError) as exc:
+                raise NotFoundError("Profile route no longer exists") from exc
+            if (
+                row.gateway_id != gateway_id
+                or row.profile_name != profile_name
+            ):
+                continue
+            yield
+            return
+
+
+def require_profile_route_ref(
+    db: Session, gateway_id: str, profile_name: str
+) -> ProfileRef:
+    profile = db.scalar(
+        select(ProfileRef).where(
+            ProfileRef.gateway_id == gateway_id,
+            ProfileRef.profile_name == profile_name,
+        )
+    )
+    if profile is None:
+        raise NotFoundError("Profile route no longer exists; refresh before retrying")
+    return profile
 
 
 def record_profile_health(
@@ -657,6 +848,13 @@ class GatewayService:
     async def update(
         self, db: Session, actor: User, gateway: Gateway, payload: GatewayUpdate
     ) -> Gateway:
+        async with profile_lifecycle_guard(self.services, {gateway.id}):
+            db.refresh(gateway)
+            return await self._update_unlocked(db, actor, gateway, payload)
+
+    async def _update_unlocked(
+        self, db: Session, actor: User, gateway: Gateway, payload: GatewayUpdate
+    ) -> Gateway:
         if gateway.env_managed:
             raise ConflictError("Environment-managed gateway is read-only")
         values = payload.model_dump(exclude_unset=True)
@@ -784,6 +982,36 @@ class GatewayService:
         )
 
     async def probe(self, db: Session, actor: User, gateway_id: str, profile_name: str):
+        # Probing an as-yet undiscovered management profile is supported, but
+        # when this call started with a known route it must not silently turn
+        # into such an unknown probe after waiting behind a move/delete.
+        known_profile_id = db.scalar(
+            select(ProfileRef.id).where(
+                ProfileRef.gateway_id == gateway_id,
+                ProfileRef.profile_name == profile_name,
+            )
+        )
+        async with profile_route_guard(
+            self.services, gateway_id, profile_name
+        ):
+            if known_profile_id is not None:
+                db.expire_all()
+                current_profile = db.get(ProfileRef, known_profile_id)
+                if (
+                    current_profile is None
+                    or current_profile.gateway_id != gateway_id
+                    or current_profile.profile_name != profile_name
+                ):
+                    raise NotFoundError(
+                        "Profile route no longer exists; refresh before retrying"
+                    )
+            return await self._probe_unlocked(
+                db, actor, gateway_id, profile_name
+            )
+
+    async def _probe_unlocked(
+        self, db: Session, actor: User, gateway_id: str, profile_name: str
+    ):
         gateway = db.get(Gateway, gateway_id)
         if gateway is None:
             raise NotFoundError("Gateway not found")
@@ -881,6 +1109,22 @@ class ProfileService:
         self.gateway_service = GatewayService(services)
 
     async def sync(
+        self,
+        db: Session,
+        gateway_id: str,
+        profile_name: str = "default",
+        *,
+        pending_managed_profiles: frozenset[str] = frozenset(),
+    ) -> list[ProfileRef]:
+        async with profile_lifecycle_guard(self.services, {gateway_id}):
+            return await self._sync_unlocked(
+                db,
+                gateway_id,
+                profile_name,
+                pending_managed_profiles=pending_managed_profiles,
+            )
+
+    async def _sync_unlocked(
         self,
         db: Session,
         gateway_id: str,
@@ -1002,16 +1246,413 @@ class ProfileService:
             db.scalars(select(ProfileRef).where(ProfileRef.gateway_id == gateway_id)).all()
         )
 
+    async def _fresh_provider(
+        self,
+        db: Session,
+        *,
+        gateway_id: str,
+        profile_name: str,
+        methods: frozenset[str],
+        managed_by_control: bool | None = None,
+    ) -> tuple[Any, CapabilitySet]:
+        """Return a provider only after a new exact capability attestation."""
+
+        row = db.scalar(
+            select(ProfileRef).where(
+                ProfileRef.gateway_id == gateway_id,
+                ProfileRef.profile_name == profile_name,
+            )
+        )
+        managed = (
+            bool(row and row.managed_by_control)
+            if managed_by_control is None
+            else managed_by_control
+        )
+        for method in methods:
+            require_mutable_profile(
+                profile_name,
+                method,
+                self.services.settings.mutable_profiles,
+                self.services.settings.interactive_profiles,
+                managed_by_control=managed,
+            )
+        trusted_source_sha = trusted_gateway_source_sha(
+            db, self.services, gateway_id
+        )
+        if any(method in UPSTREAM_MUTATION_CAPABILITIES for method in methods):
+            if trusted_source_sha is None:
+                raise ConflictError(
+                    "Hermes mutations require an operator-trusted full source SHA for this gateway"
+                )
+        connection = await self.gateway_service.connection(
+            db, gateway_id, profile_name
+        )
+        provider = await self.services.provider_pool.get(connection)
+        raw_capabilities = await authoritative_provider_read(provider, "capabilities")
+        if (
+            trusted_source_sha is not None
+            and raw_capabilities.source_sha is not None
+            and self.services.settings.provider_mode != "mock"
+            and raw_capabilities.source_sha.casefold()
+            != trusted_source_sha.casefold()
+        ):
+            raise ConflictError(
+                "Hermes reported a source revision different from the operator trust anchor"
+            )
+        capabilities = capabilities_for_profile(
+            raw_capabilities,
+            profile_name,
+            self.services.settings.mutable_profiles,
+            interactive_profiles=self.services.settings.interactive_profiles,
+            trusted_source_sha_configured=trusted_source_sha is not None,
+            managed_by_control=managed,
+        )
+        missing = sorted(methods - capabilities.methods)
+        if missing:
+            raise ConflictError(
+                f"Hermes capabilities are not verified: {', '.join(missing)}"
+            )
+        if row is not None:
+            observed_at = utc_now()
+            record_profile_health(
+                db,
+                self.services,
+                row,
+                status="online",
+                observed_at=observed_at,
+            )
+            row.capabilities = capabilities.to_dict()
+            row.capabilities_checked_at = observed_at
+        return provider, capabilities
+
+    async def _management_provider(
+        self,
+        db: Session,
+        *,
+        gateway_id: str,
+        methods: frozenset[str],
+    ) -> tuple[ProfileRef, Any, CapabilitySet]:
+        profiles = list(
+            db.scalars(
+                select(ProfileRef).where(ProfileRef.gateway_id == gateway_id)
+            ).all()
+        )
+        if not profiles:
+            raise NotFoundError("Gateway profiles were not found")
+        last_conflict: ConflictError | None = None
+        for candidate in sorted(
+            profiles,
+            key=lambda item: (
+                {"control-dev": 0, "default": 1, "jarvis": 2}.get(
+                    item.profile_name, 3
+                ),
+                item.profile_name,
+            ),
+        ):
+            try:
+                provider, capabilities = await self._fresh_provider(
+                    db,
+                    gateway_id=gateway_id,
+                    profile_name=candidate.profile_name,
+                    methods=methods,
+                )
+            except ConflictError as exc:
+                last_conflict = exc
+                continue
+            return candidate, provider, capabilities
+        raise ConflictError(
+            "No gateway profile has verified permission for agent lifecycle operations"
+        ) from last_conflict
+
+    @staticmethod
+    def _automation_inventory(
+        automations: list[HermesAutomation],
+    ) -> dict[str, tuple[str, str, str, bool, str]]:
+        return {
+            item.automation_id: (
+                item.name,
+                item.schedule,
+                item.timezone,
+                item.enabled,
+                item.prompt,
+            )
+            for item in automations
+        }
+
+    @staticmethod
+    def _history_structure(
+        messages: list[dict[str, Any]],
+    ) -> tuple[tuple[str, str, str, tuple[str, ...]], ...]:
+        """Compare transcript identity/shape without retaining message text."""
+
+        structure: list[tuple[str, str, str, tuple[str, ...]]] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                structure.append(("", "invalid", "", ()))
+                continue
+            message_id = str(
+                message.get("id")
+                or message.get("message_id")
+                or message.get("messageId")
+                or ""
+            )[:512]
+            role = str(message.get("role") or "")[:80]
+            kind = str(message.get("type") or message.get("kind") or "")[:80]
+            raw_tools = message.get("tool_calls") or message.get("toolCalls") or []
+            tool_ids = tuple(
+                str(item.get("id") or item.get("name") or "")[:256]
+                for item in raw_tools
+                if isinstance(item, dict)
+            )
+            structure.append((message_id, role, kind, tool_ids))
+        return tuple(structure)
+
+    async def _verify_session_histories(
+        self,
+        source_provider: Any,
+        destination_provider: Any,
+        session_ids: set[str],
+    ) -> None:
+        for session_id in sorted(session_ids):
+            source_history = await source_provider.history_readonly(session_id)
+            destination_history = await destination_provider.history_readonly(
+                session_id
+            )
+            if len(source_history) != len(destination_history) or (
+                self._history_structure(source_history)
+                != self._history_structure(destination_history)
+            ):
+                raise UpstreamUnavailableError(
+                    "Imported Hermes session history does not match the source"
+                )
+
+    @staticmethod
+    def _route_rows(
+        db: Session, profile: ProfileRef
+    ) -> tuple[
+        list[SessionLink],
+        list[Automation],
+        list[AutomationRun],
+        list[IdempotencyOperation],
+    ]:
+        sessions = list(
+            db.scalars(
+                select(SessionLink).where(
+                    SessionLink.gateway_id == profile.gateway_id,
+                    SessionLink.profile_name == profile.profile_name,
+                )
+            ).all()
+        )
+        automations = list(
+            db.scalars(
+                select(Automation).where(
+                    Automation.gateway_id == profile.gateway_id,
+                    Automation.profile_name == profile.profile_name,
+                )
+            ).all()
+        )
+        automation_ids = [item.id for item in automations]
+        runs = (
+            list(
+                db.scalars(
+                    select(AutomationRun).where(
+                        AutomationRun.automation_id.in_(automation_ids)
+                    )
+                ).all()
+            )
+            if automation_ids
+            else []
+        )
+        prompt_scopes = {f"session:{item.id}:prompt" for item in sessions}
+        operations = (
+            list(
+                db.scalars(
+                    select(IdempotencyOperation).where(
+                        IdempotencyOperation.scope.in_(prompt_scopes)
+                    )
+                ).all()
+            )
+            if prompt_scopes
+            else []
+        )
+        return sessions, automations, runs, operations
+
+    @staticmethod
+    def _assert_route_idle(
+        sessions: list[SessionLink],
+        runs: list[AutomationRun],
+        operations: list[IdempotencyOperation],
+    ) -> None:
+        if any(item.status.casefold() in _ACTIVE_RUNTIME_STATUSES for item in sessions):
+            raise ConflictError(
+                "The agent has an active Control session; wait for it to finish"
+            )
+        if any(item.status.casefold() in _ACTIVE_RUNTIME_STATUSES for item in runs):
+            raise ConflictError(
+                "The agent has an active automation run; wait for it to finish"
+            )
+        if any(
+            item.status.casefold() in _ACTIVE_PROMPT_OPERATION_STATUSES
+            for item in operations
+        ):
+            raise ConflictError(
+                "The agent has an active or delivery-unknown prompt operation"
+            )
+
+    @staticmethod
+    async def _set_automations_enabled(
+        provider: Any, automation_ids: list[str], enabled: bool
+    ) -> None:
+        for automation_id in automation_ids:
+            try:
+                await provider.update_automation(
+                    automation_id, {"enabled": enabled}
+                )
+            except RuntimeError as exc:
+                if str(exc) != "MUTATION_DELIVERY_UNKNOWN":
+                    raise
+                reconciled = {
+                    item.automation_id: item.enabled
+                    for item in await provider.list_automations()
+                }
+                if reconciled.get(automation_id) is not enabled:
+                    raise UpstreamUnavailableError(
+                        "Automation pause outcome is unknown; the agent was not moved"
+                    ) from exc
+
+    @staticmethod
+    async def _assert_upstream_automation_runs_idle(
+        provider: Any, automations: list[HermesAutomation]
+    ) -> None:
+        for automation in automations:
+            runs = await provider.list_automation_runs(
+                automation.automation_id, limit=100
+            )
+            if any(
+                run.status.casefold() in _ACTIVE_RUNTIME_STATUSES for run in runs
+            ):
+                raise ConflictError(
+                    "The agent has an active Hermes automation run; wait for it to finish"
+                )
+
+    @staticmethod
+    async def _profile_is_present(provider: Any, profile_name: str) -> bool:
+        profiles = await authoritative_provider_read(provider, "list_profiles")
+        return profile_name in {item.name for item in profiles}
+
+    async def _delete_upstream_once(
+        self, provider: Any, profile_name: str
+    ) -> None:
+        if not await self._profile_is_present(provider, profile_name):
+            return
+        try:
+            await provider.delete_profile(profile_name)
+        except BaseException as exc:
+            # ``CancelledError`` is an ambiguous delivery result just like a
+            # dropped transport response: Hermes may have committed the
+            # deletion before this task observed cancellation. Never let it
+            # skip the authoritative presence check, because move rollback
+            # could otherwise delete the verified destination after the
+            # source was already removed.
+            try:
+                still_present = await self._profile_is_present(
+                    provider, profile_name
+                )
+            except BaseException as reconcile_exc:
+                raise ProfileDeleteOutcomeUnknown(
+                    "Hermes profile deletion could not be reconciled"
+                ) from reconcile_exc
+            if still_present:
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                raise UpstreamUnavailableError(
+                    "Hermes did not confirm that the agent was deleted"
+                ) from exc
+            return
+        try:
+            still_present = await self._profile_is_present(provider, profile_name)
+        except BaseException as exc:
+            raise ProfileDeleteOutcomeUnknown(
+                "Hermes profile deletion could not be reconciled"
+            ) from exc
+        if still_present:
+            raise UpstreamUnavailableError(
+                "Hermes still lists the agent after deletion"
+            )
+
+    async def _purge_profile_runtime(
+        self, gateway_id: str, profile_name: str
+    ) -> list[str]:
+        warnings: list[str] = []
+        try:
+            await self.services.provider_pool.invalidate(gateway_id, profile_name)
+        except Exception:
+            warnings.append("The stale provider cache could not be closed immediately.")
+        # Newer router/event-hub versions can expose a bounded route purge.
+        # Keep this service compatible with both versions without reaching
+        # into their private dictionaries.
+        for owner in (self.services.session_router, self.services.event_hub):
+            purge = getattr(owner, "purge_profile", None)
+            if purge is None:
+                continue
+            try:
+                result = purge(gateway_id, profile_name)
+                if hasattr(result, "__await__"):
+                    await result
+            except Exception:
+                warnings.append("A stale realtime route will expire naturally.")
+        return warnings
+
+    async def _rollback_profile_transfer(
+        self,
+        *,
+        destination_manager: Any,
+        source_provider: Any,
+        destination_gateway_id: str,
+        profile_name: str,
+        enabled_automation_ids: list[str],
+        destination_imported: bool,
+        source_paused: bool,
+    ) -> list[BaseException]:
+        errors: list[BaseException] = []
+        destination_absent = not destination_imported
+        if destination_imported:
+            try:
+                await self._delete_upstream_once(
+                    destination_manager, profile_name
+                )
+                destination_absent = True
+            except BaseException as exc:
+                errors.append(exc)
+                destination_absent = False
+        # Never enable two copies of the same imported cron inventory. If the
+        # destination cannot be proven absent, leave the source safely paused.
+        if source_paused and destination_absent:
+            try:
+                await self._set_automations_enabled(
+                    source_provider, enabled_automation_ids, True
+                )
+            except BaseException as exc:
+                errors.append(exc)
+        elif source_paused:
+            errors.append(
+                UpstreamUnavailableError(
+                    "Source automations remain paused because destination cleanup is unverified"
+                )
+            )
+        if destination_imported:
+            await self._purge_profile_runtime(
+                destination_gateway_id, profile_name
+            )
+        return errors
+
     async def create(
         self,
         db: Session,
         actor: User,
         payload: ProfileCreate,
     ) -> ProfileRef:
-        gateway_lock = self.services.profile_creation_locks.setdefault(
-            payload.gateway_id, asyncio.Lock()
-        )
-        async with gateway_lock:
+        async with profile_lifecycle_guard(self.services, {payload.gateway_id}):
             profiles = list(
                 db.scalars(
                     select(ProfileRef).where(
@@ -1086,7 +1727,7 @@ class ProfileService:
                         "Agent creation outcome is unknown; refresh agents before retrying"
                     ) from exc
 
-            rows = await self.sync(
+            rows = await self._sync_unlocked(
                 db,
                 payload.gateway_id,
                 profile_name=management_profile.profile_name,
@@ -1126,6 +1767,717 @@ class ProfileService:
             db.commit()
             db.refresh(row)
             return row
+
+    async def delete(
+        self,
+        db: Session,
+        actor: User,
+        profile_id: str,
+        payload: ProfileDelete,
+    ) -> ProfileDeleteView:
+        target = db.get(ProfileRef, profile_id)
+        if target is None:
+            raise NotFoundError("Agent was not found")
+        source_gateway_id = target.gateway_id
+        technical_name = target.profile_name
+        async with profile_lifecycle_guard(
+            self.services,
+            {source_gateway_id},
+            profile_name=technical_name,
+        ):
+            db.expire_all()
+            target = db.get(ProfileRef, profile_id)
+            if target is None:
+                raise NotFoundError("Agent was not found")
+            if target.gateway_id != source_gateway_id:
+                raise ConflictError("The agent route changed; refresh before deleting it")
+            if target.profile_name == "default":
+                raise ConflictError("The default Hermes profile cannot be deleted")
+            if payload.confirmation != target.profile_name:
+                raise ConflictError(
+                    "Confirmation must exactly match the technical agent name"
+                )
+            require_mutable_profile(
+                target.profile_name,
+                "profiles.delete",
+                self.services.settings.mutable_profiles,
+                self.services.settings.interactive_profiles,
+                managed_by_control=target.managed_by_control,
+            )
+            sessions, automations, runs, operations = self._route_rows(db, target)
+            self._assert_route_idle(sessions, runs, operations)
+
+            _, manager, manager_capabilities = await self._management_provider(
+                db,
+                gateway_id=source_gateway_id,
+                methods=frozenset({"profiles.delete"}),
+            )
+            source_sha = trusted_gateway_source_sha(
+                db, self.services, source_gateway_id
+            )
+            if (
+                self.services.settings.provider_mode != "mock"
+                and (
+                    source_sha is None
+                    or _AUDITED_PROFILE_TRANSFER_REVISIONS.get(
+                        source_sha.casefold()
+                    )
+                    != "0.20.6"
+                    or manager_capabilities.version != "0.20.6"
+                )
+            ):
+                raise ConflictError(
+                    "Agent deletion requires an audited Hermes 0.20.6 source; upgrade this gateway first"
+                )
+            profile_provider, _ = await self._fresh_provider(
+                db,
+                gateway_id=source_gateway_id,
+                profile_name=target.profile_name,
+                methods=frozenset({"session.list", "cron.list"}),
+            )
+            upstream_sessions = await profile_provider.list_sessions()
+            if not bool(getattr(profile_provider, "session_inventory_complete", False)):
+                raise ConflictError(
+                    "Hermes could not provide a complete session inventory"
+                )
+            if any(
+                item.status.casefold() in _ACTIVE_RUNTIME_STATUSES
+                for item in upstream_sessions
+            ):
+                raise ConflictError(
+                    "The agent has an active Hermes session; wait for it to finish"
+                )
+            await self._assert_upstream_automation_runs_idle(
+                profile_provider, await profile_provider.list_automations()
+            )
+
+            counts = ProfileLifecycleCounts(
+                sessions=len(sessions),
+                automations=len(automations),
+                automation_runs=len(runs),
+                idempotency_operations=len(operations),
+            )
+            operation_ids = [item.id for item in operations]
+            automation_ids = [item.id for item in automations]
+            session_ids = [item.id for item in sessions]
+
+            async def commit_delete() -> bool:
+                await self._delete_upstream_once(manager, technical_name)
+                last_commit_error: BaseException | None = None
+                for attempt in range(3):
+                    try:
+                        # Replay by stable ids after rollback. Hermes deletion
+                        # is irreversible, so a transient local commit failure
+                        # must not strand route metadata for a missing agent.
+                        for operation_id in operation_ids:
+                            operation = db.get(IdempotencyOperation, operation_id)
+                            if operation is not None:
+                                db.delete(operation)
+                        for automation_id in automation_ids:
+                            automation = db.get(Automation, automation_id)
+                            if automation is not None:
+                                db.delete(automation)
+                        for session_id in session_ids:
+                            session = db.get(SessionLink, session_id)
+                            if session is not None:
+                                db.delete(session)
+                        current_target = db.get(ProfileRef, profile_id)
+                        if current_target is not None:
+                            db.delete(current_target)
+                        audit(
+                            db,
+                            actor=actor,
+                            action="profile.delete",
+                            target_type="profile",
+                            target_id=profile_id,
+                            outcome="degraded" if attempt else "success",
+                            details={
+                                "gatewayId": source_gateway_id,
+                                "profileName": technical_name,
+                                "sessions": counts.sessions,
+                                "automations": counts.automations,
+                                "automationRuns": counts.automation_runs,
+                                "idempotencyOperations": counts.idempotency_operations,
+                                "localCommitRetry": attempt,
+                            },
+                        )
+                        db.commit()
+                        return bool(attempt)
+                    except BaseException as exc:
+                        last_commit_error = exc
+                        db.rollback()
+                raise UpstreamUnavailableError(
+                    "Hermes deleted the agent, but Agent Control could not persist the local cleanup"
+                ) from last_commit_error
+
+            delete_task = asyncio.create_task(commit_delete())
+            delete_cancelled = False
+            try:
+                recovered_local_commit = await asyncio.shield(delete_task)
+            except asyncio.CancelledError:
+                delete_cancelled = True
+                recovered_local_commit = await delete_task
+            warnings = await self._purge_profile_runtime(
+                source_gateway_id, technical_name
+            )
+            if recovered_local_commit:
+                warnings.append(
+                    "Agent Control recovered a transient local cleanup commit failure."
+                )
+            if delete_cancelled:
+                raise asyncio.CancelledError
+            return ProfileDeleteView(
+                profile_id=profile_id,
+                technical_name=technical_name,
+                source_gateway_id=source_gateway_id,
+                deleted=counts,
+                warnings=warnings,
+            )
+
+    async def move(
+        self,
+        db: Session,
+        actor: User,
+        profile_id: str,
+        payload: ProfileMove,
+    ) -> ProfileMoveView:
+        target = db.get(ProfileRef, profile_id)
+        if target is None:
+            raise NotFoundError("Agent was not found")
+        source_gateway_id = target.gateway_id
+        destination_gateway_id = payload.destination_gateway_id
+        technical_name = target.profile_name
+        if source_gateway_id == destination_gateway_id:
+            raise ConflictError("Choose a different destination gateway")
+
+        async with profile_lifecycle_guard(
+            self.services,
+            {source_gateway_id, destination_gateway_id},
+            profile_name=target.profile_name,
+        ):
+            db.expire_all()
+            target = db.get(ProfileRef, profile_id)
+            if target is None:
+                raise NotFoundError("Agent was not found")
+            if target.gateway_id != source_gateway_id:
+                raise ConflictError("The agent route changed; refresh before moving it")
+            if target.profile_name == "default":
+                raise ConflictError("The default Hermes profile cannot be moved")
+            if payload.confirmation != target.profile_name:
+                raise ConflictError(
+                    "Confirmation must exactly match the technical agent name"
+                )
+            for method in (
+                "profiles.delete",
+                "profiles.export",
+                "profiles.transfer",
+            ):
+                require_mutable_profile(
+                    target.profile_name,
+                    method,
+                    self.services.settings.mutable_profiles,
+                    self.services.settings.interactive_profiles,
+                    managed_by_control=target.managed_by_control,
+                )
+            destination_gateway = db.get(Gateway, destination_gateway_id)
+            if destination_gateway is None or not destination_gateway.enabled:
+                raise NotFoundError("Destination gateway was not found or is disabled")
+
+            sessions, automations, runs, operations = self._route_rows(db, target)
+            self._assert_route_idle(sessions, runs, operations)
+            if db.scalar(
+                select(ProfileRef.id).where(
+                    ProfileRef.gateway_id == destination_gateway_id,
+                    ProfileRef.profile_name == target.profile_name,
+                )
+            ) is not None or db.scalar(
+                select(SessionLink.id).where(
+                    SessionLink.gateway_id == destination_gateway_id,
+                    SessionLink.profile_name == target.profile_name,
+                )
+            ) is not None or db.scalar(
+                select(Automation.id).where(
+                    Automation.gateway_id == destination_gateway_id,
+                    Automation.profile_name == target.profile_name,
+                )
+            ) is not None:
+                raise ConflictError(
+                    "Agent Control already has destination metadata for that technical name"
+                )
+
+            _, source_manager, source_capabilities = (
+                await self._management_provider(
+                    db,
+                    gateway_id=source_gateway_id,
+                    methods=frozenset(
+                        {
+                            "profiles.delete",
+                            "profiles.export",
+                            "profiles.transfer",
+                        }
+                    ),
+                )
+            )
+            _, destination_manager, destination_capabilities = (
+                await self._management_provider(
+                    db,
+                    gateway_id=destination_gateway_id,
+                    methods=frozenset({"profiles.delete", "profiles.import"}),
+                )
+            )
+            source_sha = trusted_gateway_source_sha(
+                db, self.services, source_gateway_id
+            )
+            destination_sha = trusted_gateway_source_sha(
+                db, self.services, destination_gateway_id
+            )
+            source_sha = source_sha.casefold() if source_sha else None
+            destination_sha = destination_sha.casefold() if destination_sha else None
+            mock_compatible = (
+                self.services.settings.provider_mode == "mock"
+                and source_capabilities.version == "mock-1"
+                and destination_capabilities.version == "mock-1"
+            )
+            audited_compatible = (
+                source_sha is not None
+                and destination_sha is not None
+                and (source_sha, destination_sha)
+                in _AUDITED_PROFILE_TRANSFER_PAIRS
+                and source_capabilities.version
+                == _AUDITED_PROFILE_TRANSFER_REVISIONS.get(source_sha)
+                and destination_capabilities.version
+                == _AUDITED_PROFILE_TRANSFER_REVISIONS.get(destination_sha)
+            )
+            if not mock_compatible and not audited_compatible:
+                raise ConflictError(
+                    "These exact Hermes revisions are not approved for agent transfer"
+                )
+            if not await self._profile_is_present(
+                source_manager, target.profile_name
+            ):
+                raise ConflictError("Hermes no longer lists the source agent")
+            if await self._profile_is_present(
+                destination_manager, target.profile_name
+            ):
+                raise ConflictError(
+                    "The destination already has an agent with that technical name"
+                )
+
+            source_provider, _ = await self._fresh_provider(
+                db,
+                gateway_id=source_gateway_id,
+                profile_name=target.profile_name,
+                methods=frozenset({"session.list", "cron.list", "soul.get"}),
+            )
+            source_sessions = await source_provider.list_sessions()
+            if not bool(getattr(source_provider, "session_inventory_complete", False)):
+                raise ConflictError(
+                    "Hermes could not provide a complete source session inventory"
+                )
+            if any(
+                item.status.casefold() in _ACTIVE_RUNTIME_STATUSES
+                for item in source_sessions
+            ):
+                raise ConflictError(
+                    "The agent has an active Hermes session; wait for it to finish"
+                )
+            source_session_ids = {
+                item.stored_session_id for item in source_sessions
+            }
+            local_session_ids = {item.stored_session_id for item in sessions}
+            if not local_session_ids.issubset(source_session_ids):
+                raise ConflictError(
+                    "Agent Control has sessions absent from Hermes; refresh before moving"
+                )
+            source_soul = (await source_provider.get_soul()).data
+            source_automations = await source_provider.list_automations()
+            await self._assert_upstream_automation_runs_idle(
+                source_provider, source_automations
+            )
+            original_automation_inventory = self._automation_inventory(
+                source_automations
+            )
+            enabled_automation_ids = [
+                item.automation_id for item in source_automations if item.enabled
+            ]
+            if enabled_automation_ids:
+                source_provider, _ = await self._fresh_provider(
+                    db,
+                    gateway_id=source_gateway_id,
+                    profile_name=target.profile_name,
+                    methods=frozenset(
+                        {"session.list", "cron.list", "cron.update", "soul.get"}
+                    ),
+                )
+
+            destination_imported = False
+            source_paused = False
+            source_deleted = False
+            cutover_cancelled = False
+            post_cutover_warnings: list[str] = []
+            try:
+                if enabled_automation_ids:
+                    # Set before the first mutation so a partial pause is also
+                    # restored by the rollback path.
+                    source_paused = True
+                    await self._set_automations_enabled(
+                        source_provider, enabled_automation_ids, False
+                    )
+                paused_source_automations = await source_provider.list_automations()
+                paused_inventory = self._automation_inventory(
+                    paused_source_automations
+                )
+                expected_paused_inventory = {
+                    automation_id: (
+                        name,
+                        schedule,
+                        timezone_name,
+                        False if automation_id in enabled_automation_ids else enabled,
+                        prompt,
+                    )
+                    for automation_id, (
+                        name,
+                        schedule,
+                        timezone_name,
+                        enabled,
+                        prompt,
+                    ) in original_automation_inventory.items()
+                }
+                if paused_inventory != expected_paused_inventory:
+                    raise UpstreamUnavailableError(
+                        "Hermes did not verify the paused automation inventory"
+                    )
+
+                destination_imported = True
+                try:
+                    await source_manager.transfer_profile_to(
+                        destination_manager, name=target.profile_name
+                    )
+                except Exception as exc:
+                    if not await self._profile_is_present(
+                        destination_manager, target.profile_name
+                    ):
+                        raise UpstreamUnavailableError(
+                            "Hermes did not confirm the destination import"
+                        ) from exc
+                if not await self._profile_is_present(
+                    destination_manager, target.profile_name
+                ):
+                    raise UpstreamUnavailableError(
+                        "The imported agent is absent from the destination"
+                    )
+
+                destination_methods = {"session.list", "cron.list", "soul.get"}
+                if enabled_automation_ids:
+                    destination_methods.add("cron.update")
+                destination_provider, imported_capabilities = (
+                    await self._fresh_provider(
+                        db,
+                        gateway_id=destination_gateway_id,
+                        profile_name=target.profile_name,
+                        methods=frozenset(destination_methods),
+                        managed_by_control=True,
+                    )
+                )
+                imported_sessions = await destination_provider.list_sessions()
+                if not bool(
+                    getattr(destination_provider, "session_inventory_complete", False)
+                ):
+                    raise UpstreamUnavailableError(
+                        "Hermes could not verify the imported session inventory"
+                    )
+                if {
+                    item.stored_session_id for item in imported_sessions
+                } != source_session_ids:
+                    raise UpstreamUnavailableError(
+                        "Imported Hermes session IDs do not match the source"
+                    )
+                if (await destination_provider.get_soul()).data != source_soul:
+                    raise UpstreamUnavailableError(
+                        "Imported Hermes SOUL does not match the source"
+                    )
+                if self._automation_inventory(
+                    await destination_provider.list_automations()
+                ) != paused_inventory:
+                    raise UpstreamUnavailableError(
+                        "Imported Hermes automations do not match the source"
+                    )
+                await self._verify_session_histories(
+                    source_provider,
+                    destination_provider,
+                    source_session_ids,
+                )
+                # Re-read the frozen source immediately before cutover. This
+                # catches external Hermes activity that bypassed Control's
+                # route lock while the archive was in transit.
+                final_source_sessions = await source_provider.list_sessions()
+                if not bool(
+                    getattr(source_provider, "session_inventory_complete", False)
+                ) or {
+                    item.stored_session_id for item in final_source_sessions
+                } != source_session_ids:
+                    raise UpstreamUnavailableError(
+                        "Source sessions changed while the agent was being transferred"
+                    )
+                if any(
+                    item.status.casefold() in _ACTIVE_RUNTIME_STATUSES
+                    for item in final_source_sessions
+                ):
+                    raise ConflictError(
+                        "A Hermes session became active during agent transfer"
+                    )
+                if (await source_provider.get_soul()).data != source_soul:
+                    raise ConflictError(
+                        "The source SOUL changed during agent transfer"
+                    )
+                final_source_automations = (
+                    await source_provider.list_automations()
+                )
+                if self._automation_inventory(
+                    final_source_automations
+                ) != paused_inventory:
+                    raise ConflictError(
+                        "Source automations changed during agent transfer"
+                    )
+                await self._assert_upstream_automation_runs_idle(
+                    source_provider, final_source_automations
+                )
+
+                session_ids = [item.id for item in sessions]
+                automation_ids = [item.id for item in automations]
+
+                def stage_local_cutover(
+                    destination_inventory: dict[
+                        str, tuple[str, str, str, bool, str]
+                    ]
+                    | None = None,
+                ) -> None:
+                    """Idempotently project the verified destination route.
+
+                    This is deliberately replayable after ``Session.rollback``.
+                    Once Hermes confirms source deletion, a transient database
+                    commit failure must not leave Control routing to a source
+                    profile that no longer exists.
+                    """
+
+                    current_target = db.get(ProfileRef, profile_id)
+                    if current_target is None:
+                        raise UpstreamUnavailableError(
+                            "Agent metadata disappeared during local cutover"
+                        )
+                    current_target.gateway_id = destination_gateway_id
+                    current_target.status = "online"
+                    current_target.capabilities = imported_capabilities.to_dict()
+                    current_target.capabilities_checked_at = utc_now()
+                    for session_id in session_ids:
+                        current_session = db.get(SessionLink, session_id)
+                        if current_session is None:
+                            raise UpstreamUnavailableError(
+                                "Session metadata disappeared during local cutover"
+                            )
+                        current_session.gateway_id = destination_gateway_id
+                        current_session.runtime_session_id = None
+                        current_session.runtime_generation = None
+                        current_session.replay_epoch = None
+                        current_session.last_sequence = 0
+                        current_session.status = "idle"
+                        current_session.initial_history_pending = False
+                    for automation_id in automation_ids:
+                        current_automation = db.get(Automation, automation_id)
+                        if current_automation is None:
+                            raise UpstreamUnavailableError(
+                                "Automation metadata disappeared during local cutover"
+                            )
+                        current_automation.gateway_id = destination_gateway_id
+                        current_automation.next_runs = []
+                        if destination_inventory is not None:
+                            upstream_state = destination_inventory.get(
+                                current_automation.hermes_automation_id or ""
+                            )
+                            if upstream_state is not None:
+                                current_automation.enabled = upstream_state[3]
+
+                stage_local_cutover()
+                # Prove all local uniqueness constraints before the irreversible
+                # source deletion.  The surrounding transaction is committed
+                # only after Hermes confirms that deletion by listing profiles.
+                db.flush()
+
+                async def commit_cutover() -> list[str]:
+                    nonlocal source_deleted
+                    await self._delete_upstream_once(
+                        source_manager, target.profile_name
+                    )
+                    source_deleted = True
+                    cutover_warnings: list[str] = []
+                    destination_inventory = paused_inventory
+                    if enabled_automation_ids:
+                        try:
+                            await self._set_automations_enabled(
+                                destination_provider,
+                                enabled_automation_ids,
+                                True,
+                            )
+                            destination_inventory = self._automation_inventory(
+                                await destination_provider.list_automations()
+                            )
+                            if destination_inventory != original_automation_inventory:
+                                cutover_warnings.append(
+                                    "Destination automations need reconciliation after cutover."
+                                )
+                        except Exception:
+                            cutover_warnings.append(
+                                "Some destination automations remain paused and need operator attention."
+                            )
+                            try:
+                                destination_inventory = self._automation_inventory(
+                                    await destination_provider.list_automations()
+                                )
+                            except Exception:
+                                destination_inventory = paused_inventory
+                    # A successful Hermes delete is irreversible. Replay the
+                    # local projection after a transient commit failure instead
+                    # of rolling Control back to the now-missing source route.
+                    last_commit_error: BaseException | None = None
+                    for attempt in range(3):
+                        try:
+                            stage_local_cutover(destination_inventory)
+                            audit(
+                                db,
+                                actor=actor,
+                                action="profile.move",
+                                target_type="profile",
+                                target_id=profile_id,
+                                outcome=(
+                                    "degraded"
+                                    if cutover_warnings or attempt
+                                    else "success"
+                                ),
+                                details={
+                                    "profileName": technical_name,
+                                    "sourceGatewayId": source_gateway_id,
+                                    "destinationGatewayId": destination_gateway_id,
+                                    "sessions": len(sessions),
+                                    "automations": len(automations),
+                                    "automationRuns": len(runs),
+                                    "localCommitRetry": attempt,
+                                    "warnings": cutover_warnings,
+                                },
+                            )
+                            db.commit()
+                            if attempt:
+                                cutover_warnings.append(
+                                    "Agent Control recovered a transient local cutover commit failure."
+                                )
+                            return cutover_warnings
+                        except BaseException as exc:
+                            last_commit_error = exc
+                            db.rollback()
+                    raise UpstreamUnavailableError(
+                        "Hermes moved the agent, but Agent Control could not persist the local cutover"
+                    ) from last_commit_error
+
+                cutover_task = asyncio.create_task(commit_cutover())
+                try:
+                    post_cutover_warnings = await asyncio.shield(cutover_task)
+                except asyncio.CancelledError:
+                    cutover_cancelled = True
+                    post_cutover_warnings = await cutover_task
+            except ProfileDeleteOutcomeUnknown as exc:
+                # Neither route is authoritative until source absence can be
+                # proven. Do not publish the unconfirmed destination cutover;
+                # retain the imported copy and leave both cron inventories
+                # paused so an operator can reconcile without duplicate runs.
+                db.rollback()
+                try:
+                    audit(
+                        db,
+                        actor=actor,
+                        action="profile.move",
+                        target_type="profile",
+                        target_id=profile_id,
+                        outcome="delivery_unknown",
+                        details={
+                            "profileName": technical_name,
+                            "sourceGatewayId": source_gateway_id,
+                            "destinationGatewayId": destination_gateway_id,
+                            "sourceCronPaused": source_paused,
+                            "destinationCronPaused": True,
+                        },
+                    )
+                    db.commit()
+                except Exception:
+                    # Audit durability must not disguise the destructive RPC's
+                    # unknown outcome or accidentally commit staged route rows.
+                    db.rollback()
+                await self._purge_profile_runtime(
+                    source_gateway_id, technical_name
+                )
+                await self._purge_profile_runtime(
+                    destination_gateway_id, technical_name
+                )
+                raise UpstreamUnavailableError(
+                    "Destination is verified and paused, but source deletion needs operator reconciliation"
+                ) from exc
+            except BaseException as exc:
+                db.rollback()
+                if source_deleted:
+                    raise UpstreamUnavailableError(
+                        "Hermes moved the agent, but Agent Control could not commit the local cutover"
+                    ) from exc
+                rollback_task = asyncio.create_task(
+                    self._rollback_profile_transfer(
+                        destination_manager=destination_manager,
+                        source_provider=source_provider,
+                        destination_gateway_id=destination_gateway_id,
+                        profile_name=technical_name,
+                        enabled_automation_ids=enabled_automation_ids,
+                        destination_imported=destination_imported,
+                        source_paused=source_paused,
+                    )
+                )
+                try:
+                    rollback_errors = await asyncio.shield(rollback_task)
+                except asyncio.CancelledError:
+                    rollback_errors = await rollback_task
+                if rollback_errors:
+                    raise UpstreamUnavailableError(
+                        "Agent move failed and rollback needs operator attention"
+                    ) from rollback_errors[0]
+                raise
+
+            warnings = [
+                "Secrets and auth files are not exported; destination gateway credentials are used.",
+                "Session history is preserved, but source-local paths and external files may not exist on the destination.",
+                "External MCP and CLI tools must already be installed on the destination.",
+            ]
+            warnings.extend(post_cutover_warnings)
+            warnings.extend(
+                await self._purge_profile_runtime(
+                    source_gateway_id, target.profile_name
+                )
+            )
+            warnings.extend(
+                await self._purge_profile_runtime(
+                    destination_gateway_id, target.profile_name
+                )
+            )
+            if cutover_cancelled:
+                raise asyncio.CancelledError
+            return ProfileMoveView(
+                profile_id=profile_id,
+                technical_name=technical_name,
+                source_gateway_id=source_gateway_id,
+                destination_gateway_id=destination_gateway_id,
+                moved=ProfileLifecycleCounts(
+                    sessions=len(sessions),
+                    automations=len(automations),
+                    automation_runs=len(runs),
+                    idempotency_operations=len(operations),
+                ),
+                preserved_session_ids=sorted(source_session_ids),
+                warnings=warnings,
+            )
 
 
 class WorkspaceService:
@@ -1370,6 +2722,24 @@ class SessionService:
         self.gateways = GatewayService(services)
 
     async def create(self, db: Session, actor: User, payload: SessionCreate) -> SessionLink:
+        if payload.profile_id:
+            profile = db.get(ProfileRef, payload.profile_id)
+            if profile is None:
+                raise NotFoundError("Profile not found")
+            async with profile_row_route_guard(self.services, db, profile):
+                return await self._create_unlocked(db, actor, payload)
+        assert payload.gateway_id is not None and payload.profile_name is not None
+        async with profile_route_guard(
+            self.services, payload.gateway_id, payload.profile_name
+        ):
+            require_profile_route_ref(
+                db, payload.gateway_id, payload.profile_name
+            )
+            return await self._create_unlocked(db, actor, payload)
+
+    async def _create_unlocked(
+        self, db: Session, actor: User, payload: SessionCreate
+    ) -> SessionLink:
         gateway_id = payload.gateway_id
         profile_name = payload.profile_name
         if payload.profile_id:
@@ -1422,6 +2792,27 @@ class SessionService:
         return row
 
     async def sync(
+        self,
+        db: Session,
+        actor: User,
+        *,
+        gateway_id: str,
+        profile_name: str,
+        workspace_id: str | None,
+    ) -> list[SessionLink]:
+        async with profile_route_guard(
+            self.services, gateway_id, profile_name
+        ):
+            require_profile_route_ref(db, gateway_id, profile_name)
+            return await self._sync_unlocked(
+                db,
+                actor,
+                gateway_id=gateway_id,
+                profile_name=profile_name,
+                workspace_id=workspace_id,
+            )
+
+    async def _sync_unlocked(
         self,
         db: Session,
         actor: User,
@@ -1569,6 +2960,12 @@ class SessionService:
         return row
 
     async def resume(self, db: Session, actor: User, row: SessionLink) -> SessionLink:
+        async with profile_row_route_guard(self.services, db, row):
+            return await self._resume_unlocked(db, actor, row)
+
+    async def _resume_unlocked(
+        self, db: Session, actor: User, row: SessionLink
+    ) -> SessionLink:
         await require_capability(
             db,
             self.services,
@@ -1903,6 +3300,25 @@ class SessionService:
         raise NotFoundError("Voice note not found")
 
     async def submit(
+        self,
+        db: Session,
+        actor: User,
+        row: SessionLink,
+        prompt: str,
+        idempotency_key: str,
+        attachments: list[PromptAttachment] | None = None,
+    ) -> dict[str, Any]:
+        async with profile_row_route_guard(self.services, db, row):
+            return await self._submit_unlocked(
+                db,
+                actor,
+                row,
+                prompt,
+                idempotency_key,
+                attachments=attachments,
+            )
+
+    async def _submit_unlocked(
         self,
         db: Session,
         actor: User,
@@ -2251,6 +3667,12 @@ class SessionService:
         return finish_reason in {"stop", "completed", "complete", "done", "end_turn"}
 
     async def interrupt(self, db: Session, actor: User, row: SessionLink) -> None:
+        async with profile_row_route_guard(self.services, db, row):
+            await self._interrupt_unlocked(db, actor, row)
+
+    async def _interrupt_unlocked(
+        self, db: Session, actor: User, row: SessionLink
+    ) -> None:
         await require_capability(
             db,
             self.services,
@@ -2285,6 +3707,24 @@ class SessionService:
         db.commit()
 
     async def respond_approval(
+        self,
+        db: Session,
+        actor: User,
+        row: SessionLink,
+        *,
+        request_id: str,
+        choice: str,
+    ) -> dict[str, Any]:
+        async with profile_row_route_guard(self.services, db, row):
+            return await self._respond_approval_unlocked(
+                db,
+                actor,
+                row,
+                request_id=request_id,
+                choice=choice,
+            )
+
+    async def _respond_approval_unlocked(
         self,
         db: Session,
         actor: User,
@@ -2376,6 +3816,26 @@ class SessionService:
         }
 
     async def respond_clarification(
+        self,
+        db: Session,
+        actor: User,
+        row: SessionLink,
+        *,
+        request_id: str,
+        answer: str | list[str],
+        question_id: str | None,
+    ) -> dict[str, Any]:
+        async with profile_row_route_guard(self.services, db, row):
+            return await self._respond_clarification_unlocked(
+                db,
+                actor,
+                row,
+                request_id=request_id,
+                answer=answer,
+                question_id=question_id,
+            )
+
+    async def _respond_clarification_unlocked(
         self,
         db: Session,
         actor: User,
@@ -2483,6 +3943,12 @@ class SessionService:
         }
 
     async def delete_from_hermes(self, db: Session, actor: User, row: SessionLink) -> None:
+        async with profile_row_route_guard(self.services, db, row):
+            await self._delete_from_hermes_unlocked(db, actor, row)
+
+    async def _delete_from_hermes_unlocked(
+        self, db: Session, actor: User, row: SessionLink
+    ) -> None:
         await require_capability(
             db,
             self.services,
@@ -2556,6 +4022,25 @@ class AutomationService:
         self.gateways = GatewayService(services)
 
     async def sync(
+        self,
+        db: Session,
+        actor: User,
+        *,
+        gateway_id: str,
+        profile_name: str,
+    ) -> list[Automation]:
+        async with profile_route_guard(
+            self.services, gateway_id, profile_name
+        ):
+            require_profile_route_ref(db, gateway_id, profile_name)
+            return await self._sync_unlocked(
+                db,
+                actor,
+                gateway_id=gateway_id,
+                profile_name=profile_name,
+            )
+
+    async def _sync_unlocked(
         self,
         db: Session,
         actor: User,
@@ -2648,6 +4133,17 @@ class AutomationService:
         return synchronized
 
     async def create(self, db: Session, actor: User, payload: AutomationCreate) -> Automation:
+        async with profile_route_guard(
+            self.services, payload.gateway_id, payload.profile_name
+        ):
+            require_profile_route_ref(
+                db, payload.gateway_id, payload.profile_name
+            )
+            return await self._create_unlocked(db, actor, payload)
+
+    async def _create_unlocked(
+        self, db: Session, actor: User, payload: AutomationCreate
+    ) -> Automation:
         if payload.workspace_id is not None:
             WorkspaceService().owned(db, actor, payload.workspace_id)
         await require_capability(
@@ -2700,6 +4196,24 @@ class AutomationService:
         return row
 
     async def update(
+        self,
+        db: Session,
+        actor: User,
+        row: Automation,
+        changes: dict[str, Any],
+        *,
+        audit_action: str = "automation.update",
+    ) -> Automation:
+        async with profile_row_route_guard(self.services, db, row):
+            return await self._update_unlocked(
+                db,
+                actor,
+                row,
+                changes,
+                audit_action=audit_action,
+            )
+
+    async def _update_unlocked(
         self,
         db: Session,
         actor: User,
@@ -2768,6 +4282,12 @@ class AutomationService:
         )
 
     async def delete(self, db: Session, actor: User, row: Automation) -> None:
+        async with profile_row_route_guard(self.services, db, row):
+            await self._delete_unlocked(db, actor, row)
+
+    async def _delete_unlocked(
+        self, db: Session, actor: User, row: Automation
+    ) -> None:
         await require_capability(
             db,
             self.services,
@@ -2785,6 +4305,12 @@ class AutomationService:
         db.commit()
 
     async def enqueue_trigger(
+        self, db: Session, actor: User, row: Automation
+    ) -> AutomationRun:
+        async with profile_row_route_guard(self.services, db, row):
+            return await self._enqueue_trigger_unlocked(db, actor, row)
+
+    async def _enqueue_trigger_unlocked(
         self, db: Session, actor: User, row: Automation
     ) -> AutomationRun:
         await require_capability(
@@ -3020,6 +4546,33 @@ class AutomationService:
         return len(orphaned)
 
     async def reconcile_upstream_runs(
+        self,
+        db: Session,
+        row: Automation,
+        *,
+        provider: Any | None = None,
+    ) -> list[AutomationRun]:
+        async with profile_row_route_guard(self.services, db, row):
+            scoped_provider = provider
+            if scoped_provider is not None:
+                connection = getattr(scoped_provider, "connection", None)
+                if (
+                    connection is None
+                    or connection.gateway_id != row.gateway_id
+                    or connection.profile_name != row.profile_name
+                ):
+                    # A watcher may have queued behind an agent cutover with a
+                    # provider cached for the old route. Never use that stale
+                    # identity after ``profile_row_route_guard`` refreshes the
+                    # Automation row to its destination.
+                    scoped_provider = None
+            return await self._reconcile_upstream_runs_unlocked(
+                db,
+                row,
+                provider=scoped_provider,
+            )
+
+    async def _reconcile_upstream_runs_unlocked(
         self,
         db: Session,
         row: Automation,

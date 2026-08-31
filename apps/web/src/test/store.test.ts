@@ -69,6 +69,34 @@ describe("session usage snapshots", () => {
     useAppStore.getState().removeSession(session.id);
     expect(useAppStore.getState().sessionUsageById[session.id]).toBeUndefined();
   });
+
+  it("purges several deleted-agent sessions and preserves unrelated chat state", () => {
+    const removedA = { ...session, id: "session-removed-a", workspaceId: "workspace-a" };
+    const removedB = { ...session, id: "session-removed-b", workspaceId: "workspace-a" };
+    const retained = { ...session, id: "session-retained", workspaceId: "workspace-a" };
+    useAppStore.setState({
+      sessions: [removedA, removedB, retained],
+      selectedSessionId: removedA.id,
+      selectedProfileId: session.profileId,
+      selectedWorkspaceId: "workspace-a",
+      workspaces: [{ id: "workspace-a", name: "Trabajo", description: "", sessionCount: 3, updatedAt: "ahora" }],
+      messages: [message("removed-message", removedA.id), message("retained-message", retained.id)],
+      streamingBySession: { [removedB.id]: "removed-stream", [retained.id]: "retained-stream" },
+      sessionUsageById: { [removedA.id]: { totalTokens: 10 }, [retained.id]: { totalTokens: 20 } },
+      pendingOperations: { "removed-operation": "removed-message", "retained-operation": "retained-message" },
+    });
+
+    useAppStore.getState().removeSessions([removedA.id, removedB.id]);
+
+    const state = useAppStore.getState();
+    expect(state.sessions.map((item) => item.id)).toEqual([retained.id]);
+    expect(state.messages.map((item) => item.id)).toEqual(["retained-message"]);
+    expect(state.selectedSessionId).toBe(retained.id);
+    expect(state.streamingBySession).toEqual({ [retained.id]: "retained-stream" });
+    expect(state.sessionUsageById).toEqual({ [retained.id]: { totalTokens: 20 } });
+    expect(state.pendingOperations).toEqual({ "retained-operation": "retained-message" });
+    expect(state.workspaces[0].sessionCount).toBe(1);
+  });
 });
 
 describe("bootstrap selection reconciliation", () => {

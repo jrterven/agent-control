@@ -55,6 +55,29 @@ export async function clearDraft(sessionId: string) {
   await db.drafts.delete(sessionId);
 }
 
+/** Invalidate route-bearing offline projections without removing chat drafts or transcripts. */
+export async function invalidatePrivateSnapshots() {
+  await db.transaction("rw", db.offlineSnapshots, db.shellSnapshots, async () => {
+    await db.offlineSnapshots.delete("latest");
+    await db.shellSnapshots.delete("latest");
+  });
+}
+
+/** Remove every browser-owned copy of sessions deleted by a profile lifecycle operation. */
+export async function clearSessionLocalData(sessionIds: string[]) {
+  const ids = [...new Set(sessionIds.filter(Boolean))];
+  await db.transaction("rw", db.drafts, db.transcripts, db.offlineSnapshots, db.shellSnapshots, async () => {
+    if (ids.length) {
+      await db.drafts.bulkDelete(ids);
+      await db.transcripts.bulkDelete(ids);
+    }
+    // Both snapshots embed profile/session metadata. Dropping them closes the
+    // window in which an offline PWA could resurrect a just-deleted agent.
+    await db.offlineSnapshots.delete("latest");
+    await db.shellSnapshots.delete("latest");
+  });
+}
+
 export async function savePreference(key: string, value: string) {
   await db.preferences.put({ key, value, updatedAt: Date.now() });
 }

@@ -42,3 +42,15 @@ authentication, profile timezone or required capability produces an explicit
 skip before that resource type is created. It never mutates Newton or Jarvis,
 never triggers a cron job, and cleanup considers only IDs returned to the same
 test run.
+
+Profile lifecycle verification is not part of that suite because it deletes an
+entire native profile. A manual release check may use only newly created,
+random `hc-lifecycle-<run-id>` profiles whose exact IDs are recorded before the
+first mutation. Both gateways must report a revision explicitly approved for
+durable delete and transfer; currently that means
+`4209d371aa1bb8840ce8447555bdd863a1a96c38` on both sides. Never substitute an
+existing user profile. Verify destination state before source deletion, clean
+only the two recorded temporary names, wait beyond one scheduler heartbeat and
+confirm that neither profile reappears. If either gateway is Hermes 0.20.5,
+skip the live profile test: its stale cron heartbeat can resurrect deleted
+profiles and makes cleanup unsafe.

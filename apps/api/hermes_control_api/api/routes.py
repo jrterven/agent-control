@@ -58,6 +58,10 @@ from ..schemas import (
     OperationView,
     ProfileCreate,
     ProfileCreateView,
+    ProfileDelete,
+    ProfileDeleteView,
+    ProfileMove,
+    ProfileMoveView,
     ProfileAvatarView,
     ProfileView,
     PromptRequest,
@@ -586,9 +590,13 @@ def bootstrap(
     mutable_profiles = app_services.settings.mutable_profiles
     interactive_profiles = app_services.settings.interactive_profiles
     capability_observed_at = datetime.now(timezone.utc)
-    trusted_gateways = {
-        row.id: trusted_gateway_source_sha(db, app_services, row.id) is not None
+    trusted_gateway_shas = {
+        row.id: trusted_gateway_source_sha(db, app_services, row.id)
         for row in gateways
+    }
+    trusted_gateways = {
+        gateway_id: source_sha is not None
+        for gateway_id, source_sha in trusted_gateway_shas.items()
     }
     profiles = list(db.scalars(select(ProfileRef).order_by(ProfileRef.display_name)).all())
     profile_speech_configurations = integration_service.profile_configurations(
@@ -647,6 +655,7 @@ def bootstrap(
             trusted_source_sha_configured=trusted_gateways.get(
                 row.gateway_id, False
             ),
+            trusted_source_sha=trusted_gateway_shas.get(row.gateway_id),
             managed_by_control=row.managed_by_control,
         )
         for row in profiles
@@ -711,6 +720,11 @@ def bootstrap(
                         "interrupt": False,
                         "cron": False,
                         "profiles": False,
+                        "profileCreate": False,
+                        "profileDelete": False,
+                        "profileExport": False,
+                        "profileImport": False,
+                        "profileTransfer": False,
                         "config": False,
                         "memory": False,
                     },
@@ -850,6 +864,7 @@ def public_capability_flags(
     mutable_profiles: list[str] | tuple[str, ...] | frozenset[str] = (),
     interactive_profiles: list[str] | tuple[str, ...] | frozenset[str] = (),
     trusted_source_sha_configured: bool = False,
+    trusted_source_sha: str | None = None,
     managed_by_control: bool = False,
 ) -> dict[str, bool]:
     raw = public_capability_set(
@@ -862,6 +877,21 @@ def public_capability_flags(
     )
     methods = set(raw["methods"])
     features = set(raw["features"])
+    version = raw.get("version")
+    trusted_revision = trusted_source_sha.casefold() if trusted_source_sha else None
+    lifecycle_delete_safe = (
+        version == "mock-1"
+        or trusted_revision
+        in {
+            "9978706e9303dbf990d90e744b131361449d73b9",
+            "4209d371aa1bb8840ce8447555bdd863a1a96c38",
+        }
+    )
+    lifecycle_transfer_safe = (
+        version == "mock-1"
+        or trusted_revision
+        == "4209d371aa1bb8840ce8447555bdd863a1a96c38"
+    )
     return {
         "realtime": "gateway.ping" in methods,
         "sessions": {"session.list", "session.create", "session.history"}.issubset(methods),
@@ -876,6 +906,13 @@ def public_capability_flags(
         "cronTrigger": "cron.trigger" in methods,
         "profiles": "profiles.list" in methods or "profiles" in features,
         "profileCreate": "profiles.create" in methods,
+        "profileDelete": lifecycle_delete_safe and "profiles.delete" in methods,
+        # Import/export can leave a native profile copy that requires delete
+        # for rollback. Do not expose either operation on revisions where
+        # deletion is not proven durable (notably Hermes 0.20.5).
+        "profileExport": lifecycle_delete_safe and "profiles.export" in methods,
+        "profileImport": lifecycle_delete_safe and "profiles.import" in methods,
+        "profileTransfer": lifecycle_transfer_safe and "profiles.transfer" in methods,
         "config": bool(methods & {"config.get", "config.set", "models.list", "commands.catalog"}),
         "memory": any(value.startswith("memory.") for value in methods),
     }
@@ -1086,9 +1123,10 @@ async def create_profile(
 ) -> ProfileCreateView:
     app_services = services(request)
     row = await ProfileService(app_services).create(db, user, payload)
-    trusted = trusted_gateway_source_sha(
+    trusted_source_sha = trusted_gateway_source_sha(
         db, app_services, row.gateway_id
-    ) is not None
+    )
+    trusted = trusted_source_sha is not None
     observed_at = datetime.now(timezone.utc)
     capability = fresh_profile_capabilities(
         row,
@@ -1130,9 +1168,40 @@ async def create_profile(
             mutable_profiles=app_services.settings.mutable_profiles,
             interactive_profiles=app_services.settings.interactive_profiles,
             trusted_source_sha_configured=trusted,
+            trusted_source_sha=trusted_source_sha,
             managed_by_control=row.managed_by_control,
         ),
         capability_set=capability_set,
+    )
+
+
+@router.delete("/profiles/{profile_id}", response_model=ProfileDeleteView)
+async def delete_profile(
+    profile_id: str,
+    payload: ProfileDelete,
+    request: Request,
+    _: AuthSession = Depends(require_csrf),
+    __: str = Depends(require_idempotency),
+    user: User = Depends(current_admin),
+    db: Session = Depends(get_db),
+) -> ProfileDeleteView:
+    return await ProfileService(services(request)).delete(
+        db, user, profile_id, payload
+    )
+
+
+@router.post("/profiles/{profile_id}/move", response_model=ProfileMoveView)
+async def move_profile(
+    profile_id: str,
+    payload: ProfileMove,
+    request: Request,
+    _: AuthSession = Depends(require_csrf),
+    __: str = Depends(require_idempotency),
+    user: User = Depends(current_admin),
+    db: Session = Depends(get_db),
+) -> ProfileMoveView:
+    return await ProfileService(services(request)).move(
+        db, user, profile_id, payload
     )
 
 

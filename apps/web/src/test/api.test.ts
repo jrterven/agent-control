@@ -235,6 +235,34 @@ describe("browser API boundary", () => {
     });
   });
 
+  it("moves and deletes profiles with exact confirmations and mutation protection", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ warnings: ["Review local paths"] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.moveProfile("profile/newton", "gateway-away", "newton", "csrf-memory-only");
+    await api.deleteProfile("profile/newton", "newton", "csrf-memory-only");
+
+    const [movePath, moveInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(movePath).toBe("/api/v1/profiles/profile%2Fnewton/move");
+    expect(moveInit.method).toBe("POST");
+    expect(JSON.parse(String(moveInit.body))).toEqual({ destinationGatewayId: "gateway-away", confirmation: "newton" });
+    expect(moveInit.headers).toEqual(expect.objectContaining({
+      "Idempotency-Key": expect.any(String),
+      "X-CSRF-Token": "csrf-memory-only",
+    }));
+
+    const [deletePath, deleteInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(deletePath).toBe("/api/v1/profiles/profile%2Fnewton");
+    expect(deleteInit.method).toBe("DELETE");
+    expect(JSON.parse(String(deleteInit.body))).toEqual({ confirmation: "newton" });
+    expect(deleteInit.headers).toEqual(expect.objectContaining({
+      "Idempotency-Key": expect.any(String),
+      "X-CSRF-Token": "csrf-memory-only",
+    }));
+  });
+
   it("uploads and removes an agent image through an authenticated binary boundary", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ avatarUrl: "/api/v1/profiles/profile-a/avatar?v=1" }), { status: 200, headers: { "Content-Type": "application/json" } }))

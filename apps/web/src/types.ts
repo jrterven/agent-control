@@ -22,6 +22,10 @@ export type CapabilityFlags = {
   cronTrigger?: boolean;
   profiles: boolean;
   profileCreate?: boolean;
+  profileDelete?: boolean;
+  profileExport?: boolean;
+  profileImport?: boolean;
+  profileTransfer?: boolean;
   config: boolean;
   memory: boolean;
 };

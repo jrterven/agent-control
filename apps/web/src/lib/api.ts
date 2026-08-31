@@ -42,6 +42,10 @@ export type ProfileCreateInput = {
   description: string;
 };
 
+export type ProfileLifecycleResult = {
+  warnings?: string[];
+};
+
 export type ElevenLabsIntegrationView = {
   configured: boolean;
   provider: "elevenlabs";
@@ -347,6 +351,16 @@ export const api = {
     method: "POST",
     headers: mutationHeaders(csrfToken),
     body: JSON.stringify(payload),
+  }),
+  moveProfile: (profileId: string, destinationGatewayId: string, confirmation: string, csrfToken?: string) => request<ProfileLifecycleResult>(`/profiles/${encodeURIComponent(profileId)}/move`, {
+    method: "POST",
+    headers: mutationHeaders(csrfToken),
+    body: JSON.stringify({ destinationGatewayId, confirmation }),
+  }),
+  deleteProfile: (profileId: string, confirmation: string, csrfToken?: string) => request<ProfileLifecycleResult>(`/profiles/${encodeURIComponent(profileId)}`, {
+    method: "DELETE",
+    headers: mutationHeaders(csrfToken),
+    body: JSON.stringify({ confirmation }),
   }),
   setProfileAvatar: (profileId: string, avatar: Blob | null, csrfToken?: string) => request<{ avatarUrl?: string | null }>(`/profiles/${encodeURIComponent(profileId)}/avatar`, {
     method: avatar ? "PUT" : "DELETE",

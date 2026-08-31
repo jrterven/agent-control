@@ -48,7 +48,7 @@ does not serve Hermes' SPA. A 404 at `/` is not a liveness failure.
 | Turns | `prompt.submit`, `prompt.background`, `session.steer`, `session.interrupt` | submit/interrupt required for MVP |
 | Recovery | `session.events.since`, `session.events.stats` | replay preferred; history rehydrate is fallback |
 | User gates | `approval.respond`, `clarify.respond`, `sudo.respond`, `secret.respond` | optional, surfaced only after matching request event |
-| Discovery/admin | `profiles.list`, `profiles.create`, `commands.catalog`, `models.list`, `config.get`, `config.set`, `reload.mcp`, `reload.env` | profile creation is mutation-gated; other methods optional |
+| Discovery/admin | `profiles.list`, `profiles.create`, `profiles.delete`, `profiles.export`, `profiles.import`, `profiles.transfer`, `commands.catalog`, `models.list`, `config.get`, `config.set`, `reload.mcp`, `reload.env` | every profile mutation is SHA/capability/policy gated; transfer compatibility is directional |
 | Delegation | `delegation.status`, `subagent.interrupt`, spawn-tree operations | optional |
 
 Important response contracts:
@@ -75,6 +75,34 @@ Important response contracts:
   with the new profile selected. It discards upstream filesystem/credential
   diagnostics, serializes creation per gateway, and reconciles ambiguous
   responses without blindly resending either mutation or prompt.
+- `profiles.delete` uses Hermes' native `DELETE /api/profiles/{name}` and then
+  reconciles `profiles.list`; Control never removes the profile directory
+  itself. It is disabled for Hermes 0.20.5 because the running multiplex cron
+  heartbeat can recreate a deleted profile. The corrected, currently audited
+  deletion contracts are Hermes 0.20.6 at source SHAs
+  `9978706e9303dbf990d90e744b131361449d73b9` and
+  `4209d371aa1bb8840ce8447555bdd863a1a96c38`. Cross-gateway transfer is
+  narrower and currently accepts only the corrected `4209d371… → 4209d371…`
+  pair.
+- `profiles.transfer` composes native export, bounded file download/upload and
+  native import. The archive is streamed through Control, capped at 100 MiB
+  and cleaned from both managed file roots. Control verifies profile presence,
+  session inventory/history structure, SOUL and paused cron inventory before
+  source deletion. Source and destination must both have a safe native delete
+  contract because rollback can delete the imported copy. The current audited
+  real pair is `4209d371… → 4209d371…`; mock mode has a separate synthetic
+  contract. No retry follows an ambiguous mutation. On that upstream revision,
+  importing a technical name that was previously deleted on the destination
+  can remain hidden by Hermes' `.deleted-profiles` tombstone. Control treats
+  the missing imported profile as a failed verification, keeps the source and
+  never claims cutover; the hidden destination directory may require native
+  operator cleanup before retrying with another destination or name.
+- A completed multiplex runtime can recreate a tombstoned shell with an empty
+  `state.db` after native delete. The audited live probe contained zero
+  sessions, messages and routes and the profile remained absent from list and
+  serve. This is logical deletion under the upstream 0.20.6 contract, not a
+  guarantee of physical forensic erasure; Control never removes that shell by
+  bypassing Hermes.
 - `session.events.since` returns `events`, `latest_seq`, `truncated`, `count`
   and `epoch`. Upstream buffers 512 events per session for at most 64 sessions.
 - `approval.request` supplies `request_id`, a redacted `command`, description,

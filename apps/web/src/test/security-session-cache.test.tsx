@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthBootstrap } from "../hooks";
 import { ApiError, api } from "../lib/api";
 import {
+  clearSessionLocalData,
   db,
   loadEncryptedTranscript,
   loadOfflineSnapshot,
@@ -186,6 +187,29 @@ describe("browser security state", () => {
     });
     await trimTranscriptCache();
     expect(await db.transcripts.get("too-large")).toBeUndefined();
+  });
+
+  it("purges deleted chats and snapshots without touching unrelated drafts or transcripts", async () => {
+    const now = Date.now();
+    await db.drafts.bulkPut([
+      { sessionId: "session-deleted", content: "delete me", updatedAt: now },
+      { sessionId: "session-retained", content: "keep me", updatedAt: now },
+    ]);
+    await db.transcripts.bulkPut([
+      { id: "session-deleted", workspaceId: "workspace", cipherText: "deleted", bytes: 7, itemCount: 1, expiresAt: now + 60_000, updatedAt: now },
+      { id: "session-retained", workspaceId: "workspace", cipherText: "retained", bytes: 8, itemCount: 1, expiresAt: now + 60_000, updatedAt: now },
+    ]);
+    await db.offlineSnapshots.put({ id: "latest", cipherText: "snapshot", expiresAt: now + 60_000, updatedAt: now });
+    await db.shellSnapshots.put({ id: "latest", cipherText: "shell", expiresAt: now + 60_000, updatedAt: now });
+
+    await clearSessionLocalData(["session-deleted", "session-deleted"]);
+
+    expect(await db.drafts.get("session-deleted")).toBeUndefined();
+    expect(await db.transcripts.get("session-deleted")).toBeUndefined();
+    expect((await db.drafts.get("session-retained"))?.content).toBe("keep me");
+    expect((await db.transcripts.get("session-retained"))?.cipherText).toBe("retained");
+    expect(await db.offlineSnapshots.count()).toBe(0);
+    expect(await db.shellSnapshots.count()).toBe(0);
   });
 
   it("logs out through the API and clears in-memory private state", async () => {

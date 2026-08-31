@@ -23,8 +23,13 @@ erDiagram
 ## Invariantes
 
 - Internal primary keys are UUIDs; Hermes identifiers are opaque strings.
-- `SESSION_LINK` has immutable `gateway_id`, `profile_name` and
-  `stored_session_id`, plus a nullable replaceable `runtime_session_id`.
+- During ordinary chat operation, `SESSION_LINK` keeps a stable
+  `(gateway_id, profile_name, stored_session_id)` route plus a nullable,
+  replaceable `runtime_session_id`. An explicitly confirmed agent move is the
+  only operation allowed to rewrite `gateway_id`: Control first verifies the
+  complete native profile at the destination, then atomically moves the
+  `PROFILE_REF`, every `SESSION_LINK` and every `AUTOMATION_REF` while keeping
+  their Control IDs and Hermes stored IDs.
 - `(gateway_id, profile_name, stored_session_id)` is unique.
 - A session belongs to zero or one workspace. Moving it is an audited local
   metadata operation and never edits Hermes internals.
@@ -70,6 +75,11 @@ erDiagram
   the marker rebuilds their audited mutation grant after a Control restart.
   Hermes remains authoritative for the actual profile, model, SOUL, skills and
   conversations.
+- Moving a profile preserves the `PROFILE_REF` primary key. Avatar data,
+  owner-scoped voice preference, workspace membership, pins and local display
+  metadata therefore remain attached to the same agent. Deleting a profile
+  removes that reference and all route metadata only after Hermes confirms the
+  native deletion; browser snapshots for the deleted route are invalidated.
 - `IDEMPOTENCY_OPERATION` records request hash, status and response reference;
   the same key with different input is rejected.
 - Messages remain in Hermes. Control may store only drafts, safe display

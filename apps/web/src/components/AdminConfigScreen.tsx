@@ -3,20 +3,26 @@ import {
   ChartLineUp,
   CheckCircle,
   Key,
+  ArrowsLeftRight,
+  HardDrives,
   PlugsConnected,
   Robot,
   ShieldCheck,
   SpinnerGap,
+  Trash,
   Wrench,
   WarningCircle,
 } from "@phosphor-icons/react";
 import { Badge, Button, Panel, Switch } from "@hermes-control/ui";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { api, type AdminResourceName, type AdminResourceView } from "../lib/api";
+import { api, ApiError, type AdminResourceName, type AdminResourceView } from "../lib/api";
+import { clearSessionLocalData, invalidatePrivateSnapshots } from "../lib/db";
+import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useAppStore } from "../store/appStore";
+import type { Gateway, Profile } from "../types";
 
-type AdminTab = "general" | "identity" | "tools" | "integrations" | "secrets";
+type AdminTab = "general" | "identity" | "tools" | "integrations" | "secrets" | "management";
 type SnapshotMap = Partial<Record<AdminResourceName, Record<string, unknown>>>;
 type Route = { gatewayId: string; profileName: string };
 
@@ -29,6 +35,7 @@ const tabDefinitions: Array<{
   { id: "tools", methods: ["skills.list", "toolsets.list"] },
   { id: "integrations", methods: ["mcp.list", "channels.list"] },
   { id: "secrets", methods: ["secrets.list"] },
+  { id: "management", methods: [] },
 ];
 
 const resourcesByTab: Record<AdminTab, AdminResourceName[]> = {
@@ -37,6 +44,7 @@ const resourcesByTab: Record<AdminTab, AdminResourceName[]> = {
   tools: ["skills", "toolsets"],
   integrations: ["mcp", "channels"],
   secrets: ["secrets"],
+  management: [],
 };
 
 const readMethods: Record<AdminResourceName, string> = {
@@ -66,6 +74,27 @@ function stringValue(value: unknown, fallback = "") {
 
 function booleanValue(value: unknown) {
   return value === true;
+}
+
+type LifecycleCapability = "profileDelete" | "profileExport" | "profileImport" | "profileTransfer";
+
+const lifecycleMethods: Record<LifecycleCapability, string> = {
+  profileDelete: "profiles.delete",
+  profileExport: "profiles.export",
+  profileImport: "profiles.import",
+  profileTransfer: "profiles.transfer",
+};
+
+function hasLifecycleCapability(profile: Profile | undefined, capability: LifecycleCapability) {
+  return Boolean(
+    profile?.capabilities?.[capability]
+    && profile.capabilitySet?.methods.includes(lifecycleMethods[capability]),
+  );
+}
+
+function lifecycleIsAdvertised(profile: Profile | undefined) {
+  return (Object.keys(lifecycleMethods) as LifecycleCapability[])
+    .some((capability) => hasLifecycleCapability(profile, capability));
 }
 
 function displayNumber(value: unknown, locale: string) {
@@ -297,6 +326,59 @@ function SecretsSection({ data, methods, busy, onSet, onDelete }: { data?: Recor
   return <Panel className="admin-section admin-secrets"><SectionHeader icon={<Key weight="duotone" />} title={t("adminConfig.secrets.title")} description={t("adminConfig.secrets.description")} badge={t("adminConfig.common.protected")} />{rows.length ? <div className="admin-resource-list">{rows.map((item) => <SecretRow key={stringValue(item.name)} item={item} canSet={methods.has("secrets.set")} canDelete={methods.has("secrets.delete")} busy={busy} onSet={onSet} onDelete={onDelete} />)}</div> : <EmptySection>{t("adminConfig.secrets.empty")}</EmptySection>}</Panel>;
 }
 
+function AgentManagementSection({
+  profile,
+  gateway,
+  canMove,
+  canDelete,
+  protectedProfile,
+  lifecycleBlocked,
+  destinations,
+  busy,
+  onMove,
+  onDelete,
+}: {
+  profile: Profile;
+  gateway?: Gateway;
+  canMove: boolean;
+  canDelete: boolean;
+  protectedProfile: boolean;
+  lifecycleBlocked: boolean;
+  destinations: Gateway[];
+  busy: boolean;
+  onMove: () => void;
+  onDelete: () => void;
+}) {
+  const { t } = useTranslation();
+  return <Panel className="admin-section agent-lifecycle-section">
+    <SectionHeader
+      icon={<HardDrives weight="duotone" />}
+      title={t("adminConfig.management.title")}
+      description={t("adminConfig.management.description")}
+      badge={protectedProfile ? t("adminConfig.management.protected") : t("adminConfig.management.managed")}
+    />
+    <dl className="agent-lifecycle-route">
+      <div><dt>{t("adminConfig.management.agent")}</dt><dd>{profile.displayName} · <code>{profile.technicalName}</code></dd></div>
+      <div><dt>{t("adminConfig.management.currentGateway")}</dt><dd>{gateway?.name ?? profile.gatewayId}</dd></div>
+    </dl>
+    <div className="agent-lifecycle-disclosure"><ShieldCheck weight="duotone" /><p>{t("adminConfig.management.transferDisclosure")}</p></div>
+    {protectedProfile ? <div className="agent-lifecycle-protected" role="status"><ShieldCheck weight="fill" /><p>{t("adminConfig.management.defaultProtected")}</p></div> : null}
+    {lifecycleBlocked ? <div className="agent-lifecycle-protected" role="status"><WarningCircle weight="fill" /><p>{t("adminConfig.management.reconcileBlocked")}</p></div> : null}
+    <div className="agent-lifecycle-actions">
+      <section>
+        <span><ArrowsLeftRight weight="duotone" /></span>
+        <div><h3>{t("adminConfig.management.moveTitle")}</h3><p>{destinations.length ? t("adminConfig.management.moveDescription") : t("adminConfig.management.noDestination")}</p></div>
+        <Button variant="secondary" disabled={!canMove || busy} onClick={onMove}>{t("adminConfig.management.move")}</Button>
+      </section>
+      <section className="is-danger">
+        <span><Trash weight="duotone" /></span>
+        <div><h3>{t("adminConfig.management.deleteTitle")}</h3><p>{t("adminConfig.management.deleteDescription")}</p></div>
+        <Button variant="danger" disabled={!canDelete || busy} onClick={onDelete}>{t("adminConfig.management.delete")}</Button>
+      </section>
+    </div>
+  </Panel>;
+}
+
 function useAdminRoute(): Route | undefined {
   const gatewayId = useAppStore((state) => state.selectedGatewayId);
   const profileId = useAppStore((state) => state.selectedProfileId);
@@ -312,19 +394,84 @@ export function AdminConfigScreen({ header }: { header: React.ReactNode }) {
   const selectedProfileId = useAppStore((state) => state.selectedProfileId);
   const selectGateway = useAppStore((state) => state.selectGateway);
   const selectProfile = useAppStore((state) => state.selectProfile);
+  const hydrateBootstrap = useAppStore((state) => state.hydrateBootstrap);
+  const removeSessions = useAppStore((state) => state.removeSessions);
   const csrfToken = useAppStore((state) => state.csrfToken);
   const offline = useAppStore((state) => state.authState === "offline");
+  const demoMode = useAppStore((state) => state.demoMode);
   const profile = profiles.find((item) => item.id === selectedProfileId);
+  const gateway = gateways.find((item) => item.id === profile?.gatewayId);
   const route = profile && selectedGatewayId ? { gatewayId: selectedGatewayId, profileName: profile.technicalName } : undefined;
   const methodKey = profile?.capabilitySet?.methods.join("\u001f") ?? "";
   const methods = useMemo(() => new Set(profile?.capabilitySet?.methods ?? []), [methodKey]);
-  const visibleTabs = useMemo(() => tabDefinitions.filter((tab) => tab.methods.some((method) => methods.has(method))), [methods]);
+  const protectedProfile = profile?.technicalName.toLowerCase() === "default";
+  const [blockedLifecycleProfileIds, setBlockedLifecycleProfileIds] = useState<Set<string>>(() => new Set());
+  const lifecycleBlocked = Boolean(profile && blockedLifecycleProfileIds.has(profile.id));
+  const lifecycleAdvertised = lifecycleIsAdvertised(profile);
+  const importGatewayIds = useMemo(() => new Set(
+    profiles
+      .filter((item) => (
+        hasLifecycleCapability(item, "profileImport")
+        && hasLifecycleCapability(item, "profileDelete")
+        && hasLifecycleCapability(item, "profileTransfer")
+      ))
+      .map((item) => item.gatewayId),
+  ), [profiles]);
+  const destinationGateways = useMemo(() => gateways.filter((item) => (
+    item.id !== profile?.gatewayId && importGatewayIds.has(item.id)
+  )), [gateways, importGatewayIds, profile?.gatewayId]);
+  const mutationsBlocked = offline || demoMode;
+  const canDeleteProfile = Boolean(
+    profile
+    && !protectedProfile
+    && !lifecycleBlocked
+    && !mutationsBlocked
+    && hasLifecycleCapability(profile, "profileDelete"),
+  );
+  const canMoveProfile = Boolean(
+    profile
+    && !protectedProfile
+    && !lifecycleBlocked
+    && !mutationsBlocked
+    && destinationGateways.length
+    && hasLifecycleCapability(profile, "profileDelete")
+    && hasLifecycleCapability(profile, "profileExport")
+    && hasLifecycleCapability(profile, "profileTransfer"),
+  );
+  const visibleTabs = useMemo(() => tabDefinitions.filter((tab) => (
+    tab.id === "management"
+      ? lifecycleAdvertised
+      : tab.methods.some((method) => methods.has(method))
+  )), [lifecycleAdvertised, methods]);
   const [activeTab, setActiveTab] = useState<AdminTab>("general");
   const [snapshots, setSnapshots] = useState<SnapshotMap>({});
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [lifecycleOutcomeError, setLifecycleOutcomeError] = useState("");
+  const [lifecycleDialogError, setLifecycleDialogError] = useState("");
   const [notice, setNotice] = useState("");
+  const [lifecycleWarnings, setLifecycleWarnings] = useState<string[]>([]);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moveGatewayId, setMoveGatewayId] = useState("");
+  const [moveConfirmation, setMoveConfirmation] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+
+  const closeMove = () => {
+    if (busy) return;
+    setMoveOpen(false);
+    setMoveConfirmation("");
+    setLifecycleDialogError("");
+  };
+  const closeDelete = () => {
+    if (busy) return;
+    setDeleteOpen(false);
+    setDeleteConfirmation("");
+    setLifecycleDialogError("");
+  };
+  const moveDialog = useOverlayDialog<HTMLDivElement>({ open: moveOpen, onClose: closeMove, mediaQuery: "(min-width: 0px)" });
+  const deleteDialog = useOverlayDialog<HTMLDivElement>({ open: deleteOpen, onClose: closeDelete, mediaQuery: "(min-width: 0px)" });
 
   useEffect(() => {
     if (!visibleTabs.some((tab) => tab.id === activeTab)) setActiveTab(visibleTabs[0]?.id ?? "general");
@@ -332,11 +479,19 @@ export function AdminConfigScreen({ header }: { header: React.ReactNode }) {
 
   useEffect(() => {
     setSnapshots({});
-    setNotice("");
     setError("");
+    setMoveOpen(false);
+    setMoveConfirmation("");
+    setDeleteOpen(false);
+    setDeleteConfirmation("");
+    setLifecycleDialogError("");
   }, [selectedGatewayId, selectedProfileId]);
 
   useEffect(() => {
+    if (activeTab === "management") {
+      setLoading(false);
+      return;
+    }
     if (!route || !visibleTabs.length || offline) return;
     let active = true;
     const resources = resourcesByTab[activeTab].filter((resource) => methods.has(readMethods[resource]));
@@ -376,20 +531,202 @@ export function AdminConfigScreen({ header }: { header: React.ReactNode }) {
     }
   };
 
+  const reconcileLifecycle = async (
+    source: Profile,
+    destinationGatewayId?: string,
+  ) => {
+    const previousSessionIds = useAppStore.getState().sessions.map((session) => session.id);
+    const next = await api.bootstrap();
+    const retainedSessionIds = new Set(next.sessions.map((session) => session.id));
+    const removedSessionIds = previousSessionIds.filter((sessionId) => !retainedSessionIds.has(sessionId));
+    removeSessions(removedSessionIds);
+    let localCacheWarning = false;
+    try {
+      await clearSessionLocalData(removedSessionIds);
+    } catch {
+      localCacheWarning = true;
+    }
+    hydrateBootstrap(next);
+    const retainedSource = next.profiles.find((item) => item.id === source.id);
+    const selected = destinationGatewayId
+      ? retainedSource?.gatewayId === destinationGatewayId
+        ? retainedSource
+        : next.profiles.find((item) => (
+          item.gatewayId === destinationGatewayId
+          && item.technicalName === source.technicalName
+        ))
+      : retainedSource
+        ?? next.profiles.find((item) => item.gatewayId === source.gatewayId)
+        ?? next.profiles[0];
+    if (selected) selectProfile(selected.id);
+    return localCacheWarning;
+  };
+
+  const invalidateSnapshots = async () => {
+    try {
+      await invalidatePrivateSnapshots();
+      return false;
+    } catch {
+      return true;
+    }
+  };
+
+  const purgeDeletedProfileSessions = async (source: Profile) => {
+    const sessionIds = useAppStore.getState().sessions
+      .filter((session) => session.profileId === source.id)
+      .map((session) => session.id);
+    removeSessions(sessionIds);
+    try {
+      await clearSessionLocalData(sessionIds);
+      return { localCacheWarning: false, sessionIds };
+    } catch {
+      return { localCacheWarning: true, sessionIds };
+    }
+  };
+
+  const reconcileAmbiguousLifecycle = async (source: Profile, destinationGatewayId?: string) => {
+    let localCacheWarning = await invalidateSnapshots();
+    try {
+      localCacheWarning = await reconcileLifecycle(source, destinationGatewayId);
+      setLifecycleOutcomeError(t("adminConfig.management.outcomeUnknown"));
+    } catch {
+      setLifecycleOutcomeError(t("adminConfig.management.outcomeUnknownRefresh"));
+    }
+    setLifecycleWarnings(localCacheWarning ? [t("adminConfig.management.localCacheWarning")] : []);
+  };
+
+  const moveAgent = async () => {
+    if (!profile || !canMoveProfile || busy || moveConfirmation !== profile.technicalName || !moveGatewayId) return;
+    const source = profile;
+    setBusy(true);
+    setError("");
+    setLifecycleOutcomeError("");
+    setLifecycleDialogError("");
+    setNotice("");
+    setLifecycleWarnings([]);
+    try {
+      const result = await api.moveProfile(source.id, moveGatewayId, moveConfirmation, csrfToken);
+      setMoveOpen(false);
+      setMoveConfirmation("");
+      const preRefreshCacheWarning = await invalidateSnapshots();
+      try {
+        const localCacheWarning = await reconcileLifecycle(source, moveGatewayId);
+        setLifecycleWarnings([
+          ...(result?.warnings ?? []),
+          ...(localCacheWarning ? [t("adminConfig.management.localCacheWarning")] : []),
+        ]);
+        setNotice(t("adminConfig.management.moved", { name: source.displayName }));
+        setActiveTab("management");
+      } catch {
+        setLifecycleWarnings(preRefreshCacheWarning ? [t("adminConfig.management.localCacheWarning")] : []);
+        setLifecycleOutcomeError(t("adminConfig.management.committedRefreshError", { action: t("adminConfig.management.movedAction") }));
+      }
+    } catch (cause) {
+      if (!(cause instanceof ApiError) || cause.code === "MUTATION_DELIVERY_UNKNOWN") {
+        setBlockedLifecycleProfileIds((current) => new Set(current).add(source.id));
+        setMoveOpen(false);
+        setMoveConfirmation("");
+        setLifecycleDialogError("");
+        await reconcileAmbiguousLifecycle(source, moveGatewayId);
+      } else {
+        setLifecycleDialogError(cause instanceof Error ? cause.message : t("adminConfig.errors.rejected"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteAgent = async () => {
+    if (!profile || !canDeleteProfile || busy || deleteConfirmation !== profile.technicalName) return;
+    const source = profile;
+    setBusy(true);
+    setError("");
+    setLifecycleOutcomeError("");
+    setLifecycleDialogError("");
+    setNotice("");
+    setLifecycleWarnings([]);
+    try {
+      const result = await api.deleteProfile(source.id, deleteConfirmation, csrfToken);
+      setDeleteOpen(false);
+      setDeleteConfirmation("");
+      const preRefreshCache = await purgeDeletedProfileSessions(source);
+      try {
+        let localCacheWarning = await reconcileLifecycle(source);
+        if (preRefreshCache.localCacheWarning) {
+          try {
+            await clearSessionLocalData(preRefreshCache.sessionIds);
+          } catch {
+            localCacheWarning = true;
+          }
+        }
+        setLifecycleWarnings([
+          ...(result?.warnings ?? []),
+          ...(localCacheWarning ? [t("adminConfig.management.localCacheWarning")] : []),
+        ]);
+        setNotice(t("adminConfig.management.deleted", { name: source.displayName }));
+      } catch {
+        setLifecycleWarnings(preRefreshCache.localCacheWarning ? [t("adminConfig.management.localCacheWarning")] : []);
+        setLifecycleOutcomeError(t("adminConfig.management.committedRefreshError", { action: t("adminConfig.management.deletedAction") }));
+      }
+    } catch (cause) {
+      if (!(cause instanceof ApiError) || cause.code === "MUTATION_DELIVERY_UNKNOWN") {
+        setBlockedLifecycleProfileIds((current) => new Set(current).add(source.id));
+        setDeleteOpen(false);
+        setDeleteConfirmation("");
+        setLifecycleDialogError("");
+        await reconcileAmbiguousLifecycle(source);
+      } else {
+        setLifecycleDialogError(cause instanceof Error ? cause.message : t("adminConfig.errors.rejected"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const profileOptions = profiles.filter((item) => item.gatewayId === selectedGatewayId);
 
   return <div className="page-wrap admin-config-page">
     {header}
-    <Panel className="admin-route-picker" aria-label={t("adminConfig.route.aria")}><label><span>{t("adminConfig.route.gateway")}</span><select value={selectedGatewayId} onChange={(event) => selectGateway(event.target.value)}>{gateways.map((gateway) => <option key={gateway.id} value={gateway.id}>{gateway.name}</option>)}</select></label><label><span>{t("adminConfig.route.profile")}</span><select value={selectedProfileId} onChange={(event) => selectProfile(event.target.value)}>{profileOptions.map((item) => <option key={item.id} value={item.id}>{item.displayName} · {item.technicalName}</option>)}</select></label><div><span>{t("adminConfig.route.contract")}</span><strong>{profile?.capabilitySet?.version ?? t("adminConfig.route.unverified")}</strong><small>{t("adminConfig.route.exactMethods", { count: methods.size })}</small></div></Panel>
+    <Panel className="admin-route-picker" aria-label={t("adminConfig.route.aria")}><label><span>{t("adminConfig.route.gateway")}</span><select value={selectedGatewayId} onChange={(event) => { setError(""); setLifecycleOutcomeError(""); setNotice(""); setLifecycleWarnings([]); selectGateway(event.target.value); }}>{gateways.map((gateway) => <option key={gateway.id} value={gateway.id}>{gateway.name}</option>)}</select></label><label><span>{t("adminConfig.route.profile")}</span><select value={selectedProfileId} onChange={(event) => { setError(""); setLifecycleOutcomeError(""); setNotice(""); setLifecycleWarnings([]); selectProfile(event.target.value); }}>{profileOptions.map((item) => <option key={item.id} value={item.id}>{item.displayName} · {item.technicalName}</option>)}</select></label><div><span>{t("adminConfig.route.contract")}</span><strong>{profile?.capabilitySet?.version ?? t("adminConfig.route.unverified")}</strong><small>{t("adminConfig.route.exactMethods", { count: methods.size })}</small></div></Panel>
     {offline ? <div className="success-banner success-banner--warning" role="status"><WarningCircle weight="fill" /> {t("adminConfig.offline")}</div> : null}
     {notice ? <div className="success-banner" role="status"><CheckCircle weight="fill" /> {notice}</div> : null}
-    {error ? <div className="admin-error" role="alert"><WarningCircle weight="fill" /><span><strong>{t("adminConfig.errors.heading")}</strong>{error}</span></div> : null}
+    {lifecycleWarnings.length ? <div className="agent-lifecycle-warnings" role="status"><WarningCircle weight="fill" /><div><strong>{t("adminConfig.management.warningsTitle")}</strong><ul>{lifecycleWarnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul></div></div> : null}
+    {lifecycleOutcomeError || error ? <div className="admin-error" role="alert"><WarningCircle weight="fill" /><span><strong>{t("adminConfig.errors.heading")}</strong>{lifecycleOutcomeError || error}</span></div> : null}
     {!visibleTabs.length ? <Panel className="safety-callout"><ShieldCheck size={24} /><div><strong>{t("adminConfig.unavailable.title")}</strong><p>{t("adminConfig.unavailable.body", { profile: profile?.displayName ?? t("adminConfig.unavailable.selectedProfile") })}</p></div></Panel> : <div className="config-layout"><aside aria-label={t("adminConfig.route.aria")}>{visibleTabs.map((tab) => <button key={tab.id} type="button" className={activeTab === tab.id ? "is-active" : ""} aria-current={activeTab === tab.id ? "page" : undefined} onClick={() => setActiveTab(tab.id)}>{t(`adminConfig.tabs.${tab.id}`)}</button>)}</aside><div className="config-sections" aria-busy={loading || busy}>{loading ? <div className="admin-loading" role="status"><SpinnerGap className="is-spinning" /> {t("adminConfig.loading")}</div> : null}
       {activeTab === "general" ? <>{methods.has("models.list") ? <ModelsSection data={snapshots.models} canWrite={methods.has("models.set") && !offline} busy={busy} onSave={(provider, model, confirmExpensiveModel) => route ? perform(() => api.adminSetModel(route.gatewayId, route.profileName, { provider, model, confirmExpensiveModel }, csrfToken), t("adminConfig.models.updated"), ["models", "config"]) : Promise.resolve(false)} /> : null}{methods.has("config.get") ? <ConfigDocumentSection data={snapshots.config} canWrite={methods.has("config.set") && !offline} busy={busy} onSave={(config) => route ? perform(() => api.adminUpdateConfig(route.gatewayId, route.profileName, config, csrfToken), t("adminConfig.config.applied"), ["config"]) : Promise.resolve(false)} /> : null}{methods.has("usage.get") ? <UsageSection data={snapshots.usage} /> : null}</> : null}
       {activeTab === "identity" && methods.has("soul.get") ? <SoulSection data={snapshots.soul} canWrite={methods.has("soul.set") && !offline} busy={busy} onSave={(content) => route ? perform(() => api.adminUpdateSoul(route.gatewayId, route.profileName, content, csrfToken), t("adminConfig.soul.updated"), ["soul"]) : Promise.resolve(false)} /> : null}
       {activeTab === "tools" ? <>{methods.has("skills.list") ? <ToggleCollection title={t("adminConfig.collections.skillsTitle")} description={t("adminConfig.collections.skillsDescription")} icon={<Wrench weight="duotone" />} rows={recordsFrom(snapshots.skills)} canToggle={methods.has("skills.toggle") && !offline} busy={busy} onToggle={(name, enabled) => route ? perform(() => api.adminToggleSkill(route.gatewayId, route.profileName, name, enabled, csrfToken), t("adminConfig.common.updated", { name }), ["skills"]) : Promise.resolve(false)} /> : null}{methods.has("toolsets.list") ? <ToggleCollection title={t("adminConfig.collections.toolsetsTitle")} description={t("adminConfig.collections.toolsetsDescription")} icon={<Wrench weight="duotone" />} rows={recordsFrom(snapshots.toolsets)} canToggle={methods.has("toolsets.toggle") && !offline} busy={busy} onToggle={(name, enabled) => route ? perform(() => api.adminToggleToolset(route.gatewayId, route.profileName, name, enabled, csrfToken), t("adminConfig.common.updated", { name }), ["toolsets"]) : Promise.resolve(false)} /> : null}</> : null}
       {activeTab === "integrations" ? <>{methods.has("mcp.list") ? <McpSection data={snapshots.mcp} methods={methods} busy={busy || offline} onAction={(action, message) => perform(action, message, ["mcp"])} /> : null}{methods.has("channels.list") ? <ChannelsSection data={snapshots.channels} methods={methods} busy={busy || offline} onAction={(action, message) => perform(action, message, ["channels"])} /> : null}</> : null}
       {activeTab === "secrets" && methods.has("secrets.list") ? <SecretsSection data={snapshots.secrets} methods={methods} busy={busy || offline} onSet={(name, value) => route ? perform(() => api.adminSetSecret(route.gatewayId, route.profileName, name, value, csrfToken), t("adminConfig.secrets.saved", { name }), ["secrets"]) : Promise.resolve(false)} onDelete={(name) => route ? perform(() => api.adminDeleteSecret(route.gatewayId, route.profileName, name, csrfToken), t("adminConfig.common.deleted", { name }), ["secrets"]) : Promise.resolve(false)} /> : null}
+      {activeTab === "management" && profile ? <AgentManagementSection profile={profile} gateway={gateway} canMove={canMoveProfile} canDelete={canDeleteProfile} protectedProfile={Boolean(protectedProfile)} lifecycleBlocked={lifecycleBlocked} destinations={destinationGateways} busy={busy} onMove={() => { setMoveGatewayId(destinationGateways[0]?.id ?? ""); setMoveConfirmation(""); setError(""); setLifecycleOutcomeError(""); setLifecycleDialogError(""); setMoveOpen(true); }} onDelete={() => { setDeleteConfirmation(""); setError(""); setLifecycleOutcomeError(""); setLifecycleDialogError(""); setDeleteOpen(true); }} /> : null}
     </div></div>}
+    {moveOpen && profile ? <div ref={moveDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="agent-move-title" aria-describedby={`agent-move-description${lifecycleDialogError ? " agent-move-error" : ""}`}>
+      <button type="button" className="modal-scrim" tabIndex={-1} aria-hidden="true" onClick={closeMove} />
+      <Panel className="form-modal agent-lifecycle-dialog">
+        <span className="eyebrow">{t("adminConfig.management.moveEyebrow")}</span>
+        <h2 id="agent-move-title">{t("adminConfig.management.moveDialogTitle", { name: profile.displayName })}</h2>
+        <p id="agent-move-description">{t("adminConfig.management.moveDialogDescription")}</p>
+        {lifecycleDialogError ? <p id="agent-move-error" className="form-error agent-lifecycle-dialog-error" role="alert"><WarningCircle /> {lifecycleDialogError}</p> : null}
+        <form onSubmit={(event) => { event.preventDefault(); void moveAgent(); }}>
+          <label className="hc-field"><span className="hc-field__label">{t("adminConfig.management.destinationGateway")}</span><select autoFocus value={moveGatewayId} onChange={(event) => { setMoveGatewayId(event.target.value); setLifecycleDialogError(""); }} disabled={busy}>{destinationGateways.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          <div className="agent-lifecycle-disclosure"><ShieldCheck weight="duotone" /><p>{t("adminConfig.management.transferDisclosure")}</p></div>
+          <label className="hc-field"><span className="hc-field__label">{t("adminConfig.management.typeToConfirm", { name: profile.technicalName })}</span><input className="hc-input" autoComplete="off" spellCheck={false} value={moveConfirmation} onChange={(event) => { setMoveConfirmation(event.target.value); setLifecycleDialogError(""); }} disabled={busy} /></label>
+          <div><Button type="button" variant="ghost" disabled={busy} onClick={closeMove}>{t("adminConfig.management.cancel")}</Button><Button type="submit" variant="primary" disabled={busy || !moveGatewayId || moveConfirmation !== profile.technicalName} leadingIcon={<ArrowsLeftRight />}>{busy ? t("adminConfig.management.moving") : t("adminConfig.management.confirmMove")}</Button></div>
+        </form>
+      </Panel>
+    </div> : null}
+    {deleteOpen && profile ? <div ref={deleteDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="agent-delete-title" aria-describedby={`agent-delete-description${lifecycleDialogError ? " agent-delete-error" : ""}`}>
+      <button type="button" className="modal-scrim" tabIndex={-1} aria-hidden="true" onClick={closeDelete} />
+      <Panel className="form-modal agent-lifecycle-dialog agent-lifecycle-delete-dialog">
+        <span className="eyebrow">{t("adminConfig.management.deleteEyebrow")}</span>
+        <h2 id="agent-delete-title">{t("adminConfig.management.deleteDialogTitle", { name: profile.displayName })}</h2>
+        <p id="agent-delete-description">{t("adminConfig.management.deleteDialogDescription")}</p>
+        {lifecycleDialogError ? <p id="agent-delete-error" className="form-error agent-lifecycle-dialog-error" role="alert"><WarningCircle /> {lifecycleDialogError}</p> : null}
+        <form onSubmit={(event) => { event.preventDefault(); void deleteAgent(); }}>
+          <label className="hc-field"><span className="hc-field__label">{t("adminConfig.management.typeToConfirm", { name: profile.technicalName })}</span><input className="hc-input" autoFocus autoComplete="off" spellCheck={false} value={deleteConfirmation} onChange={(event) => { setDeleteConfirmation(event.target.value); setLifecycleDialogError(""); }} disabled={busy} /></label>
+          <div><Button type="button" variant="ghost" disabled={busy} onClick={closeDelete}>{t("adminConfig.management.cancel")}</Button><Button type="submit" variant="danger" disabled={busy || deleteConfirmation !== profile.technicalName} leadingIcon={<Trash />}>{busy ? t("adminConfig.management.deleting") : t("adminConfig.management.confirmDelete")}</Button></div>
+        </form>
+      </Panel>
+    </div> : null}
   </div>;
 }

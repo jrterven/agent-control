@@ -87,6 +87,14 @@ function profileWritePolicy(profile: Profile, t: (key: string) => string) {
   return t("agentsPage.fullConversation");
 }
 
+function hasProfileLifecycleConfiguration(profile: Profile) {
+  const methods = new Set(profile.capabilitySet?.methods ?? []);
+  return Boolean(
+    (profile.capabilities?.profileDelete && methods.has("profiles.delete"))
+    || (profile.capabilities?.profileTransfer && methods.has("profiles.transfer")),
+  );
+}
+
 type AgentCreateValues = {
   gatewayId: string;
   technicalName: string;
@@ -469,7 +477,7 @@ export function AgentsScreen() {
           <Panel key={profile.id} className={cx("agent-card", profile.id === selectedProfileId && "is-selected")}>
             <header><ProfileAvatar profile={profile} size="card" fallback="robot" /><span><strong>{profile.displayName}</strong><small>{profile.technicalName}</small></span><Badge tone={profile.status === "ready" ? "positive" : "warning"}>{profile.status === "ready" ? t("agentsPage.available") : profile.status === "busy" ? t("agentsPage.working") : t("agentsPage.unconfigured")}</Badge></header>
             <dl><div><dt>{t("agentsPage.model")}</dt><dd>{profile.model}</dd></div><div><dt>{t("agentsPage.functions")}</dt><dd>{profileWritePolicy(profile, t)}</dd></div></dl>
-            <div className="agent-card__actions"><Button variant={profile.id === selectedProfileId ? "primary" : "secondary"} onClick={() => selectProfile(profile.id)}>{profile.id === selectedProfileId ? t("agentsPage.active") : t("agentsPage.use")}</Button>{profile.capabilities?.config ? <Link to="/config" className="hc-button hc-button--ghost hc-button--md">{t("agentsPage.viewConfig")}</Link> : null}{canEditAvatars ? <Button variant="ghost" leadingIcon={<PencilSimple />} onClick={() => openAvatarEditor(profile)}>{t("agentsPage.editImage")}</Button> : null}</div>
+            <div className="agent-card__actions"><Button variant={profile.id === selectedProfileId ? "primary" : "secondary"} onClick={() => selectProfile(profile.id)}>{profile.id === selectedProfileId ? t("agentsPage.active") : t("agentsPage.use")}</Button>{profile.capabilities?.config || hasProfileLifecycleConfiguration(profile) ? <Link to="/config" onClick={() => selectProfile(profile.id)} className="hc-button hc-button--ghost hc-button--md">{t("agentsPage.viewConfig")}</Link> : null}{canEditAvatars ? <Button variant="ghost" leadingIcon={<PencilSimple />} onClick={() => openAvatarEditor(profile)}>{t("agentsPage.editImage")}</Button> : null}</div>
           </Panel>
         ))}
       </div>

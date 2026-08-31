@@ -702,6 +702,31 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .admin-error > span { display: grid; font-size: 12px; }
 .admin-loading { min-height: 50px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--muted); }
 .admin-loading svg { color: var(--accent); }
+.agent-lifecycle-section { overflow: hidden; }
+.agent-lifecycle-route { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0 0 12px; }
+.agent-lifecycle-route > div { min-width: 0; display: grid; gap: 3px; padding: 12px; border-radius: 11px; background: var(--surface-2); }
+.agent-lifecycle-route dt { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.agent-lifecycle-route dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-weight: 680; }
+.agent-lifecycle-route code { color: var(--muted-strong); font-size: 11px; }
+.agent-lifecycle-disclosure, .agent-lifecycle-protected { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 12px; padding: 12px; border: 1px solid var(--border); border-radius: 11px; color: var(--muted); background: var(--surface-1); font-size: 12px; line-height: 1.5; }
+.agent-lifecycle-disclosure svg, .agent-lifecycle-protected svg { flex: 0 0 auto; margin-top: 1px; color: var(--accent); font-size: 20px; }
+.agent-lifecycle-disclosure p, .agent-lifecycle-protected p { margin: 0; }
+.agent-lifecycle-protected { color: var(--warning-text); border-color: var(--warning-border); background: var(--warning-surface); }
+.agent-lifecycle-protected svg { color: var(--warning-text); }
+.agent-lifecycle-actions { display: grid; gap: 10px; }
+.agent-lifecycle-actions > section { min-width: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 13px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-0); }
+.agent-lifecycle-actions > section > span { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; color: var(--accent); background: var(--accent-soft); font-size: 21px; }
+.agent-lifecycle-actions h3 { margin: 0; font-size: 14px; }
+.agent-lifecycle-actions p { margin: 3px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.agent-lifecycle-actions > section.is-danger { border-color: var(--danger-border); background: var(--danger-surface); }
+.agent-lifecycle-actions > section.is-danger > span { color: var(--danger-text); background: color-mix(in srgb, var(--danger-text) 12%, transparent); }
+.agent-lifecycle-warnings { min-height: 54px; display: flex; align-items: flex-start; gap: 10px; margin: -8px 0 18px; padding: 11px 14px; color: var(--warning-text); border: 1px solid var(--warning-border); border-radius: 12px; background: var(--warning-surface); }
+.agent-lifecycle-warnings > svg { flex: 0 0 auto; margin-top: 2px; }
+.agent-lifecycle-warnings ul { margin: 4px 0 0; padding-left: 18px; color: var(--muted-strong); font-size: 12px; }
+.agent-lifecycle-dialog { width: min(540px, 100%); }
+.form-modal > .agent-lifecycle-dialog-error { margin: 0 0 16px; padding: 10px 12px; color: var(--danger-text); border: 1px solid var(--danger-border); border-radius: 10px; background: var(--danger-surface); }
+.agent-lifecycle-delete-dialog { border-color: var(--danger-border); }
+.agent-lifecycle-delete-dialog .eyebrow { color: var(--danger-text); }
 .is-spinning { animation: spin 800ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .health-hero { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; padding: 20px; border: 1px solid var(--success-border); border-radius: 16px; background: var(--success-surface); }
@@ -929,6 +954,8 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
   .admin-form-grid { grid-template-columns: 1fr; }
   .admin-code-editor { min-height: 210px !important; }
   .admin-section__header > .hc-badge { display: none; }
+  .agent-lifecycle-actions > section { grid-template-columns: 42px minmax(0, 1fr); }
+  .agent-lifecycle-actions > section > .hc-button { width: 100%; grid-column: 1 / -1; }
   .capability-table > div { grid-template-columns: 1fr; }
   .search-result { grid-template-columns: 38px minmax(0, 1fr); }
   .search-result__meta { display: none; }
@@ -967,6 +994,7 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
   .admin-section { padding: 15px; }
   .admin-section__header { margin-bottom: 15px; }
   .admin-metrics { grid-template-columns: 1fr 1fr; }
+  .agent-lifecycle-route { grid-template-columns: 1fr; }
   .admin-resource-row, .admin-secret-row { grid-template-columns: minmax(0, 1fr) auto; padding: 11px; }
   .admin-row-actions { justify-content: stretch; }
   .admin-row-actions > .hc-button { flex: 1; }

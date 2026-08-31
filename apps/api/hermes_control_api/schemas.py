@@ -280,6 +280,44 @@ class ProfileCreateView(ApiModel):
     capability_set: dict[str, Any] = Field(default_factory=dict)
 
 
+class ProfileDelete(ApiModel):
+    """Destructive confirmation bound to the immutable Hermes profile name."""
+
+    confirmation: str = Field(min_length=1, max_length=120)
+
+
+class ProfileMove(ApiModel):
+    destination_gateway_id: str = Field(min_length=1, max_length=36)
+    confirmation: str = Field(min_length=1, max_length=120)
+
+
+class ProfileLifecycleCounts(ApiModel):
+    sessions: int = Field(ge=0)
+    automations: int = Field(ge=0)
+    automation_runs: int = Field(ge=0)
+    idempotency_operations: int = Field(default=0, ge=0)
+
+
+class ProfileDeleteView(ApiModel):
+    profile_id: str
+    technical_name: str
+    source_gateway_id: str
+    status: Literal["deleted"] = "deleted"
+    deleted: ProfileLifecycleCounts
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ProfileMoveView(ApiModel):
+    profile_id: str
+    technical_name: str
+    source_gateway_id: str
+    destination_gateway_id: str
+    status: Literal["moved"] = "moved"
+    moved: ProfileLifecycleCounts
+    preserved_session_ids: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ProfileAvatarView(ApiModel):
     avatar_url: str | None = None
 

@@ -242,6 +242,58 @@ New profiles start with empty memory and history and use the gateway-managed
 inference authentication pool. A Telegram bot or channel is not created
 automatically; channel setup remains a separate provider administration task.
 
+### Move or delete an agent
+
+Open **Agents → View configuration → Manage agent**. The section appears only
+when the selected profile and gateway advertise the exact audited native
+Hermes operations and the operator policy allows them.
+
+- **Move agent** exports the native profile, streams it directly between the
+  two private gateways without storing the archive in Agent Control, verifies
+  the destination, and only then deletes the source. The Control agent ID,
+  avatar, voice preference, chats, workspace membership, session IDs and cron
+  references remain the same.
+- **Delete agent** permanently removes the native Hermes profile and then its
+  Agent Control chats, automations and cached route data.
+
+Both actions require typing the exact technical profile name. The `default`
+profile is protected, and a profile with an active chat, prompt, approval,
+clarification or automation run cannot be moved or deleted. New chat, cron and
+configuration writes share the same lifecycle lock, so work cannot start in
+the middle of an export or cutover.
+
+Hermes profile export preserves identity, configuration, memory, sessions,
+skills, plugins and cron state, but deliberately excludes `.env`, `auth.json`
+and secret-shaped text. The destination uses its own gateway credentials.
+Machine-local paths, external files, MCP binaries and CLI tools must already
+exist or be adjusted on the destination. Archives larger than 100 MiB are
+rejected before import.
+
+Compatibility is fail-closed and directional. Native delete is currently
+audited for Hermes 0.20.6 revisions `9978706e…` and `4209d371…`; moving an
+agent is narrower and currently requires `4209d371…` on both source and
+destination. Hermes 0.20.5 can recreate a deleted profile from its cron
+heartbeat, so Agent Control intentionally hides delete and transfer for that
+revision. Upgrade Hermes through its own maintenance process before using an
+affected gateway; deploying Agent Control never updates Hermes.
+
+On Hermes 0.20.6, reusing a technical profile name that was already deleted on
+the destination can leave the imported copy hidden by Hermes' native
+`.deleted-profiles` tombstone. Agent Control treats that as a failed
+verification, preserves the source agent and never claims a cutover. The
+destination may require native operator cleanup before retrying with a
+different gateway or technical name.
+
+A completed runtime may also leave a tombstoned, empty `state.db` shell after
+native deletion. It is not an active or recoverable agent and Hermes neither
+lists nor serves it, but Agent Control does not delete provider files directly.
+If physical forensic erasure is required, stop `hermes serve` and follow the
+host maintenance procedure for that exact tombstoned shell.
+
+If delivery becomes ambiguous, the dialog closes, route snapshots are
+invalidated and Agent Control reconciles the available state. It does not send
+the destructive operation again with a new idempotency key.
+
 ## Chat attachments
 
 Use the **+** at the left of the message composer to add an image or a supported

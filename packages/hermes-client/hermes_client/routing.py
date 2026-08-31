@@ -56,7 +56,6 @@ class ProviderPool:
         if providers:
             await asyncio.gather(*(provider.close() for provider in providers))
 
-
 class HermesSessionRouter:
     """Serializes route changes and prevents cross-profile session leakage."""
 
@@ -84,6 +83,46 @@ class HermesSessionRouter:
         self._owner_generation: OrderedDict[tuple[str, str], str] = OrderedDict()
         self._max_routes = 2_048
         self._max_receipts = 4_096
+
+    def purge_profile(self, gateway_id: str, profile_name: str) -> None:
+        """Forget every ephemeral route owned by one gateway/profile pair.
+
+        Profile deletion and migration preserve durable state in Hermes (or
+        intentionally remove it), but runtime ids, prompt receipts and resume
+        locks are process-local. Keeping any of them after the profile route
+        disappears could bind a later profile with the same name to stale
+        work. Active lifecycle operations are rejected before this method is
+        called; cancellation below is a final fail-closed guard.
+        """
+
+        prefix = (gateway_id, profile_name)
+        for key, task in tuple(self._forced_runtime.items()):
+            if key[:2] == prefix:
+                self._forced_runtime.pop(key, None)
+                if not task.done():
+                    task.cancel()
+        self._receipts = OrderedDict(
+            (key, value) for key, value in self._receipts.items() if key[:2] != prefix
+        )
+        self._validated_runtime = OrderedDict(
+            (key, value)
+            for key, value in self._validated_runtime.items()
+            if key[:2] != prefix
+        )
+        self._runtime_owner = OrderedDict(
+            (key, value)
+            for key, value in self._runtime_owner.items()
+            if key[:2] != prefix
+        )
+        self._owner_generation.pop(prefix, None)
+        for mapping in (self._route_locks, self._recovery_locks):
+            for key, lock in tuple(mapping.items()):
+                if (
+                    key[:2] == prefix
+                    and not lock.locked()
+                    and not getattr(lock, "_waiters", None)
+                ):
+                    mapping.pop(key, None)
 
     @staticmethod
     def assert_route(route: SessionRoute, connection: ProviderConnection) -> None:

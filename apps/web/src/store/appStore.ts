@@ -68,6 +68,7 @@ type AppState = {
   addSession: (session: SessionSummary) => void;
   updateSession: (sessionId: string, update: Partial<SessionSummary>) => void;
   removeSession: (sessionId: string) => void;
+  removeSessions: (sessionIds: string[]) => void;
   setSessionUsage: (sessionId: string, usage?: SessionUsage) => void;
   upsertApproval: (request: ApprovalRequest) => void;
   updateApproval: (sessionId: string, requestId: string, update: Partial<ApprovalRequest>) => void;
@@ -108,6 +109,53 @@ const emptyPrivateState = {
   streamingBySession: {} as Record<string, string>,
   messages: [] as ChatMessage[],
 };
+
+function withoutSessions(state: AppState, sessionIds: Set<string>): Partial<AppState> {
+  if (!sessionIds.size) return {};
+  const removed = state.sessions.filter((session) => sessionIds.has(session.id));
+  const sessions = state.sessions.filter((session) => !sessionIds.has(session.id));
+  const removedMessageIds = new Set(
+    state.messages.filter((message) => sessionIds.has(message.sessionId)).map((message) => message.id),
+  );
+  const streamingBySession = { ...state.streamingBySession };
+  const sessionUsageById = { ...state.sessionUsageById };
+  const approvalsBySession = { ...state.approvalsBySession };
+  const clarificationsBySession = { ...state.clarificationsBySession };
+  sessionIds.forEach((sessionId) => {
+    delete streamingBySession[sessionId];
+    delete sessionUsageById[sessionId];
+    delete approvalsBySession[sessionId];
+    delete clarificationsBySession[sessionId];
+  });
+  const pendingOperations = Object.fromEntries(
+    Object.entries(state.pendingOperations).filter(([, messageId]) => !removedMessageIds.has(messageId)),
+  );
+  const selectedSessionId = sessionIds.has(state.selectedSessionId)
+    ? sessions.find((session) => (
+      session.profileId === state.selectedProfileId
+      && (session.workspaceId ?? "") === state.selectedWorkspaceId
+    ))?.id ?? ""
+    : state.selectedSessionId;
+  const removedByWorkspace = new Map<string, number>();
+  removed.forEach((session) => {
+    if (!session.workspaceId) return;
+    removedByWorkspace.set(session.workspaceId, (removedByWorkspace.get(session.workspaceId) ?? 0) + 1);
+  });
+  return {
+    sessions,
+    selectedSessionId,
+    messages: state.messages.filter((message) => !sessionIds.has(message.sessionId)),
+    sessionUsageById,
+    approvalsBySession,
+    clarificationsBySession,
+    streamingBySession,
+    pendingOperations,
+    workspaces: state.workspaces.map((workspace) => {
+      const count = removedByWorkspace.get(workspace.id) ?? 0;
+      return count ? { ...workspace, sessionCount: Math.max(0, workspace.sessionCount - count) } : workspace;
+    }),
+  };
+}
 
 export const useAppStore = create<AppState>((set) => ({
   authState: "checking",
@@ -224,45 +272,8 @@ export const useAppStore = create<AppState>((set) => ({
         : state.selectedWorkspaceId,
     };
   }),
-  removeSession: (sessionId) => set((state) => {
-    const removed = state.sessions.find((session) => session.id === sessionId);
-    const sessions = state.sessions.filter((session) => session.id !== sessionId);
-    const removedMessageIds = new Set(
-      state.messages.filter((message) => message.sessionId === sessionId).map((message) => message.id),
-    );
-    const streamingBySession = { ...state.streamingBySession };
-    delete streamingBySession[sessionId];
-    const sessionUsageById = { ...state.sessionUsageById };
-    delete sessionUsageById[sessionId];
-    const approvalsBySession = { ...state.approvalsBySession };
-    delete approvalsBySession[sessionId];
-    const clarificationsBySession = { ...state.clarificationsBySession };
-    delete clarificationsBySession[sessionId];
-    const pendingOperations = Object.fromEntries(
-      Object.entries(state.pendingOperations).filter(([, messageId]) => !removedMessageIds.has(messageId)),
-    );
-    const selectedSessionId = state.selectedSessionId === sessionId
-      ? sessions.find((session) => (
-        session.profileId === state.selectedProfileId
-        && (session.workspaceId ?? "") === state.selectedWorkspaceId
-      ))?.id ?? ""
-      : state.selectedSessionId;
-    return {
-      sessions,
-      selectedSessionId,
-      messages: state.messages.filter((message) => message.sessionId !== sessionId),
-      sessionUsageById,
-      approvalsBySession,
-      clarificationsBySession,
-      streamingBySession,
-      pendingOperations,
-      workspaces: removed?.workspaceId
-        ? state.workspaces.map((workspace) => workspace.id === removed.workspaceId
-          ? { ...workspace, sessionCount: Math.max(0, workspace.sessionCount - 1) }
-          : workspace)
-        : state.workspaces,
-    };
-  }),
+  removeSession: (sessionId) => set((state) => withoutSessions(state, new Set([sessionId]))),
+  removeSessions: (sessionIds) => set((state) => withoutSessions(state, new Set(sessionIds))),
   setSessionUsage: (sessionId, usage) => set((state) => {
     const sessionUsageById = { ...state.sessionUsageById };
     if (usage) sessionUsageById[sessionId] = usage;

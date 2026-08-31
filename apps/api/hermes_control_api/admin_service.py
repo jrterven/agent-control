@@ -14,7 +14,9 @@ from .services import (
     GatewayService,
     NotFoundError,
     audit,
+    profile_route_guard,
     require_capability,
+    require_profile_route_ref,
 )
 
 
@@ -76,23 +78,27 @@ class AdminResourceService:
         call: Callable[[HermesProvider], Awaitable[AdminResourceSnapshot]],
         target_id: str | None = None,
     ) -> AdminResourceSnapshot:
-        provider = await self.provider(
-            db,
-            gateway_id=gateway_id,
-            profile_name=profile_name,
-            capability=capability,
-        )
-        result = await self._translate(call(provider))
-        audit(
-            db,
-            actor=actor,
-            action=f"admin.{resource}.{action}",
-            target_type=resource,
-            target_id=target_id,
-            details={"gatewayId": gateway_id, "profile": profile_name},
-        )
-        db.commit()
-        return result
+        async with profile_route_guard(
+            self.services, gateway_id, profile_name
+        ):
+            require_profile_route_ref(db, gateway_id, profile_name)
+            provider = await self.provider(
+                db,
+                gateway_id=gateway_id,
+                profile_name=profile_name,
+                capability=capability,
+            )
+            result = await self._translate(call(provider))
+            audit(
+                db,
+                actor=actor,
+                action=f"admin.{resource}.{action}",
+                target_type=resource,
+                target_id=target_id,
+                details={"gatewayId": gateway_id, "profile": profile_name},
+            )
+            db.commit()
+            return result
 
     @staticmethod
     async def _translate(

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { MouseEventHandler, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
 import { AgentsScreen } from "../screens/Screens";
@@ -11,6 +12,7 @@ const prepareAvatar = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...await importOriginal<typeof import("@tanstack/react-router")>(),
+  Link: ({ children, className, onClick }: { children: ReactNode; className?: string; onClick?: MouseEventHandler<HTMLAnchorElement> }) => <a href="/config" className={className} onClick={(event) => { event.preventDefault(); onClick?.(event); }}>{children}</a>,
   useNavigate: () => navigate,
 }));
 
@@ -294,6 +296,24 @@ describe("new agent flow", () => {
     await waitFor(() => expect(upload).toHaveBeenCalledWith(sourceProfile.id, expect.any(Blob), "csrf-memory-only"));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Imagen de Newton" })).not.toBeInTheDocument());
     expect(useAppStore.getState().profiles[0].avatarUrl).toBe(avatarUrl);
+  });
+
+  it("selects the card's profile before opening its configuration", async () => {
+    const manageableProfile: Profile = {
+      ...createdProfile,
+      capabilities: { ...createdProfile.capabilities!, profileDelete: true },
+      capabilitySet: { protocol: "dashboard-rest", version: "0.20.5", methods: ["profiles.delete"], features: [] },
+    };
+    useAppStore.setState({ profiles: [sourceProfile, manageableProfile] });
+    const user = userEvent.setup();
+
+    render(<AgentsScreen />);
+    const card = screen.getByText("Researcher").closest(".agent-card");
+    expect(card).not.toBeNull();
+    await user.click(within(card as HTMLElement).getByRole("link", { name: "Ver configuración" }));
+
+    expect(useAppStore.getState().selectedProfileId).toBe(manageableProfile.id);
+    expect(useAppStore.getState().selectedGatewayId).toBe(manageableProfile.gatewayId);
   });
 
   it("retries setup after a transient session failure without creating a duplicate profile", async () => {

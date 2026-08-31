@@ -187,15 +187,37 @@ async def test_reported_sha_that_contradicts_operator_anchor_disables_writes(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("version", "trusted_sha"),
+    ("version", "trusted_sha", "expected_profile_methods"),
     [
-        ("0.20.5", AUDITED_0205_SHA),
-        ("0.20.6", AUDITED_0206_SHA),
-        ("0.20.6", AUDITED_MAC_0206_SHA),
+        ("0.20.5", AUDITED_0205_SHA, {"profiles.create"}),
+        (
+            "0.20.6",
+            AUDITED_0206_SHA,
+            {
+                "profiles.create",
+                "profiles.delete",
+                "profiles.export",
+                "profiles.import",
+            },
+        ),
+        (
+            "0.20.6",
+            AUDITED_MAC_0206_SHA,
+            {
+                "profiles.create",
+                "profiles.delete",
+                "profiles.export",
+                "profiles.import",
+                "profiles.transfer",
+            },
+        ),
     ],
 )
 async def test_audited_real_provider_uses_rest_cron_probe_and_hides_memory(
-    monkeypatch, version: str, trusted_sha: str
+    monkeypatch,
+    version: str,
+    trusted_sha: str,
+    expected_profile_methods: set[str],
 ):
     provider = HermesGatewayProvider(
         _connection(trusted_source_sha=trusted_sha)
@@ -233,9 +255,52 @@ async def test_audited_real_provider_uses_rest_cron_probe_and_hides_memory(
     assert "cron.list" in capabilities.methods
     assert "cron.create" in capabilities.methods
     assert "session.create" in capabilities.methods
-    assert "profiles.create" in capabilities.methods
+    profile_methods = {
+        "profiles.create",
+        "profiles.delete",
+        "profiles.export",
+        "profiles.import",
+        "profiles.transfer",
+    }
+    assert capabilities.methods & profile_methods == expected_profile_methods
     assert {"approval.respond", "clarify.respond"}.issubset(capabilities.methods)
     assert not any(method.startswith("memory.") for method in capabilities.methods)
+
+
+@pytest.mark.asyncio
+async def test_unaudited_revision_never_advertises_profile_mutations(monkeypatch):
+    provider = HermesGatewayProvider(
+        _connection(trusted_source_sha="f" * 40)
+    )
+
+    async def fake_read(method: str, params=None):
+        return {}
+
+    async def fake_request(client, method: str, path: str, **kwargs):
+        assert client is provider.http
+        if path == "/api/status":
+            return {"version": "0.20.6"}
+        if path == "/api/cron/jobs":
+            return []
+        return {}
+
+    monkeypatch.setattr(provider, "_read", fake_read)
+    monkeypatch.setattr(provider_module, "bounded_json_request", fake_request)
+    try:
+        capabilities = await provider.capabilities()
+    finally:
+        await provider.close()
+
+    assert "profiles.list" in capabilities.methods
+    assert capabilities.methods.isdisjoint(
+        {
+            "profiles.create",
+            "profiles.delete",
+            "profiles.export",
+            "profiles.import",
+            "profiles.transfer",
+        }
+    )
 
 
 @pytest.mark.asyncio
