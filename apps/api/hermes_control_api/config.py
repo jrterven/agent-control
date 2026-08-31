@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     transcription_token_rate_window_seconds: int = Field(default=60, ge=10, le=3_600)
     speech_rate_limit: int = Field(default=30, ge=1, le=240)
     speech_rate_window_seconds: int = Field(default=60, ge=10, le=3_600)
+    push_vapid_subject: str = "mailto:agent-control@localhost.invalid"
     capability_ttl_seconds: int = Field(default=60, ge=5, le=3_600)
     capability_refresh_seconds: int = Field(default=30, ge=5, le=1_800)
     vault_key_b64: str | None = None
@@ -130,6 +131,17 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         if not re.fullmatch(r"[0-9a-f]{40}", normalized):
             raise ValueError("Hermes source SHA must contain exactly 40 hexadecimal characters")
+        return normalized
+
+    @field_validator("push_vapid_subject")
+    @classmethod
+    def validate_push_vapid_subject(cls, value: str) -> str:
+        normalized = value.strip()
+        if (
+            len(normalized) > 300
+            or not normalized.startswith(("mailto:", "https://"))
+        ):
+            raise ValueError("Push VAPID subject must be a mailto: or https:// URL")
         return normalized
 
     @field_validator("hermes_media_root", mode="before")

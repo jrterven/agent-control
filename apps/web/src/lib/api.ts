@@ -1,4 +1,4 @@
-import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, Gateway, Profile, RealtimeEvent, SearchResult, SessionSummary, Workspace } from "../types";
+import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, Gateway, Profile, PushNotificationConfig, RealtimeEvent, SearchResult, SessionSummary, Workspace } from "../types";
 
 export type AdminResourceName = "models" | "config" | "soul" | "skills" | "toolsets" | "mcp" | "channels" | "usage" | "secrets";
 
@@ -147,6 +147,7 @@ type SessionWire = {
   title?: string | null;
   status: string;
   pinnedAt?: string | null;
+  unread?: boolean;
   archivedAt?: string | null;
   updatedAt: string;
 };
@@ -200,6 +201,7 @@ function sessionFromWire(row: SessionWire, fallbackProfileId = ""): SessionSumma
     preview: "",
     updatedAt: row.updatedAt,
     pinnedAt: row.pinnedAt ?? undefined,
+    unread: row.unread === true,
     archived: Boolean(row.archivedAt),
   };
 }
@@ -302,6 +304,20 @@ export const api = {
   login: (username: string, password: string) => request<{ id: string; name: string; csrfToken?: string }>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
   logout: (csrfToken?: string) => request<void>("/auth/logout", { method: "POST", headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined }),
   bootstrap: () => request<BootstrapData>("/bootstrap"),
+  notificationConfig: () => request<PushNotificationConfig>("/notifications/config"),
+  subscribeNotifications: (
+    payload: { endpoint: string; keys: { p256dh: string; auth: string }; locale: "de" | "en" | "es" | "fr" | "pt" },
+    csrfToken?: string,
+  ) => request<{ id: string; enabled: boolean }>("/notifications/subscriptions", {
+    method: "POST",
+    headers: mutationHeaders(csrfToken),
+    body: JSON.stringify(payload),
+  }),
+  unsubscribeNotifications: (endpoint: string, csrfToken?: string) => request<void>("/notifications/subscriptions/current", {
+    method: "DELETE",
+    headers: mutationHeaders(csrfToken),
+    body: JSON.stringify({ endpoint }),
+  }),
   readiness: () => request<ReadinessView>("/ready"),
   audit: (limit = 50) => request<AuditEvent[]>(`/audit?limit=${encodeURIComponent(String(limit))}`),
   search: (
@@ -346,6 +362,10 @@ export const api = {
     body: JSON.stringify({ gatewayId, profileName }),
   }).then((rows) => rows.map((row) => sessionFromWire(row))),
   createSession: (profileId: string, workspaceId: string | undefined, csrfToken?: string) => request<SessionWire>("/sessions", { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID(), ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) }, body: JSON.stringify({ profileId, workspaceId }) }).then((row) => sessionFromWire(row, profileId)),
+  markSessionRead: (sessionId: string, csrfToken?: string) => request<SessionWire>(`/sessions/${encodeURIComponent(sessionId)}/read`, {
+    method: "POST",
+    headers: mutationHeaders(csrfToken),
+  }).then((row) => sessionFromWire(row)),
   archiveSession: (sessionId: string, csrfToken?: string) => request<SessionWire>(`/sessions/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     headers: mutationHeaders(csrfToken),

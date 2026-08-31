@@ -360,8 +360,34 @@ class SessionView(ApiModel):
     replay_epoch: str | None
     last_sequence: int
     pinned_at: datetime | None
+    unread: bool
     archived_at: datetime | None
     updated_at: datetime
+
+
+class PushNotificationConfigView(ApiModel):
+    available: bool = True
+    application_server_key: str
+
+
+class PushSubscriptionKeys(ApiModel):
+    p256dh: str = Field(min_length=40, max_length=180, pattern=r"^[A-Za-z0-9_-]+$")
+    auth: str = Field(min_length=16, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class PushSubscriptionCreate(ApiModel):
+    endpoint: str = Field(min_length=20, max_length=2_048)
+    keys: PushSubscriptionKeys
+    locale: Literal["de", "en", "es", "fr", "pt"] = "en"
+
+
+class PushSubscriptionDelete(ApiModel):
+    endpoint: str = Field(min_length=20, max_length=2_048)
+
+
+class PushSubscriptionView(ApiModel):
+    id: str
+    enabled: bool = True
 
 
 class SearchItemView(ApiModel):

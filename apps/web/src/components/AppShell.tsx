@@ -7,6 +7,7 @@ import { BottomNav } from "./BottomNav";
 import { CommandPalette } from "./CommandPalette";
 import { ConnectionBanner } from "./ConnectionBanner";
 import { LeftSidebar } from "./LeftSidebar";
+import { NotificationMenu } from "./NotificationMenu";
 import { TopBar } from "./TopBar";
 
 export function AppShell({ children, conversation = false }: { children: ReactNode; conversation?: boolean }) {
@@ -38,6 +39,7 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
         <main id="main-content" className={conversation ? "main-content main-content--conversation" : "main-content"}>{children}</main>
       </div>
       <ActivityPanel />
+      <NotificationMenu />
       <BottomNav />
       <CommandPalette />
     </div>

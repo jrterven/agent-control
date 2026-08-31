@@ -37,7 +37,8 @@ from ..integrations import (
     UserIntegrationService,
 )
 from ..realtime import terminal_status
-from ..models import AuditEvent, Automation, AutomationRun, AuthSession, Gateway, GatewayCredential, IdempotencyOperation, ProfileRef, RealtimeTicket, SessionLink, User, Workspace
+from ..models import AuditEvent, Automation, AutomationRun, AuthSession, Gateway, GatewayCredential, IdempotencyOperation, ProfileRef, PushSubscription, RealtimeTicket, SessionLink, User, Workspace
+from ..notifications import encrypted_subscription, endpoint_hash, push_endpoint_allowed
 from ..schemas import (
     AuthView,
     ApprovalResponseRequest,
@@ -60,6 +61,10 @@ from ..schemas import (
     ProfileAvatarView,
     ProfileView,
     PromptRequest,
+    PushNotificationConfigView,
+    PushSubscriptionCreate,
+    PushSubscriptionDelete,
+    PushSubscriptionView,
     SearchResponse,
     SessionCreate,
     SessionSyncRequest,
@@ -380,6 +385,7 @@ def session_view(db: Session, row: SessionLink) -> SessionView:
             # A rename is intentionally a Control-side label. Hermes remains
             # the source of truth for the canonical title and conversation.
             "title": row.display_title or row.title,
+            "updated_at": row.last_activity_at,
         }
     )
 
@@ -609,7 +615,7 @@ def bootstrap(
         db.scalars(
             select(SessionLink)
             .where(SessionLink.owner_id == user.id, SessionLink.archived_at.is_(None))
-            .order_by(SessionLink.updated_at.desc())
+            .order_by(SessionLink.last_activity_at.desc())
         ).all()
     )
     automations = list(
@@ -803,9 +809,9 @@ def bootstrap(
                 "automationGenerated": row.id in automation_session_ids,
                 "title": row.display_title or row.title or "Conversación",
                 "preview": "",
-                "updatedAt": row.updated_at.isoformat(),
+                "updatedAt": row.last_activity_at.isoformat(),
                 "pinnedAt": row.pinned_at.isoformat() if row.pinned_at else None,
-                "unread": False,
+                "unread": row.unread,
                 "archived": row.archived_at is not None,
             }
             for row in sessions
@@ -1336,8 +1342,111 @@ def list_sessions(
         query = query.where(SessionLink.archived_at.is_(None))
     return [
         session_view(db, row)
-        for row in db.scalars(query.order_by(SessionLink.updated_at.desc())).all()
+        for row in db.scalars(query.order_by(SessionLink.last_activity_at.desc())).all()
     ]
+
+
+@router.get(
+    "/notifications/config",
+    response_model=PushNotificationConfigView,
+)
+def push_notification_config(request: Request, _: User = Depends(current_user)) -> dict[str, Any]:
+    push_service = request.app.state.push_notification_service
+    return {
+        "available": True,
+        "applicationServerKey": push_service.public_key,
+    }
+
+
+@router.post(
+    "/notifications/subscriptions",
+    response_model=PushSubscriptionView,
+    status_code=201,
+)
+def create_push_subscription(
+    payload: PushSubscriptionCreate,
+    request: Request,
+    _: AuthSession = Depends(require_csrf),
+    __: str = Depends(require_idempotency),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if not push_endpoint_allowed(payload.endpoint):
+        raise HTTPException(status_code=422, detail="Unsupported push service endpoint")
+    digest, envelope = encrypted_subscription(
+        services(request).vault,
+        owner_id=user.id,
+        endpoint=payload.endpoint,
+        p256dh=payload.keys.p256dh,
+        auth=payload.keys.auth,
+        locale=payload.locale,
+    )
+    row = db.scalar(
+        select(PushSubscription).where(
+            PushSubscription.owner_id == user.id,
+            PushSubscription.endpoint_hash == digest,
+        )
+    )
+    if row is None:
+        rows = list(
+            db.scalars(
+                select(PushSubscription)
+                .where(PushSubscription.owner_id == user.id)
+                .order_by(PushSubscription.updated_at.desc())
+            ).all()
+        )
+        for stale in rows[7:]:
+            db.delete(stale)
+        row = PushSubscription(
+            owner_id=user.id,
+            endpoint_hash=digest,
+            subscription_ciphertext=envelope,
+        )
+        db.add(row)
+    else:
+        row.subscription_ciphertext = envelope
+        row.failure_count = 0
+        row.disabled_at = None
+    db.flush()
+    audit(
+        db,
+        actor=user,
+        action="notification.subscribe",
+        target_type="push_subscription",
+        target_id=row.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return {"id": row.id, "enabled": row.disabled_at is None}
+
+
+@router.delete("/notifications/subscriptions/current", status_code=204)
+def delete_push_subscription(
+    payload: PushSubscriptionDelete,
+    request: Request,
+    _: AuthSession = Depends(require_csrf),
+    __: str = Depends(require_idempotency),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    digest = endpoint_hash(payload.endpoint)
+    row = db.scalar(
+        select(PushSubscription).where(
+            PushSubscription.owner_id == user.id,
+            PushSubscription.endpoint_hash == digest,
+        )
+    )
+    if row is not None:
+        audit(
+            db,
+            actor=user,
+            action="notification.unsubscribe",
+            target_type="push_subscription",
+            target_id=row.id,
+        )
+        db.delete(row)
+        db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/search", response_model=SearchResponse)
@@ -1437,6 +1546,23 @@ async def resume_session(
 ) -> SessionView:
     service = SessionService(services(request))
     row = await service.resume(db, user, service.owned(db, user, session_id))
+    return session_view(db, row)
+
+
+@router.post("/sessions/{session_id}/read", response_model=SessionView)
+def mark_session_read(
+    session_id: str,
+    request: Request,
+    _: AuthSession = Depends(require_csrf),
+    __: str = Depends(require_idempotency),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> SessionView:
+    row = SessionService(services(request)).owned(db, user, session_id)
+    if row.unread:
+        row.unread = False
+        db.commit()
+        db.refresh(row)
     return session_view(db, row)
 
 

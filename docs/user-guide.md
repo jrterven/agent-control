@@ -97,6 +97,27 @@ when the reader moves back. It is limited to six visible text lines and remains
 independently scrollable. This is an operational summary, not raw private
 chain-of-thought; the backend continues to omit private reasoning events.
 
+### Completion notifications and recent chats
+
+The bell in the top bar opens a notification inbox with the ten most recently
+active chats. Entries are grouped by local day and show the chat name, its
+Agent Control workspace (or **No workspace**) and a blue dot while the result
+has not been read. The list is independently scrollable and is based on actual
+conversation activity, so renaming, pinning or moving a chat does not make it
+look newly completed. Opening an entry takes you to that chat and acknowledges
+it on the server; unread state therefore survives a PWA restart or a switch to
+another signed-in device.
+
+Press **Enable system notifications** in that menu to opt this device into Web
+Push. After the browser permission is granted, Agent Control can show a task
+completion, failure or interruption alert even when the installed Android PWA
+is in the background or has been closed. Tapping the system alert reopens the
+corresponding chat. The alert contains the agent, chat and workspace names, so
+use the device's lock-screen privacy controls when those labels are sensitive.
+The device subscription is encrypted in the Control database; disabling the
+option removes it from Control and unsubscribes the browser. Each browser or
+installed PWA must be enabled separately.
+
 ### Voice notes from an agent
 
 When an agent response contains a supported `MEDIA:` audio reference, Agent

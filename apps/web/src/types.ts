@@ -158,6 +158,11 @@ export type ControlFeatures = {
   speech?: SpeechFeature;
 };
 
+export type PushNotificationConfig = {
+  available: boolean;
+  applicationServerKey: string;
+};
+
 export type ChatMessage = {
   id: string;
   sessionId: string;

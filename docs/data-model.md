@@ -3,6 +3,7 @@
 ```mermaid
 erDiagram
     USER ||--o{ AUTH_SESSION : opens
+    USER ||--o{ PUSH_SUBSCRIPTION : registers
     USER ||--o{ GATEWAY : owns
     USER ||--o{ USER_INTEGRATION : configures
     USER_INTEGRATION ||--o{ PROFILE_VOICE_PREFERENCE : owns
@@ -30,6 +31,15 @@ erDiagram
 - `SESSION_LINK.title` is the canonical value last reported by Hermes;
   `display_title` is an optional owner label used by Agent Control navigation
   and search. Renaming never edits the provider conversation or its history.
+- `SESSION_LINK.last_activity_at` changes only for chat activity and orders the
+  recent-notification inbox independently from metadata edits. `unread` is set
+  only after a fresh terminal message event and is cleared through an
+  owner-scoped acknowledgement.
+- `PUSH_SUBSCRIPTION` stores a SHA-256 endpoint lookup plus one AES-GCM envelope
+  containing the browser endpoint and Web Push keys. AAD binds the ciphertext
+  to both owner and endpoint digest. Invalid or repeatedly failing endpoints
+  are disabled and no provider credentials, prompt text or response content is
+  included in a push payload.
 - Gateway credentials are separate AES-GCM records with random nonces and AAD
   containing gateway ID plus field name. Read APIs return presence only.
 - `USER_INTEGRATION` is unique by `(owner_id, provider)`. For ElevenLabs it
@@ -79,5 +89,8 @@ erDiagram
 - Owner-scoped integration credentials: retained until that owner replaces or
   deletes them. Database backups contain only ciphertext and require the
   separately held vault key for recovery.
+- Web Push subscriptions: retained until the owner disables the device, the
+  push service reports the endpoint as gone, or five consecutive deliveries
+  fail. Database backups contain only their owner-bound ciphertext.
 - Transcription tokens and microphone audio: no Control retention. Provider
   processing and retention follow the owner's ElevenLabs account and terms.

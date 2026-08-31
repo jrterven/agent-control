@@ -41,6 +41,7 @@ APPLICATION_TABLES = {
     "idempotency_operations",
     "profile_refs",
     "profile_voice_preferences",
+    "push_subscriptions",
     "realtime_tickets",
     "session_links",
     "session_tags",
@@ -203,6 +204,14 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     assert "pinned_at" in {
         column["name"] for column in schema.get_columns("session_links")
     }
+    assert {"last_activity_at", "unread"} <= {
+        column["name"] for column in schema.get_columns("session_links")
+    }
+    push_columns = {
+        column["name"] for column in schema.get_columns("push_subscriptions")
+    }
+    assert "subscription_ciphertext" in push_columns
+    assert not ({"endpoint", "p256dh", "auth"} & push_columns)
     assert "capabilities_checked_at" in {
         column["name"] for column in schema.get_columns("profile_refs")
     }
@@ -228,7 +237,7 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0015_session_pinning"
+        ).scalar_one() == "0016_chat_notifications"
     engine.dispose()
 
     downgrade = subprocess.run(

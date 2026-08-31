@@ -17,6 +17,7 @@ import {
 import { useAppStore } from "./store/appStore";
 import i18n, { getCurrentLanguage } from "./i18n";
 import { subscribeToMediaQuery } from "./lib/mediaQuery";
+import { recordSessionCompletion } from "./lib/chatNotifications";
 import type {
   AgentActivityItem,
   ApprovalChoice,
@@ -331,6 +332,9 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   if (terminalStreamEvent && routeSessionId) {
     bumpInteractionRevision(routeSessionId);
     state.clearSessionInteractions(routeSessionId);
+    if (event.type.startsWith("message.")) {
+      recordSessionCompletion(routeSessionId, event.occurredAt);
+    }
   }
 
   const usageSessionId = routeSessionId

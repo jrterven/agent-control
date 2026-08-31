@@ -1,4 +1,4 @@
-import { CaretDown, List, Pulse, SidebarSimple } from "@phosphor-icons/react";
+import { Bell, CaretDown, List, Pulse, SidebarSimple } from "@phosphor-icons/react";
 import { IconButton, StatusDot, cx } from "@hermes-control/ui";
 import { useTranslation } from "react-i18next";
 import { usePwaUpdateStore } from "../lib/pwaUpdate";
@@ -19,8 +19,11 @@ export function TopBar() {
   const connection = useAppStore((state) => state.connection);
   const setLeftOpen = useAppStore((state) => state.setLeftDrawerOpen);
   const setActivityOpen = useAppStore((state) => state.setActivityOpen);
+  const setNotificationsOpen = useAppStore((state) => state.setNotificationsOpen);
   const leftOpen = useAppStore((state) => state.leftDrawerOpen);
   const activityOpen = useAppStore((state) => state.activityOpen);
+  const notificationsOpen = useAppStore((state) => state.notificationsOpen);
+  const unreadCount = useAppStore((state) => state.sessions.filter((session) => session.unread).length);
   const updateAvailable = usePwaUpdateStore((state) => state.status === "available");
   const demoMode = useAppStore((state) => state.demoMode);
   const profiles = useAppStore((state) => state.profiles);
@@ -42,6 +45,10 @@ export function TopBar() {
       <button className="workspace-switcher" type="button" onClick={() => setLeftOpen(true)}>
         <span>{workspace?.name ?? t("nav.noWorkspace")}</span><CaretDown size={16} />
       </button>
+      <span className="top-bar__notification-wrap">
+        <IconButton className="top-bar__notifications" label={t("notifications.open")} icon={<Bell size={23} weight={unreadCount ? "fill" : "regular"} />} selected={notificationsOpen} aria-controls="notification-menu" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(!notificationsOpen)} />
+        {unreadCount ? <span className="top-bar__notification-count" aria-label={t("notifications.unreadCount", { count: unreadCount })}>{unreadCount > 9 ? "9+" : unreadCount}</span> : null}
+      </span>
       <IconButton className={cx("top-bar__activity", updateAvailable && "has-update")} label={t(updateAvailable ? "updates.activityLabel" : "nav.openActivityContext")} icon={<Pulse size={23} />} selected={activityOpen} aria-controls="activity-panel" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)} />
       <IconButton className={cx("top-bar__sidebar", updateAvailable && "has-update")} label={t(updateAvailable ? "updates.activityLabel" : "nav.showContext")} icon={<SidebarSimple size={23} />} selected={activityOpen} aria-controls="activity-panel" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)} />
     </header>

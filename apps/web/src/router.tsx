@@ -1,4 +1,5 @@
-import { createRootRoute, createRoute, createRouter, Navigate, Outlet, useRouterState } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, Navigate, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useCallback } from "react";
 import { AppShell } from "./components/AppShell";
 import { ChatView } from "./components/ChatView";
 import { useAuthBootstrap, useBootstrapData, useOfflineTranscriptCache, useRealtimeConnection, useSessionHistory, useThemePreference } from "./hooks";
@@ -8,6 +9,7 @@ import {
 } from "./screens/Screens";
 import { useAppStore } from "./store/appStore";
 import { BrandMark } from "./components/BrandMark";
+import { useChatNotificationRuntime } from "./lib/chatNotifications";
 
 function RootLayout() {
   useAuthBootstrap();
@@ -16,6 +18,12 @@ function RootLayout() {
   useRealtimeConnection();
   useSessionHistory();
   useOfflineTranscriptCache();
+  const navigate = useNavigate();
+  const openNotificationSession = useCallback((sessionId: string) => {
+    useAppStore.getState().selectSession(sessionId);
+    void navigate({ to: "/chats" });
+  }, [navigate]);
+  useChatNotificationRuntime(openNotificationSession);
   const authState = useAppStore((state) => state.authState);
   const bootstrapLoaded = useAppStore((state) => state.bootstrapLoaded);
   // Android can restore a mounted PWA with an expired cookie. Subscribe to the

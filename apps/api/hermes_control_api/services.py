@@ -49,6 +49,7 @@ from .models import (
     Workspace,
     utc_now,
 )
+from .notifications import completion_for_session
 from .providers import authoritative_provider_read
 from .realtime import persist_normalized_event
 from .schemas import AutomationCreate, GatewayCreate, GatewayUpdate, ProfileCreate, SessionCreate, WorkspaceCreate
@@ -299,6 +300,7 @@ class AppServices:
     provider_pool: ProviderPool
     session_router: HermesSessionRouter
     session_factory: Any | None = None
+    push_notifications: Any | None = None
     profile_creation_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
 
 
@@ -2059,6 +2061,9 @@ class SessionService:
                 db, row, routed.runtime_session_id, provider.runtime_generation
             )
             terminal_operation = operation.status in {"completed", "failed", "interrupted"}
+            if not terminal_operation:
+                row.last_activity_at = utc_now()
+                row.unread = False
             if row.status not in {"ready", "error", "interrupted"}:
                 row.status = "streaming"
             response = {
@@ -2870,6 +2875,10 @@ class AutomationService:
         provider: Any,
     ) -> AutomationRun:
         linked_session = self._link_receipt_session(db, row, receipt, provider)
+        was_terminal = (
+            run.status in {"completed", "failed", "cancelled", "interrupted"}
+            and run.finished_at is not None
+        )
         terminal = receipt.status in {"completed", "failed", "cancelled", "interrupted"}
         now = utc_now()
         if receipt.run_id:
@@ -2893,6 +2902,19 @@ class AutomationService:
         )
         run.finished_at = receipt.finished_at or (now if terminal else None)
         run.error_summary = None
+        if linked_session is not None and terminal and not was_terminal:
+            normalized_status = "interrupted" if receipt.status == "cancelled" else receipt.status
+            linked_session.unread = True
+            linked_session.last_activity_at = now
+            if self.services.push_notifications is not None:
+                self.services.push_notifications.schedule(
+                    completion_for_session(
+                        db,
+                        linked_session,
+                        status=normalized_status,
+                        occurred_at=now,
+                    )
+                )
         if (
             self.services.session_factory is not None
             and receipt.run_id

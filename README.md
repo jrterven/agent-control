@@ -23,8 +23,8 @@ same-origin APIs and normalized realtime events.
 | Agents | Discover Newton, Jarvis and other provider profiles; use their verified tools and administration capabilities; create a clean isolated Hermes profile while following live setup progress, then start in a new empty chat without opening a terminal or copying the brief directly into SOUL. |
 | Automations | Create, edit, pause, resume, run and delete cron jobs on eligible profiles; use simple or advanced schedules; inspect the next five runs; filter results by All, Unread and Read. |
 | Voice | Configure one owner-scoped ElevenLabs key for Scribe v2 Realtime dictation and response playback with either Flash v2.5 or Multilingual v2. Choose an account voice and model, listen while an answer streams, or replay any completed response with play/pause, stop and speed controls. Eleven v3 is intentionally excluded; native keyboard dictation remains the free fallback. |
-| Organization | Group chats into optional local workspaces, search across the interface and keep an encrypted, bounded offline snapshot when explicitly enabled. |
-| Mobile and desktop | Installable PWA, 44 px touch targets, bottom navigation and context sheets on mobile, two panels on tablet, three panels on desktop, and dark/light/automatic themes. |
+| Organization | Group chats into optional local workspaces, pin important conversations, open the ten most recent chats from a notification inbox with durable unread state, search across the interface and keep an encrypted, bounded offline snapshot when explicitly enabled. |
+| Mobile and desktop | Installable PWA with opt-in Web Push completion alerts, 44 px touch targets, bottom navigation and context sheets on mobile, two panels on tablet, three panels on desktop, and dark/light/automatic themes. |
 | Internationalization | English, Spanish, French, German and Portuguese with browser-language detection and an immediate device-only language preference. |
 | Operations | Deterministic Hermes mock, supervised SSH tunnels, diagnostics, Docker and systemd assets, backup/restore guidance, and a Tailscale Serve deployment that exposes only Agent Control. |
 

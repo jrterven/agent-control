@@ -43,6 +43,7 @@ export default defineConfig({
         navigateFallback: "/index.html",
         navigateFallbackDenylist: [/^\/api\//, /^\/ws\//],
         cleanupOutdatedCaches: true,
+        importScripts: ["/notification-sw.js"],
         // Realtime dictation cannot work offline. Keep its large, lazy SDK out
         // of the install-time PWA cache; normal HTTP caching applies on demand.
         globIgnores: ["**/vendor-scribe-*.js"],

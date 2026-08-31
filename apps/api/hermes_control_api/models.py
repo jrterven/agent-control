@@ -241,6 +241,13 @@ class SessionLink(Base, Timestamped):
     # Pinning is a Control-only organizational preference. A timestamp keeps
     # the pinned section deterministic without changing Hermes-owned data.
     pinned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Notification recency is independent from metadata edits such as rename,
+    # pin, move, or read acknowledgement.  This keeps the recent-chat inbox
+    # ordered by actual conversation activity.
+    last_activity_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, index=True
+    )
+    unread: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(30), default="idle")
     # Hermes 0.20.5/0.20.6 does not persist an RPC-created session until its
     # first prompt. This marker is the sole authority for treating that one
@@ -249,6 +256,33 @@ class SessionLink(Base, Timestamped):
     replay_epoch: Mapped[str | None] = mapped_column(String(100))
     last_sequence: Mapped[int] = mapped_column(Integer, default=0)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PushSubscription(Base, Timestamped):
+    """One encrypted, owner-scoped browser Web Push subscription."""
+
+    __tablename__ = "push_subscriptions"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "endpoint_hash",
+            name="uq_push_subscriptions_owner_endpoint",
+        ),
+        Index(
+            "ix_push_subscriptions_owner_updated",
+            "owner_id",
+            "updated_at",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    endpoint_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    subscription_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Tag(Base, Timestamped):

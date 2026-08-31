@@ -32,6 +32,7 @@ from .integrations import (
 )
 from .middleware import BodySizeLimitMiddleware, IdempotencyMiddleware, SecurityBoundaryMiddleware
 from .models import Automation, Gateway
+from .notifications import PushNotificationService
 from .providers import build_provider_pool
 from .realtime import persist_normalized_event
 from .security import SecretVault
@@ -176,23 +177,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_subscriptions=settings.ws_max_connections,
         max_subscriptions_per_user=settings.ws_max_connections_per_user,
     )
+    vault = SecretVault(settings.materialize_vault_key())
+    push_notification_service = PushNotificationService(
+        session_factory=session_factory,
+        vault=vault,
+        vapid_subject=settings.push_vapid_subject,
+    )
+
     async def durable_event_sink(event) -> None:
         event_hub.remember_correlation(event)
-        persist_normalized_event(
+        completion = persist_normalized_event(
             session_factory,
             event,
             gateway_health_ttl_seconds=settings.upstream_health_ttl_seconds,
         )
         await event_hub.publish(event)
+        push_notification_service.schedule(completion)
 
     provider_pool = build_provider_pool(settings, durable_event_sink)
     service_container = AppServices(
         settings=settings,
-        vault=SecretVault(settings.materialize_vault_key()),
+        vault=vault,
         event_hub=event_hub,
         provider_pool=provider_pool,
         session_router=HermesSessionRouter(provider_pool),
         session_factory=session_factory,
+        push_notifications=push_notification_service,
     )
     automation_route_health = SupervisorHealth(
         stale_after_seconds=max(
@@ -324,6 +334,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for watcher in (automation_watcher, capability_watcher):
                 with contextlib.suppress(asyncio.CancelledError):
                     await watcher
+            await push_notification_service.close()
             await provider_pool.close()
             engine.dispose()
 
@@ -338,6 +349,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.services = service_container
+    app.state.push_notification_service = push_notification_service
     app.state.elevenlabs_scribe_client = ElevenLabsScribeClient()
     app.state.elevenlabs_speech_client = ElevenLabsSpeechClient()
     app.state.transcription_token_limiter = TranscriptionTokenLimiter(

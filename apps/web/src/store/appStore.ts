@@ -24,6 +24,7 @@ type AppState = {
   demoMode: boolean;
   leftDrawerOpen: boolean;
   activityOpen: boolean;
+  notificationsOpen: boolean;
   commandOpen: boolean;
   gatewayMenuOpen: boolean;
   selectedGatewayId: string;
@@ -50,6 +51,7 @@ type AppState = {
   setAuth: (state: AuthState, userName?: string, csrfToken?: string, demoMode?: boolean) => void;
   setLeftDrawerOpen: (open: boolean) => void;
   setActivityOpen: (open: boolean) => void;
+  setNotificationsOpen: (open: boolean) => void;
   setCommandOpen: (open: boolean) => void;
   setGatewayMenuOpen: (open: boolean) => void;
   selectGateway: (id: string) => void;
@@ -109,6 +111,7 @@ export const useAppStore = create<AppState>((set) => ({
   authState: "checking",
   leftDrawerOpen: false,
   activityOpen: false,
+  notificationsOpen: false,
   commandOpen: false,
   gatewayMenuOpen: false,
   theme: "dark",
@@ -125,6 +128,7 @@ export const useAppStore = create<AppState>((set) => ({
         offlineCacheEnabled: state.offlineCacheEnabled,
         leftDrawerOpen: false,
         activityOpen: false,
+        notificationsOpen: false,
         commandOpen: false,
         gatewayMenuOpen: false,
       };
@@ -145,6 +149,7 @@ export const useAppStore = create<AppState>((set) => ({
   }),
   setLeftDrawerOpen: (leftDrawerOpen) => set({ leftDrawerOpen }),
   setActivityOpen: (activityOpen) => set({ activityOpen }),
+  setNotificationsOpen: (notificationsOpen) => set({ notificationsOpen }),
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   setGatewayMenuOpen: (gatewayMenuOpen) => set({ gatewayMenuOpen }),
   selectGateway: (selectedGatewayId) => set((state) => {
@@ -167,6 +172,7 @@ export const useAppStore = create<AppState>((set) => ({
       selectedGatewayId: profile?.gatewayId ?? state.selectedGatewayId,
       selectedWorkspaceId: session ? session.workspaceId ?? "" : state.selectedWorkspaceId,
       leftDrawerOpen: false,
+      notificationsOpen: false,
     };
   }),
   setConnection: (connection) => set({ connection }),
@@ -360,6 +366,7 @@ export const useAppStore = create<AppState>((set) => ({
     offlineCacheEnabled: state.offlineCacheEnabled,
     leftDrawerOpen: false,
     activityOpen: false,
+    notificationsOpen: false,
     commandOpen: false,
     gatewayMenuOpen: false,
   })),

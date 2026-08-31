@@ -16,6 +16,7 @@ from .models import (
     SessionLink,
     utc_now,
 )
+from .notifications import ChatCompletionNotification, completion_for_session
 
 
 _SUCCESS = {"message.complete", "message.completed", "message.done", "run.completed"}
@@ -55,7 +56,7 @@ def persist_normalized_event(
     event: NormalizedEvent,
     *,
     gateway_health_ttl_seconds: int = 60,
-) -> None:
+) -> ChatCompletionNotification | None:
     """Persist terminal/cursor state before browser fanout.
 
     This path runs for every provider event, even with zero WebSocket clients,
@@ -170,6 +171,7 @@ def persist_normalized_event(
         if event.replay_epoch:
             session.replay_epoch = event.replay_epoch
         terminal = terminal_status(event.type, event.data)
+        completion: ChatCompletionNotification | None = None
         if terminal:
             session.status = "ready" if terminal in {"completed", "interrupted"} else "error"
             operation = _terminal_prompt_operation(db, session, event)
@@ -180,10 +182,20 @@ def persist_normalized_event(
                     "operationId": operation.idempotency_key,
                     "status": terminal,
                 }
+            if event.type.startswith("message."):
+                session.unread = True
+                session.last_activity_at = event.timestamp
+                completion = completion_for_session(
+                    db,
+                    session,
+                    status=terminal,
+                    occurred_at=event.timestamp,
+                )
         if run is not None:
             run.session_link_id = session.id
             _update_run(run, event)
         db.commit()
+        return completion
 
 
 def _terminal_prompt_operation(
