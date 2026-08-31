@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Managed by deploy/install-macos.sh -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agent-control.backup</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__BACKUP_WRAPPER__</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HERMES_CONTROL_RELEASE_ROOT</key>
+    <string>__RELEASE_ROOT__</string>
+    <key>HERMES_CONTROL_ENV_FILE</key>
+    <string>__ENV_FILE__</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>17</integer>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/backup.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/backup.error.log</string>
+</dict>
+</plist>

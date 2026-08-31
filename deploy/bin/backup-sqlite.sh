@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 
 readonly database_path="${HERMES_CONTROL_DATABASE_PATH:-/var/lib/hermes-control/control.db}"
 readonly backup_dir="${HERMES_CONTROL_BACKUP_DIR:-/var/backups/hermes-control}"
@@ -37,10 +38,15 @@ if [[ ! -f "$database_path" ]]; then
 fi
 command -v sqlite3 >/dev/null || { printf 'sqlite3 is required.\n' >&2; exit 69; }
 
+if [[ -L "$backup_dir" ]]; then
+  printf 'Backup directory must not be a symbolic link: %s\n' "$backup_dir" >&2
+  exit 64
+fi
 install -d -m 0700 "$backup_dir"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-destination="${backup_dir}/control-${timestamp}.db"
-temporary="${destination}.partial"
+temporary="$(mktemp "${backup_dir}/.control-${timestamp}.partial.XXXXXX")"
+unique_suffix="${temporary##*.partial.}"
+destination="${backup_dir}/control-${timestamp}-${unique_suffix}.db"
 
 cleanup() {
   if [[ -f "$temporary" ]]; then
@@ -52,6 +58,7 @@ trap cleanup EXIT INT TERM
 sqlite3 "$database_path" ".timeout 10000" ".backup '${temporary}'"
 sqlite3 "$temporary" "PRAGMA quick_check;" | grep -qx 'ok'
 chmod 0600 "$temporary"
-mv -- "$temporary" "$destination"
+ln "$temporary" "$destination"
+rm -f -- "$temporary"
 trap - EXIT INT TERM
 printf '%s\n' "$destination"

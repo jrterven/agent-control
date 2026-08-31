@@ -6,6 +6,20 @@ Hermes Control is added in front of the existing Hermes installation. It does
 not install, upgrade, vendor or replace Hermes, and Hermes remains the source of
 truth for profiles, conversations, sessions and cron.
 
+For an assisted full local installation, use `deploy/install-linux.sh` on a
+systemd host or `deploy/install-macos.sh` on a signed-in Mac. The Linux
+entrypoint delegates to `deploy/linux/install-agent-control.sh`. Both build and
+install Agent Control, keep Hermes on `127.0.0.1:9119`, keep Control on
+`127.0.0.1:8000`, and configure only a private Tailscale Serve root. They assume
+Hermes and Tailscale are already installed, and they abort instead of merging a
+conflicting Serve configuration. See [Local installers](installers.md) for the
+exact dry-run/install commands, flags, paths, prompts, and rerun behavior. The
+installers use the dashboard protocol and leave the legacy Hermes API URL/key
+empty; the optional `control-dev` API listener below belongs to this manual
+runbook rather than the installer topology. The
+separate remote-Mac reverse-tunnel workflow remains documented under
+[Add a macOS Hermes gateway](#add-a-macos-hermes-gateway).
+
 ## Network result
 
 | Service | Bind | Exposure |
@@ -175,14 +189,16 @@ Control host 127.0.0.1:29119
 ```
 
 Use the two wrappers in `deploy/bin` with the launchd templates in
-`deploy/launchd`. Store the dashboard token in the macOS login Keychain under
-service `com.agent-control.hermes-dashboard`; never place it in a plist, shell
-history, frontend variable or repository file. The launchd jobs run as the
-signed-in macOS user and require no sudo. They keep `hermes serve` and the SSH
-tunnel independently restartable and use SSH keepalives to recover after a
-Tailscale or network interruption. The Hermes service template also keeps a
-detached in-flight session alive for five minutes, giving Control time to
-reconnect and issue `session.resume`; the window is bounded so permanently
+`deploy/launchd` only for this manual reverse-tunnel workflow. If the goal is
+to run Agent Control itself on a Mac, use `deploy/install-macos.sh` instead.
+For the manual gateway path, store the dashboard token in the macOS login
+Keychain under service `com.agent-control.hermes-dashboard`; never place it in
+a plist, shell history, frontend variable or repository file. The launchd jobs
+run as the signed-in macOS user and require no sudo. They keep `hermes serve`
+and the SSH tunnel independently restartable and use SSH keepalives to recover
+after a Tailscale or network interruption. The Hermes service template also
+keeps a detached in-flight session alive for five minutes, giving Control time
+to reconnect and issue `session.resume`; the window is bounded so permanently
 abandoned runtimes are still reclaimed.
 
 Register the gateway in Control with URLs that are local from the backend's

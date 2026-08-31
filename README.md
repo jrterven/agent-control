@@ -53,6 +53,8 @@ same-origin APIs and normalized realtime events.
   session identity, recovery and BYOK dictation.
 - [Deployment runbook](docs/operations/deployment.md): systemd, Docker,
   Tailscale Serve and post-deploy checks.
+- [Local installers](docs/operations/installers.md): full systemd and per-user
+  macOS setup, including dry runs, prerequisites, flags, secrets, and recovery.
 - [Development runbook](docs/operations/development.md): mock and remote-tunnel
   workflows.
 - [Threat model](docs/threat-model.md), [known limitations](docs/limitations.md)

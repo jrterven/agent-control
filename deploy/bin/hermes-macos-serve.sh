@@ -24,8 +24,8 @@ session_token="$(
     -s "${keychain_service}" \
     -w
 )"
-if (( ${#session_token} < 32 )); then
-  print -u2 "The Hermes dashboard token stored in Keychain is too short."
+if (( ${#session_token} < 32 || ${#session_token} > 512 )) || [[ ! "${session_token}" =~ ^[A-Za-z0-9._~-]+$ ]]; then
+  print -u2 "The Hermes dashboard token stored in Keychain must be 32-512 URL-safe characters."
   exit 1
 fi
 

@@ -8,7 +8,9 @@ the same backup artifact.
 `hermes-control-backup.timer` invokes an online SQLite backup. It uses SQLite's
 backup API instead of copying a live WAL database, validates `PRAGMA quick_check`,
 and publishes the destination atomically. Backups are mode 0600 under
-`/var/backups/hermes-control`.
+`/var/backups/hermes-control`. Each invocation uses an independent random
+temporary suffix and retains that suffix in the final filename, so overlapping
+timer, installer, or manual runs cannot share or overwrite a backup path.
 
 `HERMES_CONTROL_DATABASE_PATH` is the filesystem path used by the backup job.
 The script derives the path from `HERMES_CONTROL_DATABASE_URL` and refuses to
@@ -42,7 +44,7 @@ Example (while `hermes-control.service` is stopped):
 
 ```bash
 sudo -u hermes-control deploy/bin/restore-sqlite.sh --control-stopped \
-  /var/backups/hermes-control/control-YYYYMMDDTHHMMSSZ.db \
+  /var/backups/hermes-control/control-YYYYMMDDTHHMMSSZ-XXXXXX.db \
   /var/lib/hermes-control/control.db \
   /var/lib/hermes-control/restore-quarantine
 ```

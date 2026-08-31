@@ -4,21 +4,19 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.agent-control.hermes-serve</string>
+  <string>com.agent-control.control</string>
   <key>ProgramArguments</key>
   <array>
-    <string>__SERVE_WRAPPER__</string>
+    <string>__CONTROL_WRAPPER__</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>HERMES_BIN</key>
-    <string>__HERMES_BIN__</string>
-    <key>HERMES_PROFILE</key>
-    <string>__HERMES_PROFILE__</string>
-    <key>HERMES_PORT</key>
-    <string>9119</string>
-    <key>HERMES_TUI_WS_ORPHAN_REAP_GRACE_S</key>
-    <string>300</string>
+    <key>HERMES_CONTROL_RELEASE_ROOT</key>
+    <string>__RELEASE_ROOT__</string>
+    <key>HERMES_CONTROL_ENV_FILE</key>
+    <string>__ENV_FILE__</string>
+    <key>HERMES_CONTROL_PORT</key>
+    <string>8000</string>
     <key>HERMES_TOKEN_KEYCHAIN_ACCOUNT</key>
     <string>__MACOS_USER__</string>
     <key>HERMES_TOKEN_KEYCHAIN_SERVICE</key>
@@ -33,8 +31,8 @@
   <key>ProcessType</key>
   <string>Background</string>
   <key>StandardOutPath</key>
-  <string>__LOG_DIR__/hermes-serve.log</string>
+  <string>__LOG_DIR__/control.log</string>
   <key>StandardErrorPath</key>
-  <string>__LOG_DIR__/hermes-serve.error.log</string>
+  <string>__LOG_DIR__/control.error.log</string>
 </dict>
 </plist>

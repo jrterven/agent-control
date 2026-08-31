@@ -38,6 +38,10 @@ with host access.
 ## Security invariants to test
 
 - Built frontend and source maps contain no Hermes URL, key or token.
+- Host bootstrap helpers keep private deployment invariants intact: no
+  `tailscale funnel`, no `tailscale serve reset`, no non-loopback Hermes
+  listener, and no reusable dashboard token outside the reviewed env file or
+  macOS login Keychain.
 - Built frontend, source maps, browser persistence and logs contain no
   long-lived transcription key. Single-use transcription tokens never enter
   SQLite, the idempotency ledger, audit payloads or caches. Because the official

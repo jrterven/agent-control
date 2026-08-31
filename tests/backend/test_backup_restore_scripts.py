@@ -4,6 +4,7 @@ import base64
 import os
 import shutil
 import sqlite3
+import stat
 import subprocess
 from pathlib import Path
 
@@ -53,6 +54,44 @@ def test_online_backup_is_integral_private_and_restorable(tmp_path):
         assert connection.execute("SELECT value FROM marker").fetchone() == (
             "online-backup",
         )
+
+
+@pytest.mark.skipif(shutil.which("sqlite3") is None, reason="sqlite3 CLI unavailable")
+def test_concurrent_backups_use_independent_temporary_and_final_paths(tmp_path):
+    source = tmp_path / "live-control.db"
+    backups = tmp_path / "backups"
+    _database(source, "concurrent-backup")
+    environment = {
+        **os.environ,
+        "HERMES_CONTROL_DATABASE_PATH": str(source),
+        "HERMES_CONTROL_DATABASE_URL": f"sqlite:///{source}",
+        "HERMES_CONTROL_BACKUP_DIR": str(backups),
+    }
+    processes = [
+        subprocess.Popen(
+            ["bash", str(BACKUP)],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(2)
+    ]
+    results = [process.communicate(timeout=20) for process in processes]
+    for process, (_, stderr) in zip(processes, results, strict=True):
+        assert process.returncode == 0, stderr
+
+    artifacts = {Path(stdout.strip()) for stdout, _ in results}
+    assert len(artifacts) == 2
+    assert not list(backups.glob("*.partial.*"))
+    for artifact in artifacts:
+        assert artifact.is_file()
+        assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
+        with sqlite3.connect(artifact) as connection:
+            assert connection.execute("PRAGMA quick_check").fetchone() == ("ok",)
+            assert connection.execute("SELECT value FROM marker").fetchone() == (
+                "concurrent-backup",
+            )
 
 
 @pytest.mark.skipif(shutil.which("sqlite3") is None, reason="sqlite3 CLI unavailable")
