@@ -20,6 +20,7 @@ import { ProfileAvatar } from "./ProfileAvatar";
 const emptyApprovals: ApprovalRequest[] = [];
 const emptyClarifications: ClarificationRequest[] = [];
 const automationInstructionMaxLines = 10;
+const conversationFollowThreshold = 48;
 const interactionErrorKeys: Record<string, "deliveryUnknown" | "noLongerPending" | "generic"> = {
   "El resultado no está confirmado. Los controles permanecerán bloqueados hasta que Hermes reconcilie la solicitud.": "deliveryUnknown",
   "Hermes no confirmó que la solicitud siga pendiente.": "noLongerPending",
@@ -796,6 +797,8 @@ export function ChatView() {
     && profile.capabilitySet?.methods.includes("clarify.respond") === true;
   const waitingForResponse = approvals.length > 0 || clarifications.length > 0;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const followLatestRef = useRef(true);
+  const previousSessionRef = useRef(sessionId);
   const [creatingSession, setCreatingSession] = useState(false);
   const canCreateSession = !session && (
     demoMode
@@ -817,14 +820,27 @@ export function ChatView() {
   };
 
   useEffect(() => {
+    if (previousSessionRef.current !== sessionId) {
+      previousSessionRef.current = sessionId;
+      followLatestRef.current = true;
+    }
     const viewport = scrollRef.current;
-    if (viewport) viewport.scrollTo({ top: viewport.scrollHeight, behavior: streamingMessageId ? "auto" : "smooth" });
-  }, [approvals, clarifications, messages, streamingMessageId]);
+    if (viewport && followLatestRef.current) {
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: streamingMessageId ? "auto" : "smooth" });
+    }
+  }, [approvals, clarifications, messages, sessionId, streamingMessageId]);
 
   return (
     <section className="conversation" aria-labelledby="conversation-title">
       <div className="conversation__title"><div><span className="eyebrow">{t("chat.conversation")}</span><h1 id="conversation-title">{session?.title ?? t("chat.newConversation")}</h1></div>{session ? <Badge>{session.storedSessionId}</Badge> : null}</div>
-      <div className="message-scroll" ref={scrollRef}>
+      <div
+        className="message-scroll"
+        ref={scrollRef}
+        onScroll={(event) => {
+          const viewport = event.currentTarget;
+          followLatestRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= conversationFollowThreshold;
+        }}
+      >
         <div className="date-divider"><span>{t("chat.fixedDate")}</span></div>
         <div className="message-list">
           {visibleMessages.length ? visibleMessages.map((message) => <Message key={message.id} message={message} profile={profile} agentName={profile?.displayName ?? t("chat.agent")} automationInstruction={session?.automationGenerated === true && message.id === firstUserMessageId} speech={{ available: canUseSpeech, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : <div className="empty-chat"><ProfileAvatar profile={profile} size="lg" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}

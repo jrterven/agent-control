@@ -156,6 +156,56 @@ describe("mobile-first chat", () => {
     expect((await axe.run(container)).violations).toHaveLength(0);
   });
 
+  it("keeps following a streaming answer only while the reader remains near the bottom", async () => {
+    const streamingMessage = {
+      id: "assistant-scroll-progress",
+      sessionId: "session-papers",
+      role: "assistant" as const,
+      content: "Primer fragmento",
+      createdAt: "10:45",
+      streaming: true,
+    };
+    useAppStore.setState({
+      messages: [...initialMessages, streamingMessage],
+      streamingBySession: { "session-papers": streamingMessage.id },
+    });
+    const { container } = render(<ChatView />);
+    const viewport = container.querySelector<HTMLElement>(".message-scroll");
+    expect(viewport).not.toBeNull();
+    if (!viewport) return;
+
+    let scrollHeight = 600;
+    Object.defineProperty(viewport, "scrollHeight", { configurable: true, get: () => scrollHeight });
+    Object.defineProperty(viewport, "clientHeight", { configurable: true, get: () => 200 });
+    const scrollTo = vi.mocked(viewport.scrollTo);
+
+    viewport.scrollTop = 400;
+    fireEvent.scroll(viewport);
+    scrollTo.mockClear();
+    act(() => {
+      useAppStore.getState().updateMessage(streamingMessage.id, { content: "Primer fragmento y continuación" });
+    });
+    await waitFor(() => expect(screen.getByText("Primer fragmento y continuación")).toBeVisible());
+    expect(scrollTo).toHaveBeenCalledWith({ top: 600, behavior: "auto" });
+
+    scrollHeight = 800;
+    viewport.scrollTop = 180;
+    fireEvent.scroll(viewport);
+    scrollTo.mockClear();
+    act(() => {
+      useAppStore.getState().updateMessage(streamingMessage.id, { content: "Primer fragmento, continuación y más texto" });
+    });
+    await waitFor(() => expect(screen.getByText("Primer fragmento, continuación y más texto")).toBeVisible());
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    viewport.scrollTop = 600;
+    fireEvent.scroll(viewport);
+    act(() => {
+      useAppStore.getState().updateMessage(streamingMessage.id, { content: "Respuesta nuevamente seguida" });
+    });
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 800, behavior: "auto" }));
+  });
+
   it("hides an automation instruction by default and expands it into a ten-line scroller", async () => {
     const automationSession = {
       ...sessions[0],
@@ -358,9 +408,9 @@ describe("mobile-first chat", () => {
       mode = "segments";
       updating = false;
 
-      appendBuffer() {
+      appendBuffer = vi.fn(() => {
         queueMicrotask(() => this.dispatchEvent(new Event("updateend")));
-      }
+      });
     }
 
     class FakeMediaSource extends EventTarget {
@@ -420,6 +470,7 @@ describe("mobile-first chat", () => {
     const streamSpeech = vi.spyOn(api, "streamSpeech").mockImplementation(() => new Promise((resolve) => {
       releaseSpeech = resolve;
     }));
+    let audioStream!: ReadableStreamDefaultController<Uint8Array>;
     const user = userEvent.setup();
     render(<ChatView />);
 
@@ -436,9 +487,21 @@ describe("mobile-first chat", () => {
     expect(FakeAudio.instances[0].play.mock.invocationCallOrder[0])
       .toBeLessThan(streamSpeech.mock.invocationCallOrder[0]);
 
-    releaseSpeech(new Response(new Uint8Array([0x49, 0x44, 0x33, 0x04]), {
+    releaseSpeech(new Response(new ReadableStream<Uint8Array>({
+      start(controller) { audioStream = controller; },
+    }), {
       headers: { "Content-Type": "audio/mpeg" },
     }));
+    audioStream.enqueue(new Uint8Array([0x49, 0x44, 0x33, 0x04]));
+    await waitFor(() => expect(FakeMediaSource.instances[0].sourceBuffer.appendBuffer).toHaveBeenCalledTimes(1));
+    expect(FakeMediaSource.instances[0].endOfStream).not.toHaveBeenCalled();
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Velocidad" }), "1.5");
+    expect(FakeAudio.instances[0].playbackRate).toBe(1.5);
+
+    audioStream.enqueue(new Uint8Array([0xff, 0xfb, 0x90, 0x64]));
+    await waitFor(() => expect(FakeMediaSource.instances[0].sourceBuffer.appendBuffer).toHaveBeenCalledTimes(2));
+    audioStream.close();
     await waitFor(() => expect(FakeMediaSource.instances[0].endOfStream).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByText("Reproduciendo")).toBeVisible());
   });

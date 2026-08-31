@@ -61,12 +61,34 @@ async function loadHistoryMediaSource(
   response: Response,
   signal: AbortSignal,
 ) {
-  const bytes = await response.arrayBuffer();
   await waitForMediaSourceOpen(mediaSource, signal);
   if (signal.aborted) throw abortError();
   const sourceBuffer = mediaSource.addSourceBuffer(AUDIO_TYPE);
   sourceBuffer.mode = "sequence";
-  await appendSourceBuffer(sourceBuffer, bytes, signal);
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength) await appendSourceBuffer(sourceBuffer, bytes, signal);
+  } else {
+    const cancelReader = () => { void reader.cancel().catch(() => undefined); };
+    signal.addEventListener("abort", cancelReader, { once: true });
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (signal.aborted) throw abortError();
+        if (done) break;
+        if (value.byteLength) {
+          await appendSourceBuffer(sourceBuffer, value.slice().buffer as ArrayBuffer, signal);
+        }
+      }
+    } catch (error) {
+      await reader.cancel().catch(() => undefined);
+      throw error;
+    } finally {
+      signal.removeEventListener("abort", cancelReader);
+      reader.releaseLock();
+    }
+  }
   if (mediaSource.readyState === "open") mediaSource.endOfStream();
 }
 
