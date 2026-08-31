@@ -10,6 +10,27 @@ from typing import Any
 from hermes_client import NormalizedEvent, ReplayState
 
 
+_TERMINAL_INTERACTION_EVENTS = frozenset(
+    {
+        "message.complete",
+        "message.completed",
+        "message.done",
+        "message.error",
+        "message.failed",
+        "message.interrupted",
+        "message.cancelled",
+        "run.completed",
+        "run.error",
+        "run.failed",
+        "run.interrupted",
+        "run.cancelled",
+        "session.interrupted",
+        "error",
+        "interrupted",
+    }
+)
+
+
 @dataclass(eq=False, slots=True)
 class Subscription:
     user_id: str
@@ -32,6 +53,7 @@ class InteractionClaim:
     runtime_session_id: str | None
     runtime_generation: str | None
     question_ids: frozenset[str]
+    data: dict[str, Any]
 
 
 class EventHub:
@@ -69,6 +91,7 @@ class EventHub:
             tuple[str, str, str, str], InteractionClaim
         ] = OrderedDict()
         self._max_interactions = 4_096
+        self._max_interaction_bytes = min(16 * 1024, max_event_bytes)
         self._lock = asyncio.Lock()
 
     def interaction_matches(
@@ -160,6 +183,7 @@ class EventHub:
                     runtime_session_id=claim.runtime_session_id,
                     runtime_generation=claim.runtime_generation,
                     question_ids=frozenset(remaining),
+                    data=dict(claim.data),
                 )
             else:
                 self._interactions.pop(key, None)
@@ -193,6 +217,7 @@ class EventHub:
                 runtime_session_id=current.runtime_session_id,
                 runtime_generation=current.runtime_generation,
                 question_ids=current.question_ids | claim.question_ids,
+                data=dict(current.data),
             )
         self._interactions.move_to_end(key)
 
@@ -235,6 +260,7 @@ class EventHub:
             runtime_session_id=claim.runtime_session_id,
             runtime_generation=claim.runtime_generation,
             question_ids=remaining,
+            data=dict(claim.data),
         )
         self._interactions.move_to_end(key)
         return True
@@ -242,9 +268,19 @@ class EventHub:
     def _update_interactions(self, event: NormalizedEvent) -> None:
         data = event.data or {}
         request_id = data.get("request_id")
+        if event.type in _TERMINAL_INTERACTION_EVENTS:
+            self._forget_route_interactions(event)
+            return
         if not isinstance(request_id, str) or not 0 < len(request_id) <= 200:
             return
         if event.type in {"approval.request", "clarify.request"}:
+            interaction_size = len(
+                json.dumps(data, separators=(",", ":"), default=str).encode("utf-8")
+            )
+            if interaction_size > self._max_interaction_bytes:
+                # Human gates become browser controls. Fail closed instead of
+                # retaining a large upstream payload outside the event cap.
+                return
             kind = "approval" if event.type == "approval.request" else "clarification"
             question_ids = frozenset(
                 str(item["qid"])
@@ -263,17 +299,112 @@ class EventHub:
                 runtime_session_id=event.runtime_session_id,
                 runtime_generation=event.runtime_generation,
                 question_ids=question_ids,
+                data=dict(data),
             )
             self._interactions.move_to_end(key)
             while len(self._interactions) > self._max_interactions:
                 self._interactions.popitem(last=False)
-        elif event.type == "clarify.expire":
+        elif event.type in {
+            "approval.expire",
+            "approval.resolved",
+            "clarify.expire",
+            "clarify.resolved",
+        }:
             self.forget_interaction(
                 gateway_id=event.gateway_id,
                 profile_name=event.profile_name,
-                kind="clarification",
+                kind=(
+                    "approval"
+                    if event.type.startswith("approval.")
+                    else "clarification"
+                ),
                 request_id=request_id,
             )
+
+    def _forget_route_interactions(self, event: NormalizedEvent) -> None:
+        """Drop gates when their exact conversation reaches a terminal state."""
+
+        if not event.stored_session_id and not event.runtime_session_id:
+            return
+        for key, claim in tuple(self._interactions.items()):
+            if (
+                claim.gateway_id != event.gateway_id
+                or claim.profile_name != event.profile_name
+            ):
+                continue
+            if event.runtime_session_id and claim.runtime_session_id:
+                matches = bool(
+                    claim.runtime_session_id == event.runtime_session_id
+                    and (
+                        not claim.runtime_generation
+                        or claim.runtime_generation == event.runtime_generation
+                    )
+                )
+            else:
+                # Stored identity is a fallback only when one side lacks a
+                # runtime. A delayed terminal from R_old must never erase a
+                # gate replayed for R_new under the same stored id.
+                matches = bool(
+                    event.stored_session_id
+                    and claim.stored_session_id == event.stored_session_id
+                )
+            if matches:
+                self._interactions.pop(key, None)
+
+    def pending_interaction_snapshots(
+        self,
+        *,
+        gateway_id: str,
+        profile_name: str,
+        stored_session_id: str,
+        runtime_session_id: str | None,
+        runtime_generation: str | None,
+    ) -> list[dict[str, Any]]:
+        """Return bounded, already-normalized human gates for one runtime.
+
+        A mobile client can miss the resume event while its websocket is still
+        reconnecting. The claim remains authoritative for response routing, so
+        history may safely project the same sanitized payload again.
+        """
+
+        snapshots: list[dict[str, Any]] = []
+        for claim in reversed(tuple(self._interactions.values())):
+            if claim.gateway_id != gateway_id or claim.profile_name != profile_name:
+                continue
+            if claim.stored_session_id and claim.stored_session_id != stored_session_id:
+                continue
+            if claim.runtime_session_id and (
+                claim.runtime_session_id != runtime_session_id
+                or not claim.runtime_generation
+                or claim.runtime_generation != runtime_generation
+            ):
+                continue
+            if not claim.stored_session_id and not claim.runtime_session_id:
+                continue
+            data = dict(claim.data)
+            if claim.kind == "clarification" and claim.question_ids:
+                questions = data.get("questions")
+                if isinstance(questions, list):
+                    data["questions"] = [
+                        item
+                        for item in questions
+                        if isinstance(item, dict)
+                        and str(item.get("qid") or "") in claim.question_ids
+                    ][:50]
+            snapshots.append(
+                {
+                    "type": (
+                        "approval.request"
+                        if claim.kind == "approval"
+                        else "clarify.request"
+                    ),
+                    "data": data,
+                }
+            )
+            if len(snapshots) == 16:
+                break
+        snapshots.reverse()
+        return snapshots
 
     def remember_correlation(self, event: NormalizedEvent) -> None:
         """Keep a small pre-persistence journal for fast automation events.
@@ -488,7 +619,6 @@ class EventHub:
         decision = state.apply(event)
         if not decision.accept:
             return
-        self._update_interactions(event)
         payload = event.to_dict()
         if decision.requires_history:
             payload["reconciliationRequired"] = True
@@ -516,6 +646,9 @@ class EventHub:
             payload_size = len(
                 json.dumps(payload, separators=(",", ":")).encode("utf-8")
             )
+        # Only accepted, identity-bounded events reach the interaction journal.
+        # Request payloads also have their own tighter retained-data cap.
+        self._update_interactions(event)
         route = self.route_key(payload)
         buffer = self._buffers.setdefault(route, deque())
         self._buffers.move_to_end(route)

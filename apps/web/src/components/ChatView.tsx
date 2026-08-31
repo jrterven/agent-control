@@ -450,12 +450,40 @@ function Message({ message, profile, agentName, speech, automationInstruction = 
       </article>
     );
   }
+  const evidence = !message.content.trim()
+    ? [
+        ...(message.tools ?? []).map((tool) => ({
+          id: `tool:${tool.id}`,
+          label: tool.label,
+          summary: tool.summary || t(`chat.toolStatus.${tool.status}`),
+        })),
+        ...(message.activity ?? []).map((item) => ({
+          id: `activity:${item.id}`,
+          label: item.label || t(item.kind === "delegation" ? "chat.activity.delegation" : "chat.activity.tool"),
+          summary: item.summary || t(`chat.toolStatus.${item.status}`),
+        })),
+      ]
+    : [];
   return (
     <article className="message message--assistant" aria-label={t("chat.assistantResponse", { agent: agentName })}>
       <div className="assistant-avatar"><ProfileAvatar profile={profile} /></div>
       <div className="assistant-content">
         <header><strong>{agentName}</strong><time>{message.createdAt}</time>{message.streaming ? <Badge tone="info">{t("chat.streaming")}</Badge> : null}</header>
-        <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{message.content || " "}</ReactMarkdown>{message.streaming ? <span className="stream-caret" aria-hidden="true" /> : null}</div>
+        <div className="markdown-body">
+          {message.content.trim() ? (
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{message.content}</ReactMarkdown>
+          ) : evidence.length ? (
+            <div className="message-evidence" role="note" aria-label={t("chat.activity.label", { agent: agentName })}>
+              <strong>{message.tools?.length
+                ? t("chat.toolsCount", { count: message.tools.length })
+                : t("chat.activity.label", { agent: agentName })}</strong>
+              <ul>
+                {evidence.map((item) => <li key={item.id}><span>{item.label}</span><small>{item.summary}</small></li>)}
+              </ul>
+            </div>
+          ) : " "}
+          {message.streaming ? <span className="stream-caret" aria-hidden="true" /> : null}
+        </div>
         {message.media?.length ? (
           <div className="message-media">
             {message.media.map((media, index) => (
@@ -729,7 +757,17 @@ export function ChatView() {
   // in the selected workspace. Never leak another profile's first session into
   // that state, even as a visual fallback.
   const session = sessions.find((item) => item.id === sessionId);
-  const visibleMessages = useMemo(() => messages.filter((message) => message.sessionId === sessionId), [messages, sessionId]);
+  const visibleMessages = useMemo(() => messages.filter((message) => (
+    message.sessionId === sessionId
+    && (
+      message.role !== "assistant"
+      || message.streaming === true
+      || Boolean(message.content.trim())
+      || Boolean(message.media?.length)
+      || Boolean(message.tools?.length)
+      || Boolean(message.activity?.length)
+    )
+  )), [messages, sessionId]);
   const firstUserMessageId = useMemo(() => visibleMessages.find((message) => message.role === "user")?.id, [visibleMessages]);
   const globalSpeechAvailable = useAppStore((state) => state.features?.speech?.available === true);
   // Profiles from pre-voice cached bootstraps do not include ``speech``;

@@ -33,7 +33,50 @@ import type {
 const unmatchedEvents = new Map<string, RealtimeEvent[]>();
 const unmatchedSessionEvents = new Map<string, RealtimeEvent[]>();
 const rehydrationGenerations = new Map<string, number>();
+const activeSessionRecoveries = new Map<string, Promise<void>>();
+const interactionRevisions = new Map<string, number>();
 let nextRehydrationGeneration = 0;
+const CONTROL_BOOT_READ_TIMEOUT_MS = 8_000;
+const CONTROL_BOOT_RETRY_INITIAL_MS = 1_000;
+const ACTIVE_SESSION_STATUSES = new Set([
+  "pending", "queued", "accepted", "starting", "streaming", "running",
+  "working", "waiting", "delivery_unknown",
+]);
+const TERMINAL_STREAM_EVENTS = new Set([
+  "message.complete", "message.completed", "message.done", "run.completed",
+  "message.error", "message.failed", "message.interrupted", "message.cancelled",
+  "run.error", "run.failed", "run.interrupted", "run.cancelled",
+  "error", "interrupted",
+]);
+
+function interactionRevision(sessionId: string) {
+  return interactionRevisions.get(sessionId) ?? 0;
+}
+
+function bumpInteractionRevision(sessionId: string) {
+  const nextRevision = interactionRevision(sessionId) + 1;
+  interactionRevisions.delete(sessionId);
+  interactionRevisions.set(sessionId, nextRevision);
+  while (interactionRevisions.size > 256) {
+    const oldest = interactionRevisions.keys().next().value;
+    if (typeof oldest !== "string") break;
+    interactionRevisions.delete(oldest);
+  }
+}
+
+async function boundedControlRead<T>(operation: Promise<T>, timeoutMs = CONTROL_BOOT_READ_TIMEOUT_MS): Promise<T> {
+  let timer: number | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_resolve, reject) => {
+        timer = window.setTimeout(() => reject(new Error("Control read timed out")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
 
 function bufferUnmatchedEvent(operationId: string, event: RealtimeEvent) {
   const existing = unmatchedEvents.get(operationId) ?? [];
@@ -226,6 +269,7 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   const data = eventData(event);
   const operationId = event.correlationId;
   const routeSessionId = eventSessionId(event);
+  const terminalStreamEvent = TERMINAL_STREAM_EVENTS.has(event.type);
   const messageId = (operationId ? state.pendingOperations[operationId] : undefined)
     ?? (routeSessionId ? state.streamingBySession[routeSessionId] : undefined);
 
@@ -258,35 +302,36 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   if (event.type === "approval.request" && routeSessionId) {
     const request = parseApprovalRequest(routeSessionId, data);
     if (!request) return false;
+    bumpInteractionRevision(routeSessionId);
     state.upsertApproval(request);
     return true;
   }
   if (["approval.expire", "approval.resolved"].includes(event.type) && routeSessionId) {
     const requestId = boundedString(payloadValue(data, "request_id", "requestId"), 128);
     if (!requestId) return false;
+    bumpInteractionRevision(routeSessionId);
     state.removeApproval(routeSessionId, requestId);
     return true;
   }
   if (event.type === "clarify.request" && routeSessionId) {
     const request = parseClarificationRequest(routeSessionId, data);
     if (!request) return false;
+    bumpInteractionRevision(routeSessionId);
     state.upsertClarification(request);
     return true;
   }
   if (["clarify.expire", "clarify.resolved"].includes(event.type) && routeSessionId) {
     const requestId = boundedString(payloadValue(data, "request_id", "requestId"), 128);
     if (!requestId) return false;
+    bumpInteractionRevision(routeSessionId);
     state.removeClarification(routeSessionId, requestId);
     return true;
   }
 
-  const terminalStreamEvent = [
-    "message.complete", "message.completed", "message.done", "run.completed",
-    "message.error", "message.failed", "message.interrupted", "message.cancelled",
-    "run.error", "run.failed", "run.interrupted", "run.cancelled",
-    "error", "interrupted",
-  ].includes(event.type);
-  if (terminalStreamEvent && routeSessionId) state.clearSessionInteractions(routeSessionId);
+  if (terminalStreamEvent && routeSessionId) {
+    bumpInteractionRevision(routeSessionId);
+    state.clearSessionInteractions(routeSessionId);
+  }
 
   const usageSessionId = routeSessionId
     ?? (messageId ? state.messages.find((message) => message.id === messageId)?.sessionId : undefined);
@@ -530,7 +575,66 @@ function historyMessages(sessionId: string, items: Record<string, unknown>[]): C
   return messages;
 }
 
-export async function rehydrateSession(sessionId: string) {
+function appendTerminalHistoryNotice(
+  sessionId: string,
+  sessionStatus: string,
+  history: Array<Record<string, unknown>>,
+  messages: ChatMessage[],
+) {
+  let lastUserIndex = -1;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (history[index]?.role !== "user") continue;
+    lastUserIndex = index;
+    break;
+  }
+  if (lastUserIndex < 0) return;
+  const hasFinalResponse = history.slice(lastUserIndex + 1).some((item) => {
+    if (item?.role !== "assistant") return false;
+    if (item.tool_calls || item.toolCalls) return false;
+    const finishReason = String(item.finish_reason ?? item.finishReason ?? "").trim().toLowerCase();
+    if (["tool_calls", "tool_call", "function_call"].includes(finishReason)) return false;
+    const content = item.content ?? item.text;
+    const hasContent = typeof content === "string" && Boolean(content.trim());
+    const hasMedia = Array.isArray(item.controlMedia) && item.controlMedia.length > 0;
+    return hasContent
+      || hasMedia
+      || ["stop", "completed", "complete", "done", "end_turn"].includes(finishReason);
+  });
+  if (hasFinalResponse) return;
+  const content = sessionStatus === "interrupted"
+    ? i18n.t("runtimeMessages.interruptedNoResponse")
+    : sessionStatus === "error"
+      ? i18n.t("runtimeMessages.operationFailed")
+      : ["ready", "completed", "idle"].includes(sessionStatus)
+        ? i18n.t("runtimeMessages.noFinalResponse")
+        : "";
+  if (!content) return;
+  messages.push({
+    id: `control-terminal-${sessionId}-${lastUserIndex}`,
+    sessionId,
+    role: "assistant",
+    content,
+    createdAt: "",
+  });
+}
+
+async function resumeActiveSession(sessionId: string) {
+  const existing = activeSessionRecoveries.get(sessionId);
+  if (existing) return existing;
+  const state = useAppStore.getState();
+  if (state.authState !== "authenticated") return;
+  const recovery = api.resumeSession(sessionId, state.csrfToken).then(() => undefined);
+  activeSessionRecoveries.set(sessionId, recovery);
+  try {
+    await recovery;
+  } finally {
+    if (activeSessionRecoveries.get(sessionId) === recovery) {
+      activeSessionRecoveries.delete(sessionId);
+    }
+  }
+}
+
+export async function rehydrateSession(sessionId: string, recoveryAttempted = false) {
   nextRehydrationGeneration += 1;
   const generation = nextRehydrationGeneration;
   rehydrationGenerations.delete(sessionId);
@@ -541,6 +645,7 @@ export async function rehydrateSession(sessionId: string) {
     rehydrationGenerations.delete(oldest);
   }
   try {
+    const interactionRevisionAtStart = interactionRevision(sessionId);
     const history = await api.sessionHistory(sessionId);
     // Reconnect, replay and terminal events can all request history at nearly
     // the same time. Never let a slower, older active snapshot overwrite a
@@ -556,6 +661,56 @@ export async function rehydrateSession(sessionId: string) {
       && activeOperation.operationId.length <= 200
       && ["pending", "accepted", "streaming", "delivery_unknown"].includes(activeOperation.status),
     );
+    if (
+      Array.isArray(history.pendingInteractions)
+      && interactionRevision(sessionId) === interactionRevisionAtStart
+    ) {
+      // History is authoritative for the current runtime, but an approval
+      // response can be in flight while this read runs. Preserve local
+      // submitting/unknown-delivery locks until that mutation settles; an
+      // empty snapshot must never make the user able to send it twice.
+      const approvalIds = new Set<string>();
+      const clarificationIds = new Set<string>();
+      const sessionMayBeActive = operationIsActive || ACTIVE_SESSION_STATUSES.has(
+        String(history.sessionStatus || "").toLowerCase(),
+      );
+      if (sessionMayBeActive) {
+        history.pendingInteractions.forEach((interaction) => {
+          if (!interaction || typeof interaction.data !== "object" || Array.isArray(interaction.data)) return;
+          if (interaction.type === "approval.request") {
+            const request = parseApprovalRequest(sessionId, interaction.data);
+            if (request) {
+              approvalIds.add(request.requestId);
+              state.upsertApproval(request);
+            }
+          } else if (interaction.type === "clarify.request") {
+            const request = parseClarificationRequest(sessionId, interaction.data);
+            if (request) {
+              clarificationIds.add(request.requestId);
+              state.upsertClarification(request);
+            }
+          }
+        });
+      }
+      (state.approvalsBySession[sessionId] ?? []).forEach((request) => {
+        if (
+          !approvalIds.has(request.requestId)
+          && (
+            request.state !== "submitting"
+            && !(request.state === "ambiguous" && sessionMayBeActive)
+          )
+        ) state.removeApproval(sessionId, request.requestId);
+      });
+      (state.clarificationsBySession[sessionId] ?? []).forEach((request) => {
+        if (
+          !clarificationIds.has(request.requestId)
+          && (
+            request.state !== "submitting"
+            && !(request.state === "ambiguous" && sessionMayBeActive)
+          )
+        ) state.removeClarification(sessionId, request.requestId);
+      });
+    }
 
     if (operationIsActive && activeOperation) {
       const existingStreamId = state.streamingBySession[sessionId];
@@ -587,6 +742,13 @@ export async function rehydrateSession(sessionId: string) {
       unmatchedEvents.delete(activeOperation.operationId);
       unmatchedSessionEvents.delete(sessionId);
       buffered.forEach(applyRealtimeEvent);
+      if (activeOperation.recoveryRequired === true && !recoveryAttempted) {
+        // A Control/gateway reconnect changed the runtime generation. Resume
+        // the existing Hermes session through the guarded mutation endpoint;
+        // never re-submit the user's prompt because tools may have side effects.
+        await resumeActiveSession(sessionId);
+        await rehydrateSession(sessionId, true);
+      }
       return;
     }
 
@@ -602,6 +764,7 @@ export async function rehydrateSession(sessionId: string) {
         });
     }
     unmatchedSessionEvents.delete(sessionId);
+    appendTerminalHistoryNotice(sessionId, history.sessionStatus, history.items, messages);
     useAppStore.getState().setMessagesForSession(sessionId, messages);
   } catch {
     if (rehydrationGenerations.get(sessionId) !== generation) return;
@@ -622,7 +785,7 @@ export function useAuthBootstrap() {
   useEffect(() => {
     if (authState !== "checking") return;
     let active = true;
-    api.me()
+    boundedControlRead(api.me())
       .then((user) => { if (active) setAuth("authenticated", user.name, user.csrfToken, false); })
       .catch(async (error) => {
         if (!active) return;
@@ -652,6 +815,7 @@ export function useAuthBootstrap() {
     let active = true;
     let timer: number | undefined;
     let delayMs = 2_000;
+    let probing = false;
 
     const schedule = () => {
       if (!active) return;
@@ -659,9 +823,11 @@ export function useAuthBootstrap() {
       delayMs = Math.min(delayMs * 2, 30_000);
     };
     const probe = async () => {
+      if (probing) return;
+      probing = true;
       window.clearTimeout(timer);
       try {
-        const user = await api.me();
+        const user = await boundedControlRead(api.me());
         if (!active || useAppStore.getState().authState !== "offline") return;
         setAuth("authenticated", user.name, user.csrfToken, false);
       } catch (error) {
@@ -672,6 +838,8 @@ export function useAuthBootstrap() {
           return;
         }
         schedule();
+      } finally {
+        probing = false;
       }
     };
     const retryNow = () => {
@@ -684,10 +852,16 @@ export function useAuthBootstrap() {
     // when the browser does report network recovery.
     schedule();
     window.addEventListener("online", retryNow);
+    window.addEventListener("focus", retryNow);
+    window.addEventListener("pageshow", retryNow);
+    window.addEventListener("agent-control:resume", retryNow);
     return () => {
       active = false;
       window.clearTimeout(timer);
       window.removeEventListener("online", retryNow);
+      window.removeEventListener("focus", retryNow);
+      window.removeEventListener("pageshow", retryNow);
+      window.removeEventListener("agent-control:resume", retryNow);
     };
   }, [authState, setAuth]);
 
@@ -715,51 +889,60 @@ export function useBootstrapData() {
   useEffect(() => {
     if (authState !== "authenticated" || demoMode || bootstrapLoaded) return;
     let active = true;
-    let cachedData: Awaited<ReturnType<typeof api.bootstrap>> | undefined;
-    void (async () => {
+    let retryTimer: number | undefined;
+    let retryDelayMs = CONTROL_BOOT_RETRY_INITIAL_MS;
+    const loadInitialProjection = async () => {
       try {
-        cachedData = await api.bootstrap();
+        // The first projection is SQLite-backed and does not need a live
+        // Hermes route. Render it immediately: a sleeping laptop/gateway must
+        // degrade one agent, never hold the whole PWA on its dark boot screen.
+        const projection = await boundedControlRead(api.bootstrap());
         if (!active) return;
-        await Promise.allSettled(cachedData.gateways.map((gateway) => api.refreshProfiles(gateway.id, csrfToken)));
-        if (!active) return;
-        const refreshed = await api.bootstrap();
-        if (!active) return;
-        await Promise.allSettled(refreshed.profiles.map((profile) => api.syncSessions(profile.gatewayId, profile.technicalName, csrfToken)));
-        await Promise.allSettled(
-          refreshed.profiles
-            .filter((profile) => profile.capabilities?.cron)
-            .map((profile) => api.syncAutomations(profile.gatewayId, profile.technicalName, csrfToken)),
-        );
-        if (!active) return;
-        const synchronized = await api.bootstrap();
-        if (!active) return;
-        hydrateBootstrap(synchronized);
-        if (useAppStore.getState().offlineCacheEnabled) {
-          await saveOfflineSnapshot(
-            synchronized,
-            useAppStore.getState().userName,
-            useAppStore.getState().selectedWorkspaceId,
-          );
-        }
-        const selectedGatewayId = useAppStore.getState().selectedGatewayId;
-        const selectedGateway = synchronized.gateways.find((gateway) => gateway.id === selectedGatewayId);
+        hydrateBootstrap(projection);
+        const snapshot = useAppStore.getState();
+        const selectedGateway = projection.gateways.find((gateway) => gateway.id === snapshot.selectedGatewayId);
         const hermesConnected = selectedGateway
           ? selectedGateway.status === "connected"
-          : synchronized.gateways.some((gateway) => gateway.status === "connected");
+          : projection.gateways.some((gateway) => gateway.status === "connected");
         setConnection(hermesConnected ? "connected" : "degraded");
+        if (snapshot.offlineCacheEnabled) {
+          void saveOfflineSnapshot(
+            projection,
+            snapshot.userName,
+            snapshot.selectedWorkspaceId,
+          ).catch(() => undefined);
+        }
+        retryDelayMs = CONTROL_BOOT_RETRY_INITIAL_MS;
       } catch {
         if (!active) return;
-        if (cachedData) hydrateBootstrap(cachedData);
+        const cached = await loadShellSnapshot().catch(() => null);
+        if (!active) return;
+        if (cached && cached.userName === useAppStore.getState().userName) {
+          hydrateBootstrap(cached.data);
+        } else {
+          // A first install has no shell snapshot. Keep the visible boot state
+          // recoverable and retry the SQLite-backed projection with backoff;
+          // one transient Control timeout must never strand the PWA forever.
+          retryTimer = window.setTimeout(() => {
+            void loadInitialProjection();
+          }, retryDelayMs);
+          retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+        }
         setConnection("degraded");
       }
-    })();
-    return () => { active = false; };
+    };
+    void loadInitialProjection();
+    return () => {
+      active = false;
+      window.clearTimeout(retryTimer);
+    };
   }, [authState, bootstrapLoaded, csrfToken, demoMode, hydrateBootstrap, setConnection]);
 
   useEffect(() => {
     if (authState !== "authenticated" || demoMode || !bootstrapLoaded) return;
     let active = true;
     let refreshing = false;
+    let synchronizing = false;
 
     const refreshProjection = async () => {
       if (!active || refreshing) return;
@@ -790,16 +973,62 @@ export function useBootstrapData() {
       }
     };
 
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") void refreshProjection();
+    const synchronizeUpstream = async () => {
+      if (!active || synchronizing) return;
+      synchronizing = true;
+      try {
+        const initial = useAppStore.getState();
+        await Promise.allSettled(
+          initial.gateways.map((gateway) => api.refreshProfiles(gateway.id, initial.csrfToken)),
+        );
+        if (!active) return;
+        const refreshed = await api.bootstrap();
+        if (!active) return;
+        await Promise.allSettled(
+          refreshed.profiles.map((profile) => api.syncSessions(
+            profile.gatewayId,
+            profile.technicalName,
+            useAppStore.getState().csrfToken,
+          )),
+        );
+        await Promise.allSettled(
+          refreshed.profiles
+            .filter((profile) => profile.capabilities?.cron)
+            .map((profile) => api.syncAutomations(
+              profile.gatewayId,
+              profile.technicalName,
+              useAppStore.getState().csrfToken,
+            )),
+        );
+        if (!active) return;
+        await refreshProjection();
+      } catch {
+        if (active) setConnection("degraded");
+      } finally {
+        synchronizing = false;
+      }
     };
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void refreshProjection();
+      const selectedSessionId = useAppStore.getState().selectedSessionId;
+      if (selectedSessionId) void rehydrateSession(selectedSessionId);
+    };
+    void synchronizeUpstream();
     const interval = window.setInterval(() => void refreshProjection(), 30_000);
     window.addEventListener("focus", refreshWhenVisible);
+    window.addEventListener("online", refreshWhenVisible);
+    window.addEventListener("pageshow", refreshWhenVisible);
+    window.addEventListener("agent-control:resume", refreshWhenVisible);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       active = false;
       window.clearInterval(interval);
       window.removeEventListener("focus", refreshWhenVisible);
+      window.removeEventListener("online", refreshWhenVisible);
+      window.removeEventListener("pageshow", refreshWhenVisible);
+      window.removeEventListener("agent-control:resume", refreshWhenVisible);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, [authState, bootstrapLoaded, demoMode, hydrateBootstrap, setConnection]);
@@ -1032,6 +1261,13 @@ export async function submitPrompt(content: string) {
         });
         state.setStreamingMessageId(state.selectedSessionId, undefined);
         state.clearOperation(receipt.operationId);
+        if (receipt.status === "completed") {
+          // REST fallback and very fast Hermes turns can finish while a mobile
+          // WebView is backgrounded, before it can consume the terminal WS
+          // frames. Durable history is authoritative; never leave the empty
+          // optimistic assistant placeholder as the final response.
+          await rehydrateSession(state.selectedSessionId);
+        }
       }
       return;
     } catch (error) {
@@ -1090,19 +1326,23 @@ export async function respondToApproval(sessionId: string, requestId: string, ch
     || !sessionSupportsInteraction(state, sessionId, "approvals", "approval.respond", profileOverride)
   ) return;
   state.updateApproval(sessionId, requestId, { state: "submitting", error: undefined });
+  bumpInteractionRevision(sessionId);
   try {
     const receipt = await api.respondApproval(sessionId, requestId, choice, state.csrfToken);
     const terminal = receipt.resolved > 0 || ["resolved", "expired", "not_found"].includes(receipt.status);
     if (terminal) {
+      bumpInteractionRevision(sessionId);
       useAppStore.getState().removeApproval(sessionId, requestId);
       return receipt;
     }
+    bumpInteractionRevision(sessionId);
     useAppStore.getState().updateApproval(sessionId, requestId, {
       state: "failed",
       error: i18n.t("runtimeMessages.noLongerPending"),
     });
     return receipt;
   } catch (error) {
+    bumpInteractionRevision(sessionId);
     if (error instanceof ApiError && error.status === 409 && error.code === "CONFLICT") {
       useAppStore.getState().removeApproval(sessionId, requestId);
       throw error;
@@ -1138,15 +1378,18 @@ export async function respondToClarification(
     submittingQuestionId,
     error: undefined,
   });
+  bumpInteractionRevision(sessionId);
   try {
     const receipt = await api.respondClarification(sessionId, requestId, answer, questionId, state.csrfToken);
     const remaining = Array.isArray(receipt.remaining) ? receipt.remaining : [];
     if (receipt.status === "expired" || remaining.length === 0) {
+      bumpInteractionRevision(sessionId);
       useAppStore.getState().removeClarification(sessionId, requestId);
       return receipt;
     }
     const latest = useAppStore.getState().clarificationsBySession[sessionId]?.find((item) => item.requestId === requestId);
     const storedAnswer = Array.isArray(answer) ? JSON.stringify(answer) : answer;
+    bumpInteractionRevision(sessionId);
     useAppStore.getState().updateClarification(sessionId, requestId, {
       answers: { ...(latest?.answers ?? {}), ...(questionId ? { [questionId]: storedAnswer } : {}) },
       remainingQuestionIds: remaining,
@@ -1156,6 +1399,7 @@ export async function respondToClarification(
     });
     return receipt;
   } catch (error) {
+    bumpInteractionRevision(sessionId);
     if (error instanceof ApiError && error.status === 409 && error.code === "CONFLICT") {
       useAppStore.getState().removeClarification(sessionId, requestId);
       throw error;

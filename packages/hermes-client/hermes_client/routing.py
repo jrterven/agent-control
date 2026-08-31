@@ -68,6 +68,9 @@ class HermesSessionRouter:
         self._validated_runtime: OrderedDict[
             tuple[str, str, str, str], str
         ] = OrderedDict()
+        self._forced_runtime: OrderedDict[
+            tuple[str, str, str], asyncio.Task[tuple[SessionRoute, HermesSession | None]]
+        ] = OrderedDict()
         self._runtime_owner: OrderedDict[tuple[str, str, str], str] = OrderedDict()
         self._owner_generation: OrderedDict[tuple[str, str], str] = OrderedDict()
         self._max_routes = 2_048
@@ -91,7 +94,11 @@ class HermesSessionRouter:
             self._trim(self._validated_runtime, self._max_routes * 2)
 
     async def ensure_runtime(
-        self, route: SessionRoute, connection: ProviderConnection
+        self,
+        route: SessionRoute,
+        connection: ProviderConnection,
+        *,
+        force: bool = False,
     ) -> tuple[SessionRoute, HermesSession | None]:
         self.assert_route(route, connection)
         validation_key = (
@@ -102,14 +109,66 @@ class HermesSessionRouter:
         )
         provider = await self.pool.get(connection)
         generation = provider.runtime_generation
-        if route.runtime_session_id and self._validated_runtime.get(validation_key) == generation:
+        if force:
+            # Two restored tabs can discover the same stale turn together.
+            # Share only the currently-running authoritative resume (including
+            # its status); once it settles, a later recovery must be allowed to
+            # ask Hermes again even within the same connection generation.
+            forced_key = (
+                route.gateway_id,
+                route.profile_name,
+                route.stored_session_id,
+            )
+            existing = self._forced_runtime.get(forced_key)
+            if existing is not None:
+                self._forced_runtime.move_to_end(forced_key)
+                return await asyncio.shield(existing)
+            if len(self._forced_runtime) >= self._max_routes:
+                raise RouteMismatchError("Too many concurrent session resumes")
+            recovery = asyncio.create_task(
+                self._resume_runtime(route, provider, allow_validated=False)
+            )
+            self._forced_runtime[forced_key] = recovery
+            self._forced_runtime.move_to_end(forced_key)
+
+            def clear_recovery(
+                completed: asyncio.Task[tuple[SessionRoute, HermesSession | None]],
+            ) -> None:
+                if self._forced_runtime.get(forced_key) is completed:
+                    self._forced_runtime.pop(forced_key, None)
+
+            recovery.add_done_callback(clear_recovery)
+            return await asyncio.shield(recovery)
+        if (
+            route.runtime_session_id
+            and self._validated_runtime.get(validation_key) == generation
+        ):
             return route, None
+        return await self._resume_runtime(route, provider, allow_validated=True)
+
+    async def _resume_runtime(
+        self,
+        route: SessionRoute,
+        provider: HermesProvider,
+        *,
+        allow_validated: bool,
+    ) -> tuple[SessionRoute, HermesSession | None]:
         lock = self._route_lock(
             (route.gateway_id, route.profile_name, route.stored_session_id)
         )
         async with lock:
             generation = provider.runtime_generation
-            if route.runtime_session_id and self._validated_runtime.get(validation_key) == generation:
+            validation_key = (
+                route.gateway_id,
+                route.profile_name,
+                route.stored_session_id,
+                route.runtime_session_id or "",
+            )
+            if (
+                allow_validated
+                and route.runtime_session_id
+                and self._validated_runtime.get(validation_key) == generation
+            ):
                 return route, None
             resumed = await provider.resume_session(route.stored_session_id)
             if resumed.stored_session_id != route.stored_session_id:
@@ -117,16 +176,17 @@ class HermesSessionRouter:
             if not isinstance(resumed.runtime_session_id, str) or not resumed.runtime_session_id.strip():
                 raise RouteMismatchError("Hermes resume did not return a runtime session id")
             routed = SessionRoute(
-                    gateway_id=route.gateway_id,
-                    profile_name=route.profile_name,
-                    stored_session_id=route.stored_session_id,
-                    runtime_session_id=resumed.runtime_session_id,
+                gateway_id=route.gateway_id,
+                profile_name=route.profile_name,
+                stored_session_id=route.stored_session_id,
+                runtime_session_id=resumed.runtime_session_id,
             )
             if routed.runtime_session_id:
-                self._claim_runtime(routed, provider.runtime_generation)
+                resumed_generation = provider.runtime_generation
+                self._claim_runtime(routed, resumed_generation)
                 self._validated_runtime[
                     (routed.gateway_id, routed.profile_name, routed.stored_session_id, routed.runtime_session_id)
-                ] = provider.runtime_generation
+                ] = resumed_generation
                 self._validated_runtime.move_to_end(
                     (routed.gateway_id, routed.profile_name, routed.stored_session_id, routed.runtime_session_id)
                 )

@@ -1374,6 +1374,11 @@ async def session_history(
     accepted_at = active_response.get("acceptedAt")
     if not isinstance(accepted_at, str) or len(accepted_at) > 100:
         accepted_at = None
+    recovery_required = (
+        await service.runtime_recovery_required(db, row, active_operation)
+        if active_operation is not None
+        else False
+    )
     return {
         "items": history,
         # These two bounded fields let a restarted/evicted PWA reconstruct the
@@ -1384,9 +1389,35 @@ async def session_history(
                 "operationId": active_operation.idempotency_key,
                 "status": active_operation.status,
                 "acceptedAt": accepted_at,
+                "recoveryRequired": recovery_required,
             }
             if active_operation is not None
             else None
+        ),
+        # A resumed session can emit a human gate before a backgrounded PWA
+        # has re-established its websocket. Project the EventHub's bounded,
+        # route-bound claims through history so the controls remain usable.
+        "pendingInteractions": (
+            service.services.event_hub.pending_interaction_snapshots(
+                gateway_id=row.gateway_id,
+                profile_name=row.profile_name,
+                stored_session_id=row.stored_session_id,
+                runtime_session_id=row.runtime_session_id,
+                runtime_generation=row.runtime_generation,
+            )
+            if active_operation is not None
+            or str(row.status or "").lower()
+            in {
+                "pending",
+                "queued",
+                "accepted",
+                "starting",
+                "streaming",
+                "running",
+                "working",
+                "waiting",
+            }
+            else []
         ),
     }
 

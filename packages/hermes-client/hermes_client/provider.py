@@ -2356,11 +2356,32 @@ class HermesGatewayProvider:
             if runtime_value is not None
             else None
         )
+        pending_human_gate = any(
+            isinstance(raw.get(field), Mapping) and bool(raw.get(field))
+            for field in ("pending_approval", "pending_clarify")
+        )
+        active_turn = (
+            raw.get("running") is True
+            or (isinstance(raw.get("inflight"), Mapping) and bool(raw.get("inflight")))
+            or (
+                isinstance(raw.get("auto_continue"), Mapping)
+                and bool(raw.get("auto_continue"))
+            )
+        )
+        if pending_human_gate:
+            status = "waiting"
+        elif active_turn:
+            status = "running"
+        else:
+            status = str(raw.get("status") or "idle")
         return HermesSession(
             stored_session_id=stored_id,
             runtime_session_id=runtime_id,
             title=str(raw["title"])[:500] if raw.get("title") is not None else None,
-            status=str(raw.get("status") or "idle")[:30],
+            # Official resume snapshots may omit status while returning a
+            # human gate, a live turn, inflight output, or auto-continuation.
+            # All are active states and must never be classified as interrupted.
+            status=status[:30],
         )
 
     @staticmethod

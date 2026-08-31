@@ -41,10 +41,16 @@
   let status;
   let recovery;
   let timer;
+  let resumeCheckFrame;
 
   const clearRecoveryTimer = () => {
     if (timer) window.clearTimeout(timer);
     timer = undefined;
+  };
+
+  const clearResumeCheck = () => {
+    if (resumeCheckFrame !== undefined) window.cancelAnimationFrame(resumeCheckFrame);
+    resumeCheckFrame = undefined;
   };
 
   const renderRecovery = () => {
@@ -60,6 +66,7 @@
     recoveryRequested = true;
     mounted = false;
     clearRecoveryTimer();
+    clearResumeCheck();
     document.getElementById("root")?.removeAttribute("data-agent-control-mounted");
     renderRecovery();
   };
@@ -69,6 +76,7 @@
     mounted = true;
     recoveryRequested = false;
     clearRecoveryTimer();
+    clearResumeCheck();
     if (shell) {
       shell.dataset.agentControlBootState = "mounted";
       shell.hidden = true;
@@ -85,6 +93,40 @@
   window.addEventListener("unhandledrejection", () => {
     if (!mounted) requestRecovery();
   });
+
+  const verifyMountedApplication = () => {
+    resumeCheckFrame = undefined;
+    if (!mounted || fatal || document.visibilityState !== "visible") return;
+    const root = document.getElementById("root");
+    if (
+      !root
+      || root.dataset.agentControlMounted !== "true"
+      || root.childElementCount === 0
+    ) {
+      // A frozen/discarded Android WebView can restore the persistent document
+      // after losing React's rendered root. Keep local storage untouched and
+      // offer the same explicit recovery action used for startup failures.
+      requestRecovery(true);
+      return;
+    }
+    window.dispatchEvent(new Event("agent-control:resume"));
+  };
+
+  const scheduleMountedApplicationCheck = () => {
+    // `pageshow` also fires for the initial page load. The startup timer owns
+    // that phase; this watchdog must only inspect an already-mounted app.
+    if (!mounted || fatal || document.visibilityState !== "visible") return;
+    clearResumeCheck();
+    resumeCheckFrame = window.requestAnimationFrame(verifyMountedApplication);
+  };
+
+  window.addEventListener("pageshow", (event) => {
+    // A non-persisted `pageshow` belongs to a normal load and is already
+    // covered by the startup path. Only restored documents need this check.
+    if (event.persisted) scheduleMountedApplicationCheck();
+  });
+  document.addEventListener("resume", scheduleMountedApplicationCheck);
+  document.addEventListener("visibilitychange", scheduleMountedApplicationCheck);
 
   let reloadStarted = false;
   const reloadWithCacheBust = () => {

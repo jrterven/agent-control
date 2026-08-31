@@ -368,8 +368,24 @@ export const api = {
   sessionHistory: (sessionId: string) => request<{
     items: Array<Record<string, unknown>>;
     sessionStatus: string;
-    activeOperation: { operationId: string; status: string; acceptedAt?: string | null } | null;
+    activeOperation: {
+      operationId: string;
+      status: string;
+      acceptedAt?: string | null;
+      recoveryRequired?: boolean;
+    } | null;
+    pendingInteractions?: Array<{
+      type: "approval.request" | "clarify.request";
+      data: Record<string, unknown>;
+    }>;
   }>(`/sessions/${encodeURIComponent(sessionId)}/messages`),
+  resumeSession: (sessionId: string, csrfToken?: string) => request<SessionWire>(
+    `/sessions/${encodeURIComponent(sessionId)}/resume`,
+    {
+      method: "POST",
+      headers: mutationHeaders(csrfToken),
+    },
+  ).then((row) => sessionFromWire(row)),
   sessionMediaUrl: (sessionId: string, mediaId: string) => `/api/v1/sessions/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(mediaId)}`,
   exportSession: (sessionId: string) => requestBlob(`/sessions/${encodeURIComponent(sessionId)}/export`),
   submitPrompt: (sessionId: string, content: string, idempotencyKey: string, csrfToken?: string) => request<{ operationId: string; status: string }>(`/sessions/${encodeURIComponent(sessionId)}/prompts`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey, ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) }, body: JSON.stringify({ content }) }),

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from hermes_control_api.api.routes import bind_owned_realtime_event
 from hermes_client import (
+    HermesSession,
     InMemoryHermesProvider,
+    NormalizedEvent,
     PromptReceipt,
     SessionHistoryNotFound,
 )
@@ -278,6 +281,7 @@ def test_history_exposes_active_operation_for_pwa_process_recovery(authenticated
                     "operationId": operation_id,
                     "status": "streaming",
                     "acceptedAt": accepted_at,
+                    "_runtimeGeneration": row.runtime_generation,
                 },
             )
         )
@@ -292,7 +296,9 @@ def test_history_exposes_active_operation_for_pwa_process_recovery(authenticated
             "operationId": operation_id,
             "status": "streaming",
             "acceptedAt": accepted_at,
+            "recoveryRequired": False,
         },
+        "pendingInteractions": [],
     }
 
     with client.app.state.session_factory() as db:
@@ -345,7 +351,7 @@ def test_second_prompt_is_rejected_while_the_session_has_an_unresolved_operation
 
 
 def test_history_reconciles_a_completed_prompt_when_the_terminal_event_was_missed(
-    authenticated, monkeypatch
+    authenticated, app, monkeypatch
 ):
     client, csrf = authenticated
     session = create_session(client, csrf, "control-dev", "history-reconcile-session")
@@ -380,13 +386,306 @@ def test_history_reconciles_a_completed_prompt_when_the_terminal_event_was_misse
     assert submitted.status_code == 202, submitted.text
     assert submitted.json()["status"] == "streaming"
 
+    with app.state.session_factory() as db:
+        row = db.get(SessionLink, session["id"])
+        pending_gate = NormalizedEvent.create(
+            type="approval.request",
+            gateway_id=row.gateway_id,
+            profile_name=row.profile_name,
+            stored_session_id=row.stored_session_id,
+            runtime_session_id=row.runtime_session_id,
+            runtime_generation=row.runtime_generation,
+            data={"request_id": "stale-gate", "command": "echo stale"},
+        )
+    client.portal.call(app.state.services.event_hub.publish, pending_gate)
+
     history = client.get(f"/api/v1/sessions/{session['id']}/messages")
     assert history.status_code == 200
+    assert history.json()["activeOperation"] is None
+    assert history.json()["pendingInteractions"] == []
     status = client.get(
         f"/api/v1/sessions/{session['id']}/operations/{operation_id}"
     )
     assert status.status_code == 200
     assert status.json()["status"] == "completed"
+
+
+def test_history_does_not_complete_from_tool_call_stubs_without_a_final_answer(
+    authenticated, monkeypatch
+):
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "tool-stub-session")
+
+    async def stop_after_tool_call(
+        provider,
+        route,
+        prompt,
+        *,
+        operation_id,
+        expected_runtime_generation=None,
+    ):
+        provider._messages[route.stored_session_id].extend(
+            [
+                {"id": "tool-user", "role": "user", "content": prompt},
+                {
+                    "id": "tool-assistant-stub",
+                    "role": "assistant",
+                    "content": "Voy a usar el calendario.",
+                    "finish_reason": "tool_calls",
+                    "tool_calls": [{"id": "calendar", "name": "calendar.create"}],
+                },
+                {
+                    "id": "tool-result",
+                    "role": "tool",
+                    "tool_call_id": "calendar",
+                    "content": "Calendar tool started",
+                },
+            ]
+        )
+        return PromptReceipt(operation_id=operation_id, status="streaming")
+
+    monkeypatch.setattr(InMemoryHermesProvider, "submit_prompt", stop_after_tool_call)
+    operation_id = "tool-stub-operation"
+    submitted = client.post(
+        f"/api/v1/sessions/{session['id']}/prompts",
+        headers=mutation_headers(csrf, operation_id),
+        json={"content": "Create two calendar events"},
+    )
+    assert submitted.status_code == 202, submitted.text
+
+    history = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert history.status_code == 200, history.text
+    assert history.json()["activeOperation"]["operationId"] == operation_id
+    status = client.get(
+        f"/api/v1/sessions/{session['id']}/operations/{operation_id}"
+    )
+    assert status.json()["status"] == "streaming"
+
+
+def test_guarded_resume_marks_an_unfinished_turn_interrupted_after_gateway_restart(
+    authenticated, app, monkeypatch
+):
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "gateway-restart-session")
+
+    async def stop_after_tool_call(
+        provider,
+        route,
+        prompt,
+        *,
+        operation_id,
+        expected_runtime_generation=None,
+    ):
+        provider._messages[route.stored_session_id].extend(
+            [
+                {"id": "restart-user", "role": "user", "content": prompt},
+                {
+                    "id": "restart-assistant-stub",
+                    "role": "assistant",
+                    "content": "",
+                    "finish_reason": "tool_calls",
+                    "tool_calls": [{"id": "calendar", "name": "calendar.create"}],
+                },
+                {
+                    "id": "restart-tool",
+                    "role": "tool",
+                    "tool_call_id": "calendar",
+                    "content": "Partial side effect",
+                },
+            ]
+        )
+        return PromptReceipt(operation_id=operation_id, status="streaming")
+
+    monkeypatch.setattr(InMemoryHermesProvider, "submit_prompt", stop_after_tool_call)
+    operation_id = "gateway-restart-operation"
+    submitted = client.post(
+        f"/api/v1/sessions/{session['id']}/prompts",
+        headers=mutation_headers(csrf, operation_id),
+        json={"content": "Create two calendar events safely"},
+    )
+    assert submitted.status_code == 202, submitted.text
+
+    async def restart_gateway_runtime():
+        with app.state.session_factory() as db:
+            row = db.get(SessionLink, session["id"])
+            from hermes_control_api.services import GatewayService
+
+            connection = await GatewayService(app.state.services).connection(
+                db, row.gateway_id, row.profile_name
+            )
+        provider = await app.state.services.provider_pool.get(connection)
+        provider._instance_epoch = "provider-after-gateway-restart"
+
+    client.portal.call(restart_gateway_runtime)
+
+    synchronized = client.post(
+        "/api/v1/sessions/sync",
+        headers=mutation_headers(csrf, "sync-before-runtime-recovery"),
+        json={
+            "gatewayId": session["gatewayId"],
+            "profileName": "control-dev",
+        },
+    )
+    assert synchronized.status_code == 200, synchronized.text
+
+    with app.state.session_factory() as db:
+        row_before_read = db.get(SessionLink, session["id"])
+        runtime_before_read = (
+            row_before_read.runtime_session_id,
+            row_before_read.runtime_generation,
+        )
+
+    # History is a safe read: it identifies that explicit recovery is needed,
+    # but must not resume Hermes or settle the operation without CSRF.
+    history = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert history.status_code == 200, history.text
+    assert history.json()["sessionStatus"] == "streaming"
+    active_operation = history.json()["activeOperation"]
+    assert active_operation["operationId"] == operation_id
+    assert active_operation["status"] == "streaming"
+    assert active_operation["recoveryRequired"] is True
+    with app.state.session_factory() as db:
+        row_after_read = db.get(SessionLink, session["id"])
+        assert (
+            row_after_read.runtime_session_id,
+            row_after_read.runtime_generation,
+        ) == runtime_before_read
+
+    resumed = client.post(
+        f"/api/v1/sessions/{session['id']}/resume",
+        headers=mutation_headers(csrf, "resume-after-gateway-restart"),
+    )
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["status"] == "interrupted"
+
+    settled = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert settled.status_code == 200, settled.text
+    assert settled.json()["sessionStatus"] == "interrupted"
+    assert settled.json()["activeOperation"] is None
+    status = client.get(
+        f"/api/v1/sessions/{session['id']}/operations/{operation_id}"
+    )
+    assert status.json()["status"] == "interrupted"
+
+
+@pytest.mark.parametrize("resume_status", ["waiting", "running"])
+def test_guarded_resume_preserves_an_active_turn_after_gateway_restart(
+    authenticated, app, monkeypatch, resume_status: str
+):
+    client, csrf = authenticated
+    session = create_session(
+        client,
+        csrf,
+        "control-dev",
+        f"{resume_status}-resume-session",
+    )
+
+    async def wait_after_tool_call(
+        provider,
+        route,
+        prompt,
+        *,
+        operation_id,
+        expected_runtime_generation=None,
+    ):
+        provider._messages[route.stored_session_id].extend(
+            [
+                {"id": "waiting-user", "role": "user", "content": prompt},
+                {
+                    "id": "waiting-tool-stub",
+                    "role": "assistant",
+                    "content": "Necesito autorización.",
+                    "finish_reason": "tool_calls",
+                    "tool_calls": [{"id": "approval", "name": "terminal"}],
+                },
+            ]
+        )
+        return PromptReceipt(operation_id=operation_id, status="streaming")
+
+    monkeypatch.setattr(InMemoryHermesProvider, "submit_prompt", wait_after_tool_call)
+    operation_id = f"{resume_status}-resume-operation"
+    submitted = client.post(
+        f"/api/v1/sessions/{session['id']}/prompts",
+        headers=mutation_headers(csrf, operation_id),
+        json={"content": "Ejecuta una acción que requiere aprobación"},
+    )
+    assert submitted.status_code == 202, submitted.text
+
+    async def restart_gateway_runtime():
+        with app.state.session_factory() as db:
+            row = db.get(SessionLink, session["id"])
+            from hermes_control_api.services import GatewayService
+
+            connection = await GatewayService(app.state.services).connection(
+                db, row.gateway_id, row.profile_name
+            )
+        provider = await app.state.services.provider_pool.get(connection)
+        provider._instance_epoch = f"provider-{resume_status}-after-restart"
+
+    client.portal.call(restart_gateway_runtime)
+
+    async def resume_active(provider, stored_session_id):
+        resumed = HermesSession(
+            stored_session_id,
+            f"runtime-{resume_status}",
+            "Turno recuperado",
+            resume_status,
+        )
+        provider._sessions[stored_session_id] = resumed
+        if resume_status == "waiting":
+            assert provider.event_sink is not None
+            await provider.event_sink(
+                NormalizedEvent.create(
+                    type="approval.request",
+                    gateway_id=provider.connection.gateway_id,
+                    profile_name=provider.connection.profile_name,
+                    stored_session_id=stored_session_id,
+                    runtime_session_id=resumed.runtime_session_id,
+                    runtime_generation=provider.runtime_generation,
+                    data={
+                        "request_id": "approval-after-resume",
+                        "command": "calendar.create --safe",
+                        "choices": ["once", "deny"],
+                    },
+                )
+            )
+        return resumed
+
+    monkeypatch.setattr(InMemoryHermesProvider, "resume_session", resume_active)
+
+    history = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert history.status_code == 200, history.text
+    assert history.json()["activeOperation"]["recoveryRequired"] is True
+
+    resumed = client.post(
+        f"/api/v1/sessions/{session['id']}/resume",
+        headers=mutation_headers(csrf, f"resume-{resume_status}-after-restart"),
+    )
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["status"] == resume_status
+
+    recovered = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["sessionStatus"] == resume_status
+    assert recovered.json()["activeOperation"]["operationId"] == operation_id
+    assert recovered.json()["activeOperation"]["recoveryRequired"] is False
+    if resume_status == "waiting":
+        assert recovered.json()["pendingInteractions"] == [
+            {
+                "type": "approval.request",
+                "data": {
+                    "request_id": "approval-after-resume",
+                    "command": "calendar.create --safe",
+                    "choices": ["once", "deny"],
+                },
+            }
+        ]
+    else:
+        assert recovered.json()["pendingInteractions"] == []
+    status = client.get(
+        f"/api/v1/sessions/{session['id']}/operations/{operation_id}"
+    )
+    assert status.json()["status"] == "streaming"
 
 
 def test_history_does_not_guess_completion_from_only_an_accepted_user_message(
@@ -417,11 +716,28 @@ def test_history_does_not_guess_completion_from_only_an_accepted_user_message(
 
     history = client.get(f"/api/v1/sessions/{session['id']}/messages")
     assert history.status_code == 200
+    assert history.json()["activeOperation"] == {
+        "operationId": operation_id,
+        "status": "delivery_unknown",
+        "acceptedAt": None,
+        "recoveryRequired": True,
+    }
     status = client.get(
         f"/api/v1/sessions/{session['id']}/operations/{operation_id}"
     )
     assert status.status_code == 200
     assert status.json()["status"] == "delivery_unknown"
+
+    resumed = client.post(
+        f"/api/v1/sessions/{session['id']}/resume",
+        headers=mutation_headers(csrf, "resume-ambiguous-delivery"),
+    )
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["status"] == "interrupted"
+    settled = client.get(
+        f"/api/v1/sessions/{session['id']}/operations/{operation_id}"
+    )
+    assert settled.json()["status"] == "interrupted"
 
 
 def test_archive_is_normal_and_upstream_delete_requires_exact_confirmation(authenticated):

@@ -90,6 +90,16 @@ _AUDIO_MEDIA_TAG = re.compile(
 )
 _SAFE_PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$")
 _SAFE_MEDIA_ID = re.compile(r"^[0-9a-f]{32}$")
+_ACTIVE_RUNTIME_STATUSES = {
+    "pending",
+    "queued",
+    "accepted",
+    "starting",
+    "streaming",
+    "running",
+    "working",
+    "waiting",
+}
 
 
 @dataclass(frozen=True)
@@ -1432,6 +1442,17 @@ class SessionService:
             getattr(provider, "session_inventory_complete", False)
         )
         upstream_ids = {session.stored_session_id for session in upstream}
+        active_prompt_scopes = set(
+            db.scalars(
+                select(IdempotencyOperation.scope).where(
+                    IdempotencyOperation.user_id == actor.id,
+                    IdempotencyOperation.status.in_(
+                        ("pending", "accepted", "streaming", "delivery_unknown")
+                    ),
+                    IdempotencyOperation.scope.like("session:%:prompt"),
+                )
+            ).all()
+        )
         runtime_owners: dict[str, str] = {}
         for session in upstream:
             if not session.runtime_session_id:
@@ -1477,7 +1498,8 @@ class SessionService:
                 db, row, session.runtime_session_id, provider.runtime_generation
             )
             row.title = session.title
-            row.status = session.status
+            if f"session:{row.id}:prompt" not in active_prompt_scopes:
+                row.status = session.status
             # A row returned by Hermes' durable inventory is no longer the
             # special unpersisted result of Control's session.create call.
             row.initial_history_pending = False
@@ -1499,6 +1521,11 @@ class SessionService:
             ).all()
             for row in local_rows:
                 if row.stored_session_id in upstream_ids:
+                    continue
+                if f"session:{row.id}:prompt" in active_prompt_scopes:
+                    # An unresolved Control turn owns the visible execution
+                    # state until an authenticated resume or terminal event
+                    # settles it. Inventory refresh must not erase that claim.
                     continue
                 if row.initial_history_pending:
                     # Official session.create is lazy-persisted on first prompt.
@@ -1547,15 +1574,76 @@ class SessionService:
         )
         connection = await self.gateways.connection(db, row.gateway_id, row.profile_name)
         route = self._route(row)
-        routed, resumed = await self.services.session_router.ensure_runtime(route, connection)
+        active_operation = db.scalar(
+            select(IdempotencyOperation)
+            .where(
+                IdempotencyOperation.user_id == row.owner_id,
+                IdempotencyOperation.scope == f"session:{row.id}:prompt",
+                IdempotencyOperation.status.in_(
+                    ("pending", "accepted", "streaming", "delivery_unknown")
+                ),
+            )
+            .order_by(IdempotencyOperation.created_at.desc())
+            .limit(1)
+        )
+        routed, resumed = await self.services.session_router.ensure_runtime(
+            route,
+            connection,
+            # This mutation is invoked only after an explicit authenticated
+            # recovery request. Always ask Hermes for authoritative active/
+            # idle state when a prompt is unresolved, even if a concurrent
+            # inventory sync already validated the replacement runtime.
+            force=active_operation is not None,
+        )
+        provider = await self.services.provider_pool.get(connection)
+        runtime_rebound = False
         if resumed is not None:
-            provider = await self.services.provider_pool.get(connection)
             self._assign_runtime(
                 db, row, routed.runtime_session_id, provider.runtime_generation
             )
             row.status = resumed.status
             row.updated_at = utc_now()
-            audit(db, actor=actor, action="session.resume", target_type="session", target_id=row.id)
+            if active_operation is not None:
+                # Keep the operation-scoped generation independent from
+                # inventory syncs, then advance it only after an authenticated
+                # Hermes resume has authoritatively reattached this turn.
+                active_operation.response_json = {
+                    **dict(active_operation.response_json or {}),
+                    "_runtimeGeneration": provider.runtime_generation,
+                }
+        elif routed.runtime_session_id and (
+            row.runtime_session_id != routed.runtime_session_id
+            or row.runtime_generation != provider.runtime_generation
+        ):
+            # The router may already have validated the runtime in this process
+            # while the durable link still carries an older connection
+            # generation. Converge the link without issuing a second resume.
+            self._assign_runtime(
+                db, row, routed.runtime_session_id, provider.runtime_generation
+            )
+            row.updated_at = utc_now()
+            runtime_rebound = True
+        if active_operation is not None:
+            history = await self._raw_history(db, row)
+            resumed_status = str(resumed.status or "").strip().lower() if resumed else ""
+            self._reconcile_active_prompt_from_history(
+                db,
+                row,
+                history,
+                runtime_confirmed_inactive=(
+                    resumed is not None
+                    and resumed_status not in _ACTIVE_RUNTIME_STATUSES
+                ),
+            )
+        if resumed is not None or runtime_rebound or active_operation is not None:
+            audit(
+                db,
+                actor=actor,
+                action="session.resume",
+                target_type="session",
+                target_id=row.id,
+                outcome=row.status,
+            )
             db.commit()
             db.refresh(row)
         return row
@@ -1689,6 +1777,42 @@ class SessionService:
         db.commit()
         return self._project_history(db, row, history)
 
+    async def runtime_recovery_required(
+        self,
+        db: Session,
+        row: SessionLink,
+        operation: IdempotencyOperation,
+    ) -> bool:
+        """Report whether an active turn must be reattached explicitly.
+
+        Reading history never resumes an upstream runtime.  A generation
+        mismatch is instead surfaced to the authenticated PWA, which can use
+        the existing CSRF- and idempotency-protected resume mutation.
+        """
+
+        if operation.status == "delivery_unknown":
+            # The submit mutation may have reached Hermes even when Control
+            # never received its receipt. An authenticated resume is the only
+            # safe way to inspect that turn; the prompt is never resent.
+            return True
+        metadata = dict(operation.response_json or {})
+        accepted_generation = metadata.get("_runtimeGeneration")
+        if (
+            not row.runtime_session_id
+            or not row.runtime_generation
+            or not isinstance(accepted_generation, str)
+            or not accepted_generation
+            or len(accepted_generation) > 96
+        ):
+            return True
+        connection = await self.gateways.connection(
+            db, row.gateway_id, row.profile_name
+        )
+        provider = await self.services.provider_pool.get(connection)
+        # Compare with immutable prompt metadata, not SessionLink: inventory
+        # synchronization is allowed to update the link to a newer runtime.
+        return accepted_generation != provider.runtime_generation
+
     async def media(
         self,
         db: Session,
@@ -1814,6 +1938,9 @@ class SessionService:
             operation.response_json = {
                 **dict(operation.response_json or {}),
                 "_historyCount": len(baseline_history),
+                "_runtimeGeneration": (
+                    await self.services.provider_pool.get(connection)
+                ).runtime_generation,
                 **(
                     {"_historyBoundary": "control-created-empty"}
                     if initial_empty_boundary
@@ -1882,6 +2009,7 @@ class SessionService:
                 operation.status = receipt.status
             operation.response_json = {
                 **dict(operation.response_json or {}),
+                "_runtimeGeneration": provider.runtime_generation,
                 **response,
             }
             audit(db, actor=actor, action="prompt.submit", target_type="session", target_id=row.id)
@@ -1949,6 +2077,8 @@ class SessionService:
         db: Session,
         row: SessionLink,
         history: list[dict[str, Any]],
+        *,
+        runtime_confirmed_inactive: bool = False,
     ) -> None:
         """Confirm a missed terminal event from authoritative Hermes history.
 
@@ -1998,18 +2128,50 @@ class SessionService:
         if prompt_index is None:
             return
         completed = any(
-            isinstance(message, dict) and message.get("role") == "assistant"
+            cls._is_terminal_assistant_message(message)
             for message in history[prompt_index + 1 :]
         )
-        if not completed:
+        if completed:
+            operation.status = "completed"
+            operation.response_json = {
+                **metadata,
+                "operationId": operation.idempotency_key,
+                "status": "completed",
+            }
+            row.status = "ready"
             return
-        operation.status = "completed"
+
+        if not runtime_confirmed_inactive:
+            return
+        # An authenticated session.resume confirmed that the replacement
+        # runtime is inactive. If durable history contains the accepted user
+        # message but no final assistant response, that exact turn cannot still
+        # be executing. Never resend it automatically: tools may already have
+        # produced side effects. A generation change is evidence that recovery
+        # is needed, but only this authenticated resume is allowed to settle it.
+        operation.status = "interrupted"
         operation.response_json = {
             **metadata,
             "operationId": operation.idempotency_key,
-            "status": "completed",
+            "status": "interrupted",
         }
-        row.status = "ready"
+        row.status = "interrupted"
+
+    @staticmethod
+    def _is_terminal_assistant_message(message: Any) -> bool:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            return False
+        if message.get("tool_calls") or message.get("toolCalls"):
+            return False
+        finish_reason = str(
+            message.get("finish_reason") or message.get("finishReason") or ""
+        ).strip().lower()
+        if finish_reason in {"tool_calls", "tool_call", "function_call"}:
+            return False
+        content = message.get("content", message.get("text"))
+        if isinstance(content, str) and content.strip():
+            return True
+        return finish_reason in {"stop", "completed", "complete", "done", "end_turn"}
 
     async def interrupt(self, db: Session, actor: User, row: SessionLink) -> None:
         await require_capability(

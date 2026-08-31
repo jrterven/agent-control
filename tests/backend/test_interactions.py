@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from hermes_client import EventNormalizer, InMemoryHermesProvider, NormalizedEvent
+from hermes_control_api.eventing import EventHub
 from hermes_control_api.models import Gateway, SessionLink, User
 
 from .conftest import mutation_headers
@@ -44,6 +45,79 @@ def _pending_request(client, app, session_id: str, csrf: str, marker: str, key: 
     ]
     assert matches
     return matches[-1]
+
+
+@pytest.mark.asyncio
+async def test_pending_interaction_snapshots_are_bounded_and_cleared_by_lifecycle():
+    hub = EventHub()
+
+    def event(
+        event_type: str,
+        data: dict,
+        *,
+        event_id: str,
+        runtime_id: str = "runtime-a",
+        generation: str = "generation-a",
+    ) -> NormalizedEvent:
+        return NormalizedEvent.create(
+            event_id=event_id,
+            type=event_type,
+            gateway_id="gateway-a",
+            profile_name="jarvis",
+            stored_session_id="stored-a",
+            runtime_session_id=runtime_id,
+            runtime_generation=generation,
+            data=data,
+        )
+
+    request = {
+        "request_id": "approval-a",
+        "command": "calendar.create --safe",
+        "choices": ["once", "deny"],
+    }
+    await hub.publish(event("approval.request", request, event_id="request-a"))
+    assert hub.pending_interaction_snapshots(
+        gateway_id="gateway-a",
+        profile_name="jarvis",
+        stored_session_id="stored-a",
+        runtime_session_id="runtime-a",
+        runtime_generation="generation-a",
+    ) == [{"type": "approval.request", "data": request}]
+
+    await hub.publish(
+        event(
+            "approval.resolved",
+            {"request_id": "approval-a", "status": "resolved"},
+            event_id="resolved-a",
+        )
+    )
+    assert not hub._interactions
+
+    await hub.publish(event("approval.request", request, event_id="request-b"))
+    await hub.publish(
+        event(
+            "message.complete",
+            {},
+            event_id="terminal-old-runtime",
+            runtime_id="runtime-old",
+            generation="generation-old",
+        )
+    )
+    assert hub._interactions
+    await hub.publish(event("message.complete", {}, event_id="terminal-a"))
+    assert not hub._interactions
+
+    await hub.publish(
+        event(
+            "approval.request",
+            {
+                "request_id": "approval-oversize",
+                "description": "x" * (16 * 1024),
+            },
+            event_id="request-oversize",
+        )
+    )
+    assert not hub._interactions
 
 
 def test_approval_and_clarification_routes_are_owner_bound_and_idempotent(

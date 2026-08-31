@@ -1,4 +1,4 @@
-import { createRootRoute, createRoute, createRouter, Navigate, Outlet } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, Navigate, Outlet, useRouterState } from "@tanstack/react-router";
 import { AppShell } from "./components/AppShell";
 import { ChatView } from "./components/ChatView";
 import { useAuthBootstrap, useBootstrapData, useOfflineTranscriptCache, useRealtimeConnection, useSessionHistory, useThemePreference } from "./hooks";
@@ -18,13 +18,13 @@ function RootLayout() {
   useOfflineTranscriptCache();
   const authState = useAppStore((state) => state.authState);
   const bootstrapLoaded = useAppStore((state) => state.bootstrapLoaded);
-  // Route transitions already re-render the root match. Reading the browser
-  // location avoids a second external-store subscription that loops with
-  // React 19 while the auth bootstrap redirects between `/` and `/login`.
-  const pathname = window.location.pathname;
+  // Android can restore a mounted PWA with an expired cookie. Subscribe to the
+  // router's canonical location so the auth redirect cannot leave a stale,
+  // empty <Navigate> tree after the persistent boot shell has been hidden.
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   if (authState === "checking") return <main className="boot-screen"><BrandMark size="lg" label="Agent Control" /><p>Preparando tu centro de control…</p></main>;
-  if (authState === "unauthenticated" && pathname !== "/login") return <Navigate to="/login" replace />;
-  if ((authState === "authenticated" || authState === "offline") && pathname === "/login") return <Navigate to="/chats" replace />;
+  if (authState === "unauthenticated" && pathname !== "/login") return <><Navigate to="/login" replace /><main className="boot-screen"><BrandMark size="lg" label="Agent Control" /><p>Abriendo el acceso seguro…</p></main></>;
+  if ((authState === "authenticated" || authState === "offline") && pathname === "/login") return <><Navigate to="/chats" replace /><main className="boot-screen"><BrandMark size="lg" label="Agent Control" /><p>Abriendo tus conversaciones…</p></main></>;
   if (authState === "authenticated" && !bootstrapLoaded) return <main className="boot-screen" aria-live="polite"><BrandMark size="lg" label="Agent Control" /><p>Conectando con tus agentes…</p></main>;
   return <Outlet />;
 }

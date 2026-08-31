@@ -116,4 +116,34 @@ describe("rehydrated Hermes tool history", () => {
       },
     ]);
   });
+
+  it("shows partial tool evidence when an interrupted turn has no assistant text", async () => {
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      sessionStatus: "interrupted",
+      activeOperation: null,
+      pendingInteractions: [],
+      items: [
+        { id: "user-partial", role: "user", content: "Agenda la reunión" },
+        {
+          id: "assistant-partial",
+          role: "assistant",
+          content: "",
+          finish_reason: "tool_calls",
+          tool_calls: [{ id: "calendar-call", name: "calendar.create" }],
+        },
+        {
+          id: "calendar-result",
+          role: "tool",
+          tool_call_id: "calendar-call",
+          tool_name: "calendar.create",
+          content: "Se alcanzó a crear un evento",
+        },
+      ],
+    });
+
+    render(<ReopenedChat />);
+
+    expect(await screen.findByText("Se alcanzó a crear un evento")).toBeVisible();
+    expect(screen.getByText(/se interrumpió antes/i)).toBeVisible();
+  });
 });

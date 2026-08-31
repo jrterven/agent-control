@@ -71,6 +71,72 @@ test("reactiva la recuperación tras un fallo fatal posterior al montaje", async
   await expect(page.getByRole("button", { name: "Reparar y recargar" })).toBeVisible();
 });
 
+test("conserva una PWA sana y solicita sincronización al volver del fondo", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-mobile", "El ciclo de vida PWA se valida una vez en Chromium móvil");
+
+  await page.goto("/chats");
+  await expect(page.getByText("La sesión está aislada y lista para continuar.")).toBeVisible();
+  await expect(page.locator("[data-agent-control-boot]")).toBeHidden();
+  const originalUrl = page.url();
+
+  await page.evaluate(() => {
+    (window as Window & { agentControlResumeCount?: number }).agentControlResumeCount = 0;
+    window.addEventListener("agent-control:resume", () => {
+      const instrumentedWindow = window as Window & { agentControlResumeCount?: number };
+      instrumentedWindow.agentControlResumeCount = (instrumentedWindow.agentControlResumeCount ?? 0) + 1;
+    });
+    window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: false }));
+  });
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+  }));
+  expect(await page.evaluate(() => (
+    (window as Window & { agentControlResumeCount?: number }).agentControlResumeCount
+  ))).toBe(0);
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+  });
+
+  await expect.poll(() => page.evaluate(() => (
+    (window as Window & { agentControlResumeCount?: number }).agentControlResumeCount
+  ))).toBe(1);
+  await expect(page.locator("[data-agent-control-boot]")).toBeHidden();
+  await expect(page.locator("#root")).toHaveAttribute("data-agent-control-mounted", "true");
+  expect(page.url()).toBe(originalUrl);
+
+  await page.evaluate(() => document.dispatchEvent(new Event("resume")));
+  await expect.poll(() => page.evaluate(() => (
+    (window as Window & { agentControlResumeCount?: number }).agentControlResumeCount
+  ))).toBe(2);
+
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect.poll(() => page.evaluate(() => (
+    (window as Window & { agentControlResumeCount?: number }).agentControlResumeCount
+  ))).toBe(3);
+  await expect(page.locator("[data-agent-control-boot]")).toBeHidden();
+  expect(page.url()).toBe(originalUrl);
+});
+
+test("muestra recuperación si Android restaura un root montado pero vacío", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-mobile", "El ciclo de vida PWA se valida una vez en Chromium móvil");
+
+  await page.goto("/chats");
+  await expect(page.getByText("La sesión está aislada y lista para continuar.")).toBeVisible();
+  await expect(page.locator("#root")).toHaveAttribute("data-agent-control-mounted", "true");
+  await writeBootRecoveryMarker(page);
+
+  await page.evaluate(() => {
+    document.getElementById("root")?.replaceChildren();
+    window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+  });
+
+  await expect(page.getByText("La app no pudo iniciar. Tus borradores locales se conservarán.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reparar y recargar" })).toBeVisible();
+  await expect.poll(() => bootRecoveryMarkerExists(page)).toBe(true);
+  await expect.poll(() => bootRecoveryCacheExists(page)).toBe(true);
+});
+
 async function databaseRecordExists(page: import("@playwright/test").Page, storeName: string, key: string) {
   return page.evaluate(async ({ storeName, key }) => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {

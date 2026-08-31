@@ -198,6 +198,93 @@ async def test_history_uses_durable_read_without_resuming_a_runtime(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_concurrent_forced_runtime_recovery_resumes_once_per_generation(
+    monkeypatch,
+):
+    pool = ProviderPool(lambda connection: InMemoryHermesProvider(connection))
+    router = HermesSessionRouter(pool)
+    connection = ProviderConnection("g1", "default", "http://x", "ws://x")
+    provider = await pool.get(connection)
+    original_resume = provider.resume_session
+    resume_started = asyncio.Event()
+    release_resume = asyncio.Event()
+
+    async def delayed_resume(stored_session_id: str):
+        resume_started.set()
+        await release_resume.wait()
+        return await original_resume(stored_session_id)
+
+    resume = AsyncMock(side_effect=delayed_resume)
+    monkeypatch.setattr(provider, "resume_session", resume)
+    first = asyncio.create_task(
+        router.ensure_runtime(
+            SessionRoute("g1", "default", "stored-concurrent", "runtime-stale-a"),
+            connection,
+            force=True,
+        )
+    )
+    await resume_started.wait()
+    second = asyncio.create_task(
+        router.ensure_runtime(
+            SessionRoute("g1", "default", "stored-concurrent", "runtime-stale-b"),
+            connection,
+            force=True,
+        )
+    )
+    await asyncio.sleep(0)
+    release_resume.set()
+
+    (first_route, first_resume), (second_route, second_resume) = await asyncio.gather(
+        first, second
+    )
+
+    resume.assert_awaited_once_with("stored-concurrent")
+    assert first_resume is not None
+    assert second_resume is first_resume
+    assert first_route.runtime_session_id == second_route.runtime_session_id
+    assert first_route.runtime_session_id not in {
+        "runtime-stale-a",
+        "runtime-stale-b",
+    }
+    await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_sequential_forced_runtime_recovery_is_not_cached(
+    monkeypatch,
+):
+    pool = ProviderPool(lambda connection: InMemoryHermesProvider(connection))
+    router = HermesSessionRouter(pool)
+    connection = ProviderConnection("g1", "default", "http://x", "ws://x")
+    provider = await pool.get(connection)
+    original_resume = provider.resume_session
+    resume = AsyncMock(side_effect=original_resume)
+    monkeypatch.setattr(provider, "resume_session", resume)
+    route = SessionRoute("g1", "default", "stored-restarted", "runtime-stale")
+
+    first_route, first_resume = await router.ensure_runtime(
+        route, connection, force=True
+    )
+    duplicate_route, duplicate_resume = await router.ensure_runtime(
+        route, connection, force=True
+    )
+    later_route, later_resume = await router.ensure_runtime(
+        duplicate_route, connection, force=True
+    )
+
+    assert resume.await_count == 3
+    assert first_resume is not None
+    assert duplicate_resume is not None
+    assert later_resume is not None
+    assert len({
+        first_route.runtime_session_id,
+        duplicate_route.runtime_session_id,
+        later_route.runtime_session_id,
+    }) == 3
+    await pool.close()
+
+
+@pytest.mark.asyncio
 async def test_idempotency_scope_includes_gateway_and_profile():
     pool = ProviderPool(lambda connection: InMemoryHermesProvider(connection))
     router = HermesSessionRouter(pool)

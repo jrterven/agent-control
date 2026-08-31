@@ -75,4 +75,30 @@ describe("prompt delivery classification", () => {
     expect(state.streamingBySession["session-a"]).toBeUndefined();
     expect(state.pendingOperations[send.mock.calls[0][2]]).toBeUndefined();
   });
+
+  it("replaces a fast completed placeholder with authoritative history", async () => {
+    const send = vi.spyOn(api, "submitPrompt").mockImplementation(async (_sessionId, _content, idempotencyKey) => ({
+      operationId: idempotencyKey,
+      status: "completed",
+    }));
+    const history = vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      items: [
+        { id: "durable-user", role: "user", content: "Agenda la reunión" },
+        { id: "durable-answer", role: "assistant", content: "La reunión quedó agendada." },
+      ],
+      sessionStatus: "ready",
+      activeOperation: null,
+    });
+
+    await submitPrompt("Agenda la reunión");
+
+    const state = useAppStore.getState();
+    expect(history).toHaveBeenCalledWith("session-a");
+    expect(state.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "durable-answer", content: "La reunión quedó agendada." }),
+    ]));
+    expect(state.messages.some((message) => message.role === "assistant" && !message.content.trim())).toBe(false);
+    expect(state.streamingBySession["session-a"]).toBeUndefined();
+    expect(state.pendingOperations[send.mock.calls[0][2]]).toBeUndefined();
+  });
 });

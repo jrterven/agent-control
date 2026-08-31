@@ -455,12 +455,46 @@ async def test_resume_replays_official_pending_human_gates(monkeypatch):
         await provider.close()
 
     assert resumed.stored_session_id == "stored-1"
+    assert resumed.status == "waiting"
     assert [event.type for event in emitted] == [
         "approval.request",
         "clarify.request",
     ]
     assert all(event.stored_session_id == "stored-1" for event in emitted)
     assert all(event.runtime_session_id == "runtime-new" for event in emitted)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "active_snapshot",
+    [
+        {"running": True},
+        {"running": False, "inflight": {"turn_id": "turn-1"}},
+        {"running": False, "auto_continue": {"reason": "tool_result"}},
+    ],
+)
+async def test_resume_normalizes_active_snapshots_without_a_status(
+    monkeypatch, active_snapshot
+):
+    provider = HermesGatewayProvider(
+        _connection(trusted_source_sha=AUDITED_0206_SHA)
+    )
+
+    async def fake_read(method: str, params=None):
+        assert method == "session.resume"
+        return {
+            "session_id": "runtime-active",
+            "session_key": "stored-active",
+            **active_snapshot,
+        }
+
+    monkeypatch.setattr(provider, "_read", fake_read)
+    try:
+        resumed = await provider.resume_session("stored-active")
+    finally:
+        await provider.close()
+
+    assert resumed.status == "running"
 
 
 @pytest.mark.asyncio

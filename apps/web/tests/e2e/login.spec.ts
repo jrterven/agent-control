@@ -1,6 +1,17 @@
 import { expect, test } from "@playwright/test";
 import { installMockApi } from "./fixtures";
 
+test("una sesión expirada restaurada desde chats siempre muestra el acceso", async ({ context, page }) => {
+  await installMockApi(context, { authenticated: false });
+
+  await page.goto("/chats", { waitUntil: "domcontentloaded" });
+
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { name: "Tus agentes. Un solo lugar." })).toBeVisible();
+  await expect(page.locator("#root > *")).not.toHaveCount(0);
+  await expect(page.locator("[data-agent-control-boot]")).toBeHidden();
+});
+
 test("autentica al administrador sin persistir la contraseña en almacenamiento web", async ({ context, page }) => {
   await installMockApi(context, { authenticated: false });
   await page.goto("/login");
