@@ -13,11 +13,13 @@ from hermes_client import (
     InMemoryHermesProvider,
     JsonRpcClient,
     NormalizedEvent,
+    PromptAttachment,
     ProviderConnection,
     ProviderPool,
     ReplayState,
     RouteMismatchError,
     SessionRoute,
+    project_attachment_prompt,
 )
 from hermes_control_api.eventing import EventHub
 from hermes_control_api.api.routes import bind_owned_realtime_event
@@ -172,6 +174,65 @@ async def test_router_isolates_profiles_and_resumes_before_prompt():
             prompt="must not cross",
             idempotency_key="different",
         )
+
+
+@pytest.mark.asyncio
+async def test_router_attaches_files_on_the_resumed_runtime_and_projects_history():
+    pool = ProviderPool(lambda connection: InMemoryHermesProvider(connection))
+    router = HermesSessionRouter(pool)
+    connection = ProviderConnection("g1", "default", "http://x", "ws://x")
+    provider = await pool.get(connection)
+    submitted: list[str] = []
+
+    async def remember(prompt: str) -> None:
+        submitted.append(prompt)
+
+    routed, _ = await router.submit_prompt(
+        route=SessionRoute("g1", "default", "stored-attachments"),
+        connection=connection,
+        prompt="Usa los adjuntos",
+        idempotency_key="attachment-prompt",
+        attachments=[
+            PromptAttachment("image", "foto.png", "image/png", b"png"),
+            PromptAttachment("file", "notas.txt", "text/plain", b"notes"),
+        ],
+        before_dispatch=remember,
+    )
+
+    assert routed.runtime_session_id
+    assert len(submitted) == 1
+    content, attachments = project_attachment_prompt(submitted[0])
+    assert content == "Usa los adjuntos"
+    assert [item["name"] for item in attachments] == ["foto.png", "notas.txt"]
+    assert "@file:attachments/notas.txt" in submitted[0]
+    history = await provider.history(routed)
+    assert history[0]["content"] == submitted[0]
+    await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_router_detaches_queued_images_when_pre_dispatch_commit_fails():
+    pool = ProviderPool(lambda connection: InMemoryHermesProvider(connection))
+    router = HermesSessionRouter(pool)
+    connection = ProviderConnection("g1", "default", "http://x", "ws://x")
+    provider = await pool.get(connection)
+
+    async def fail_before_dispatch(_prompt: str) -> None:
+        raise RuntimeError("durable commit failed")
+
+    with pytest.raises(RuntimeError, match="durable commit failed"):
+        await router.submit_prompt(
+            route=SessionRoute("g1", "default", "stored-cleanup"),
+            connection=connection,
+            prompt="No debe enviarse",
+            idempotency_key="attachment-cleanup",
+            attachments=[PromptAttachment("image", "foto.png", "image/png", b"png")],
+            before_dispatch=fail_before_dispatch,
+        )
+
+    assert provider._attached_images["stored-cleanup"] == []
+    assert await provider.history_readonly("stored-cleanup") == []
+    await pool.close()
 
 
 @pytest.mark.asyncio

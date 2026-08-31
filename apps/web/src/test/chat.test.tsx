@@ -8,6 +8,7 @@ import { automations, gateways, initialMessages, profiles, sessions, workspaces 
 import { api } from "../lib/api";
 import { textForSpeech } from "../hooks/useSpeechPlayback";
 import { useAppStore } from "../store/appStore";
+import type { Profile } from "../types";
 
 const chatScribeMock = vi.hoisted(() => {
   const handlers = new Map<string, (event: Record<string, unknown>) => void>();
@@ -91,6 +92,46 @@ describe("mobile-first chat", () => {
     expect(screen.getByRole("heading", { name: "Memoria de agentes · agosto" })).toBeInTheDocument();
     expect(screen.getByText("Comparativa de memoria de agentes — Agosto 2026")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Herramientas · 2/i })).not.toBeInTheDocument();
+    expect((await axe.run(container)).violations).toHaveLength(0);
+  });
+
+  it("opens the plus menu and sends selected images and files with the chat message", async () => {
+    useAppStore.setState({
+      demoMode: false,
+      profiles: profiles.map((profile): Profile => profile.id === "profile-newton"
+        ? { ...profile, mutable: true }
+        : profile),
+    });
+    const submit = vi.spyOn(api, "submitPrompt").mockResolvedValue({ operationId: "attachment-operation", status: "streaming" });
+    const user = userEvent.setup();
+    const { container } = render(<ChatView />);
+
+    await user.click(screen.getByRole("button", { name: "Agregar al chat" }));
+    expect(screen.getByRole("menu", { name: "Opciones para agregar" })).toBeVisible();
+    expect(screen.getByRole("menuitem", { name: /Imagen/ })).toBeVisible();
+    expect(screen.getByRole("menuitem", { name: /Archivo/ })).toBeVisible();
+
+    const imageInput = container.querySelector<HTMLInputElement>('input[type="file"][accept^="image/"]');
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"][accept^=".c"]');
+    expect(imageInput).not.toBeNull();
+    expect(fileInput).not.toBeNull();
+    if (!imageInput || !fileInput) return;
+    const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "captura.png", { type: "image/png" });
+    const notes = new File(["hola"], "notas.txt", { type: "text/plain" });
+    await user.upload(imageInput, image);
+    await user.upload(fileInput, notes);
+
+    expect(screen.getByText("captura.png")).toBeVisible();
+    expect(screen.getByText("notas.txt")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Enviar mensaje" }));
+    await waitFor(() => expect(submit).toHaveBeenCalled());
+    const call = submit.mock.calls[0];
+    expect(call[0]).toBe("session-papers");
+    expect(call[1]).toBe("");
+    expect(call[3]).toBe("csrf-memory-only");
+    expect(call[4]).toEqual([image, notes]);
+    expect(screen.getAllByText("captura.png").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("notas.txt").length).toBeGreaterThan(0);
     expect((await axe.run(container)).violations).toHaveLength(0);
   });
 

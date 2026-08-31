@@ -121,6 +121,34 @@ class FailoverProvider:
             "submit_prompt", route, prompt, operation_id=operation_id, prompt=True
         )
 
+    async def attach_prompt_attachment(
+        self,
+        route,
+        attachment,
+        *,
+        expected_runtime_generation=None,
+    ):
+        return await self._call(
+            "attach_prompt_attachment",
+            route,
+            attachment,
+            expected_runtime_generation=expected_runtime_generation,
+        )
+
+    async def detach_prompt_images(
+        self,
+        route,
+        paths,
+        *,
+        expected_runtime_generation=None,
+    ):
+        return await self._call(
+            "detach_prompt_images",
+            route,
+            paths,
+            expected_runtime_generation=expected_runtime_generation,
+        )
+
     async def interrupt(self, route):
         return await self._call("interrupt", route)
 

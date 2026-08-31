@@ -6,8 +6,9 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
+from .attachments import compose_attachment_prompt
 from .provider import HermesProvider, ProviderConnection, RuntimeGenerationChanged
-from .types import HermesSession, PromptReceipt, SessionRoute
+from .types import HermesSession, PromptAttachment, PromptAttachmentReceipt, PromptReceipt, SessionRoute
 
 
 class RouteMismatchError(ValueError):
@@ -270,6 +271,8 @@ class HermesSessionRouter:
         prompt: str,
         idempotency_key: str,
         operation_id: str | None = None,
+        attachments: list[PromptAttachment] | None = None,
+        before_dispatch: Callable[[str], Awaitable[None]] | None = None,
     ) -> tuple[SessionRoute, PromptReceipt]:
         self.assert_route(route, connection)
         receipt_key = (
@@ -303,25 +306,71 @@ class HermesSessionRouter:
             ):
                 routed = await self._resume_locked(routed, provider)
             correlation_id = operation_id or uuid4().hex
-            expected_generation = provider.runtime_generation
+            selected = list(attachments or [])
+
+            async def dispatch_once() -> PromptReceipt:
+                expected_generation = provider.runtime_generation
+                attachment_receipts: list[PromptAttachmentReceipt] = []
+                detach_paths: list[str] = []
+                prompt_dispatch_started = False
+                try:
+                    for attachment in selected:
+                        attached = await provider.attach_prompt_attachment(
+                            routed,
+                            attachment,
+                            expected_runtime_generation=expected_generation,
+                        )
+                        attachment_receipts.append(attached)
+                        detach_paths.extend(attached.detach_paths)
+                    submitted_prompt = (
+                        compose_attachment_prompt(prompt, selected, attachment_receipts)
+                        if selected
+                        else prompt
+                    )
+                    if before_dispatch is not None:
+                        await before_dispatch(submitted_prompt)
+                    prompt_dispatch_started = True
+                    return await provider.submit_prompt(
+                        routed,
+                        submitted_prompt,
+                        operation_id=correlation_id,
+                        expected_runtime_generation=expected_generation,
+                    )
+                except RuntimeGenerationChanged:
+                    if detach_paths:
+                        await provider.detach_prompt_images(
+                            routed,
+                            tuple(detach_paths),
+                            expected_runtime_generation=expected_generation,
+                        )
+                    raise
+                except asyncio.CancelledError:
+                    if detach_paths and not prompt_dispatch_started:
+                        await provider.detach_prompt_images(
+                            routed,
+                            tuple(detach_paths),
+                            expected_runtime_generation=expected_generation,
+                        )
+                    raise
+                except Exception:
+                    # Once prompt.submit starts, a transport error is ambiguous:
+                    # detaching could race an accepted turn. Before that point,
+                    # remove queued images so they cannot leak into a later turn.
+                    if detach_paths and not prompt_dispatch_started:
+                        await provider.detach_prompt_images(
+                            routed,
+                            tuple(detach_paths),
+                            expected_runtime_generation=expected_generation,
+                        )
+                    raise
+
             try:
-                receipt = await provider.submit_prompt(
-                    routed,
-                    prompt,
-                    operation_id=correlation_id,
-                    expected_runtime_generation=expected_generation,
-                )
+                receipt = await dispatch_once()
             except RuntimeGenerationChanged:
-                # The provider proves this exception happens before dispatch,
-                # so one official resume and one retry cannot duplicate a
-                # prompt. A later transport failure remains delivery_unknown.
+                # Attachment and prompt generation changes are proven
+                # pre-dispatch. Resume once and rebuild all session-scoped refs.
                 routed = await self._resume_locked(routed, provider)
-                receipt = await provider.submit_prompt(
-                    routed,
-                    prompt,
-                    operation_id=correlation_id,
-                    expected_runtime_generation=provider.runtime_generation,
-                )
+                receipt = await dispatch_once()
             self._receipts[receipt_key] = receipt
             self._receipts.move_to_end(receipt_key)
             self._trim(self._receipts, self._max_receipts)

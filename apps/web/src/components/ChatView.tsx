@@ -1,4 +1,4 @@
-import { CaretDown, Check, Checks, Lightning, Microphone, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle } from "@phosphor-icons/react";
+import { CaretDown, Check, Checks, File, Image, Lightning, Microphone, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle, X } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { TFunction } from "i18next";
@@ -14,13 +14,17 @@ import { useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
 import { useSpeechPlayback, type LiveSpeechStatus, type SpeechPlaybackStatus } from "../hooks/useSpeechPlayback";
 import { usePwaUpdateStore } from "../lib/pwaUpdate";
-import type { AgentActivityItem, ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageMedia, Profile } from "../types";
+import type { AgentActivityItem, ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageAttachment, MessageMedia, Profile } from "../types";
 import { ProfileAvatar } from "./ProfileAvatar";
 
 const emptyApprovals: ApprovalRequest[] = [];
 const emptyClarifications: ClarificationRequest[] = [];
 const automationInstructionMaxLines = 10;
 const conversationFollowThreshold = 48;
+const attachmentMaxFiles = 5;
+const attachmentMaxBytes = 8 * 1024 * 1024;
+const attachmentMaxTotalBytes = 12 * 1024 * 1024;
+const attachmentFileAccept = ".c,.cfg,.cpp,.csv,.doc,.docx,.go,.h,.hpp,.html,.ini,.java,.js,.json,.jsx,.log,.md,.odp,.ods,.odt,.pdf,.ppt,.pptx,.py,.rs,.rtf,.sh,.sql,.toml,.ts,.tsx,.txt,.xls,.xlsx,.xml,.yaml,.yml";
 const interactionErrorKeys: Record<string, "deliveryUnknown" | "noLongerPending" | "generic"> = {
   "El resultado no está confirmado. Los controles permanecerán bloqueados hasta que Hermes reconcilie la solicitud.": "deliveryUnknown",
   "Hermes no confirmó que la solicitud siga pendiente.": "noLongerPending",
@@ -36,6 +40,21 @@ function DeliveryIcon({ delivery }: { delivery?: ChatMessage["delivery"] }) {
   if (delivery === "ambiguous" || delivery === "failed") return <WarningCircle aria-label={t("chat.delivery.unconfirmed")} />;
   if (delivery === "sent") return <Checks aria-label={t("chat.delivery.delivered")} />;
   return <Check aria-label={t("chat.delivery.sending")} />;
+}
+
+function attachmentSize(size: number) {
+  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(size / 1024))} KB`;
+}
+
+function MessageAttachments({ attachments }: { attachments: MessageAttachment[] }) {
+  const { t } = useTranslation();
+  return <div className="message-attachments" aria-label={t("chat.attachments.attached")}>
+    {attachments.map((attachment, index) => <span className="message-attachment" key={`${attachment.name}-${index}`}>
+      {attachment.kind === "image" ? <Image aria-hidden="true" /> : <File aria-hidden="true" />}
+      <span><strong>{attachment.name}</strong><small>{attachmentSize(attachment.size)}</small></span>
+    </span>)}
+  </div>;
 }
 
 function AgentActivityDisclosure({ agentName, message }: { agentName: string; message?: ChatMessage }) {
@@ -446,7 +465,7 @@ function Message({ message, profile, agentName, speech, automationInstruction = 
   if (message.role === "user") {
     return (
       <article className="message message--user" aria-label={t(automationInstruction ? "chat.automationInstruction.title" : "chat.userMessage")}>
-        {automationInstruction ? <AutomationInstructionMessage message={message} /> : <div className="user-bubble"><span className="message-time">{message.createdAt} <DeliveryIcon delivery={message.delivery} /></span><p>{message.content}</p></div>}
+        {automationInstruction ? <AutomationInstructionMessage message={message} /> : <div className="user-bubble"><span className="message-time">{message.createdAt} <DeliveryIcon delivery={message.delivery} /></span>{message.attachments?.length ? <MessageAttachments attachments={message.attachments} /> : null}{message.content ? <p>{message.content}</p> : null}</div>}
         {message.delivery === "ambiguous" ? <p className="delivery-warning"><WarningCircle /> {t("chat.deliveryWarning")}</p> : null}
       </article>
     );
@@ -548,6 +567,9 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
   const [value, setValue] = useState("");
   const [dictationConsent, setDictationConsent] = useState(false);
   const [consentOpen, setConsentOpen] = useState(false);
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const [attachmentIssue, setAttachmentIssue] = useState<"tooMany" | "tooLarge" | "tooMuchTotal" | "unsupported" | undefined>();
   const streamingMessageId = useAppStore((state) => state.streamingBySession[sessionId]);
   const csrfToken = useAppStore((state) => state.csrfToken);
   const authState = useAppStore((state) => state.authState);
@@ -555,6 +577,8 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
   const draft = useSessionDraft(sessionId);
   const setUpdateBlocker = usePwaUpdateStore((state) => state.setBlocker);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const dictationSelectionRef = useRef<{ start: number; end: number } | null>(null);
   const insertCommitted = (transcript: string) => {
     setValue((current) => {
@@ -634,14 +658,17 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
   }, [dictation.active, setUpdateBlocker]);
 
   useEffect(() => {
-    setUpdateBlocker("draft", Boolean(value.trim()));
+    setUpdateBlocker("draft", Boolean(value.trim()) || attachments.length > 0);
     return () => setUpdateBlocker("draft", false);
-  }, [setUpdateBlocker, value]);
+  }, [attachments.length, setUpdateBlocker, value]);
 
   useEffect(() => {
     let active = true;
     dictationSelectionRef.current = null;
     setValue("");
+    setAttachments([]);
+    setAttachmentMenuOpen(false);
+    setAttachmentIssue(undefined);
     void draft.load().then((loaded) => { if (active) setValue(loaded); });
     return () => { active = false; };
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -672,14 +699,47 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }, [displayedValue]);
 
+  const addAttachments = (selected: FileList | null, kind: "image" | "file") => {
+    setAttachmentMenuOpen(false);
+    if (!selected?.length) return;
+    const incoming = Array.from(selected);
+    if (attachments.length + incoming.length > attachmentMaxFiles) {
+      setAttachmentIssue("tooMany");
+      return;
+    }
+    if (incoming.some((file) => file.size <= 0 || file.size > attachmentMaxBytes)) {
+      setAttachmentIssue("tooLarge");
+      return;
+    }
+    if (attachments.reduce((total, file) => total + file.size, 0) + incoming.reduce((total, file) => total + file.size, 0) > attachmentMaxTotalBytes) {
+      setAttachmentIssue("tooMuchTotal");
+      return;
+    }
+    if (kind === "image" && incoming.some((file) => !["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type) && !/\.(?:gif|jpe?g|png|webp)$/i.test(file.name))) {
+      setAttachmentIssue("unsupported");
+      return;
+    }
+    setAttachmentIssue(undefined);
+    setAttachments((current) => [...current, ...incoming]);
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    setAttachmentIssue(undefined);
+  };
+
   const onSubmit = async () => {
     const next = value.trim();
-    if (!next || streamingMessageId || offline || dictation.active) return;
+    if ((!next && !attachments.length) || streamingMessageId || offline || dictation.active) return;
     // submitPrompt marks the session as streaming synchronously before its
     // first await. Start it before clearing the draft so an update queued for
     // a safe moment cannot slip into the hand-off between typing and sending.
-    const submission = submitPrompt(next);
+    const selectedAttachments = attachments;
+    const submission = submitPrompt(next, selectedAttachments);
     setValue("");
+    setAttachments([]);
+    setAttachmentMenuOpen(false);
+    setAttachmentIssue(undefined);
     await draft.clear();
     await submission;
   };
@@ -693,7 +753,23 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
         <strong>{t("speech.autoRead")}</strong>
         {liveSpeechStatus !== "idle" ? <small role="status">{t(`speech.live.${liveSpeechStatus}`)}</small> : null}
       </label> : null}
-      <div className="composer">
+      <div className={`composer${attachments.length ? " has-attachments" : ""}`}>
+        {attachments.length ? <div className="composer-attachments" aria-label={t("chat.attachments.selected")}>
+          {attachments.map((attachment, index) => <span className="composer-attachment" key={`${attachment.name}-${index}`}>
+            {attachment.type.startsWith("image/") ? <Image aria-hidden="true" /> : <File aria-hidden="true" />}
+            <span><strong>{attachment.name}</strong><small>{attachmentSize(attachment.size)}</small></span>
+            <button type="button" aria-label={t("chat.attachments.remove", { name: attachment.name })} onClick={() => removeAttachment(index)}><X /></button>
+          </span>)}
+        </div> : null}
+        <div className="composer-add">
+          <IconButton className="composer-add__button" label={t("chat.attachments.add")} selected={attachmentMenuOpen} disabled={offline || Boolean(streamingMessageId) || dictation.active} icon={<Plus size={22} />} onClick={() => setAttachmentMenuOpen((open) => !open)} />
+          {attachmentMenuOpen ? <div className="composer-add__menu" role="menu" aria-label={t("chat.attachments.menu")}>
+            <button type="button" role="menuitem" onClick={() => imageInputRef.current?.click()}><Image /><span><strong>{t("chat.attachments.image")}</strong><small>{t("chat.attachments.imageHint")}</small></span></button>
+            <button type="button" role="menuitem" onClick={() => fileInputRef.current?.click()}><File /><span><strong>{t("chat.attachments.file")}</strong><small>{t("chat.attachments.fileHint")}</small></span></button>
+          </div> : null}
+          <input ref={imageInputRef} className="sr-only" type="file" aria-label={t("chat.attachments.image")} accept="image/jpeg,image/png,image/webp,image/gif" multiple onChange={(event) => { addAttachments(event.target.files, "image"); event.currentTarget.value = ""; }} />
+          <input ref={fileInputRef} className="sr-only" type="file" aria-label={t("chat.attachments.file")} accept={attachmentFileAccept} multiple onChange={(event) => { addAttachments(event.target.files, "file"); event.currentTarget.value = ""; }} />
+        </div>
         <textarea
           ref={textareaRef}
           rows={1}
@@ -715,10 +791,11 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           <span />
           {offline ? <Badge tone="warning">{t("chat.offlineDraft")}</Badge> : streamingMessageId ? (canInterrupt ? <Button variant="danger" size="sm" leadingIcon={<Stop weight="fill" />} onClick={() => void stopPrompt()}>{t("chat.stop")}</Button> : <Badge tone="info">{t("chat.running")}</Badge>) : <>
             {dictation.available ? <IconButton className="dictation-button" selected={dictation.active} label={t(dictation.active ? "dictation.stop" : "dictation.start")} icon={dictation.active ? <Stop size={20} weight="fill" /> : <Microphone size={21} weight="fill" />} onClick={() => { if (dictation.active) dictation.stop(); else beginDictation(); }} /> : null}
-            <IconButton className="send-button" label={t("chat.sendMessage")} disabled={!value.trim() || dictation.active} icon={<PaperPlaneTilt size={22} weight="fill" />} onClick={() => void onSubmit()} />
+            <IconButton className="send-button" label={t("chat.sendMessage")} disabled={(!value.trim() && !attachments.length) || dictation.active} icon={<PaperPlaneTilt size={22} weight="fill" />} onClick={() => void onSubmit()} />
           </>}
         </div>
       </div>
+      {attachmentIssue ? <p className="composer-attachment-error" role="alert">{t(`chat.attachments.errors.${attachmentIssue}`)}</p> : null}
       <p className="composer-note">{t(offline ? "chat.offlineDraftNote" : "chat.disclaimer")}</p>
       {consentOpen ? <div ref={consentDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="dictation-consent-title" aria-describedby="dictation-consent-description">
         <button className="modal-scrim" aria-label={t("dictation.consentClose")} onClick={() => setConsentOpen(false)} />

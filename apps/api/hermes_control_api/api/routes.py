@@ -3,15 +3,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 import time
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import PurePath
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Path, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
+
+from hermes_client import PromptAttachment
 
 from ..auth import (
     SESSION_COOKIE,
@@ -87,6 +91,82 @@ router = APIRouter(prefix="/api/v1")
 
 _PROFILE_AVATAR_MAX_BYTES = 900_000
 _PROFILE_AVATAR_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
+_PROMPT_ATTACHMENT_MAX_FILES = 5
+_PROMPT_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024
+_PROMPT_ATTACHMENT_MAX_TOTAL_BYTES = 12 * 1024 * 1024
+_PROMPT_IMAGE_MEDIA_TYPES = frozenset(
+    {"image/jpeg", "image/png", "image/webp", "image/gif"}
+)
+_PROMPT_IMAGE_TYPES_BY_EXTENSION = {
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+_PROMPT_FILE_EXTENSIONS = frozenset(
+    {
+        ".c", ".cfg", ".cpp", ".csv", ".doc", ".docx", ".go", ".h",
+        ".hpp", ".html", ".ini", ".java", ".js", ".json", ".jsx", ".log",
+        ".md", ".odp", ".ods", ".odt", ".pdf", ".ppt", ".pptx", ".py",
+        ".rs", ".rtf", ".sh", ".sql", ".toml", ".ts", ".tsx", ".txt",
+        ".xls", ".xlsx", ".xml", ".yaml", ".yml",
+    }
+)
+
+
+def _valid_prompt_image_signature(media_type: str, content: bytes) -> bool:
+    if media_type in _PROFILE_AVATAR_MEDIA_TYPES:
+        return valid_profile_avatar_signature(media_type, content)
+    if media_type == "image/gif":
+        return content.startswith((b"GIF87a", b"GIF89a"))
+    return False
+
+
+def _safe_prompt_attachment_name(value: str | None) -> str:
+    name = PurePath((value or "").replace("\\", "/")).name
+    name = re.sub(r"[\x00-\x1f\x7f]", "", name).strip()
+    if not name or len(name) > 120:
+        raise HTTPException(status_code=422, detail="Attachment filename is invalid")
+    return name
+
+
+async def _prompt_attachments(files: list[UploadFile]) -> list[PromptAttachment]:
+    if not files or len(files) > _PROMPT_ATTACHMENT_MAX_FILES:
+        raise HTTPException(status_code=422, detail="Attach between 1 and 5 files")
+    attachments: list[PromptAttachment] = []
+    total = 0
+    for upload in files:
+        try:
+            name = _safe_prompt_attachment_name(upload.filename)
+            content = await upload.read(_PROMPT_ATTACHMENT_MAX_BYTES + 1)
+        finally:
+            await upload.close()
+        if not content:
+            raise HTTPException(status_code=422, detail=f"Attachment {name} is empty")
+        if len(content) > _PROMPT_ATTACHMENT_MAX_BYTES:
+            raise HTTPException(status_code=413, detail=f"Attachment {name} exceeds 8 MB")
+        total += len(content)
+        if total > _PROMPT_ATTACHMENT_MAX_TOTAL_BYTES:
+            raise HTTPException(status_code=413, detail="Attachments exceed 12 MB in total")
+        media_type = (upload.content_type or "application/octet-stream").split(";", 1)[0].lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}", media_type):
+            media_type = "application/octet-stream"
+        suffix = PurePath(name).suffix.lower()
+        if media_type == "application/octet-stream" and suffix in _PROMPT_IMAGE_TYPES_BY_EXTENSION:
+            media_type = _PROMPT_IMAGE_TYPES_BY_EXTENSION[suffix]
+        if media_type in _PROMPT_IMAGE_MEDIA_TYPES:
+            if not _valid_prompt_image_signature(media_type, content):
+                raise HTTPException(status_code=422, detail=f"Image {name} does not match its media type")
+            kind = "image"
+        elif suffix in _PROMPT_FILE_EXTENSIONS:
+            kind = "file"
+        else:
+            raise HTTPException(status_code=422, detail=f"File type is not supported: {name}")
+        attachments.append(
+            PromptAttachment(kind=kind, name=name, media_type=media_type, content=content)
+        )
+    return attachments
 
 
 def profile_avatar_url(row: ProfileRef) -> str | None:
@@ -1535,6 +1615,34 @@ async def submit_prompt(
     service = SessionService(services(request))
     row = service.owned(db, user, session_id)
     return await service.submit(db, user, row, payload.content, idempotency_key)
+
+
+@router.post(
+    "/sessions/{session_id}/prompts-with-attachments",
+    response_model=OperationView,
+    status_code=202,
+)
+async def submit_prompt_with_attachments(
+    session_id: str,
+    request: Request,
+    content: str = Form(default="", max_length=205_000),
+    attachments: list[UploadFile] = File(...),
+    idempotency_key: str = Depends(require_idempotency),
+    _: AuthSession = Depends(require_csrf),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    service = SessionService(services(request))
+    row = service.owned(db, user, session_id)
+    selected = await _prompt_attachments(attachments)
+    return await service.submit(
+        db,
+        user,
+        row,
+        content.strip(),
+        idempotency_key,
+        attachments=selected,
+    )
 
 
 @router.get("/sessions/{session_id}/operations/{operation_id}", response_model=OperationView)

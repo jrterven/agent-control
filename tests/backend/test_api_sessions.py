@@ -66,6 +66,82 @@ def test_sessions_are_identity_isolated_and_prompt_is_idempotent(authenticated):
     assert second_history.json()["items"] == []
 
 
+def test_prompt_uploads_images_and_files_without_exposing_gateway_references(authenticated):
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "attachment-session")
+    response = client.post(
+        f"/api/v1/sessions/{session['id']}/prompts-with-attachments",
+        headers=mutation_headers(csrf, "prompt-with-attachments"),
+        data={"content": "Revisa ambos adjuntos"},
+        files=[
+            ("attachments", ("captura.png", b"\x89PNG\r\n\x1a\npreview", "image/png")),
+            ("attachments", ("notas.txt", b"contenido de prueba", "text/plain")),
+        ],
+    )
+    assert response.status_code == 202, response.text
+
+    history = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert history.status_code == 200
+    user_message = next(
+        item for item in history.json()["items"] if item["role"] == "user"
+    )
+    assert user_message["content"] == "Revisa ambos adjuntos"
+    assert user_message["controlAttachments"] == [
+        {
+            "kind": "image",
+            "name": "captura.png",
+            "mediaType": "image/png",
+            "size": 15,
+        },
+        {
+            "kind": "file",
+            "name": "notas.txt",
+            "mediaType": "text/plain",
+            "size": 19,
+        },
+    ]
+    rendered = str(user_message)
+    assert "@file:" not in rendered
+    assert "hermes-control-file-refs" not in rendered
+    assert "/mock/" not in rendered
+
+
+def test_prompt_attachment_rejects_invalid_image_bytes(authenticated):
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "invalid-attachment-session")
+    response = client.post(
+        f"/api/v1/sessions/{session['id']}/prompts-with-attachments",
+        headers=mutation_headers(csrf, "invalid-image-attachment"),
+        data={"content": "Revisa esto"},
+        files=[("attachments", ("falsa.png", b"not-a-png", "image/png"))],
+    )
+    assert response.status_code == 422
+    assert "does not match" in response.json()["detail"]
+
+    history = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert history.status_code == 200
+    assert history.json()["items"] == []
+
+
+def test_prompt_can_send_an_attachment_without_visible_fallback_text(authenticated):
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "attachment-only-session")
+    response = client.post(
+        f"/api/v1/sessions/{session['id']}/prompts-with-attachments",
+        headers=mutation_headers(csrf, "attachment-only-prompt"),
+        data={"content": ""},
+        files=[("attachments", ("solo.txt", b"contenido", "text/plain"))],
+    )
+    assert response.status_code == 202, response.text
+
+    history = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    user_message = next(
+        item for item in history.json()["items"] if item["role"] == "user"
+    )
+    assert user_message["content"] == ""
+    assert user_message["controlAttachments"][0]["name"] == "solo.txt"
+
+
 def test_first_prompt_accepts_only_control_created_lazy_history_boundary(
     authenticated, app, monkeypatch
 ):

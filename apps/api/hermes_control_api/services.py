@@ -19,9 +19,11 @@ from hermes_client import (
     JsonRpcError,
     ProviderConnection,
     ProviderPool,
+    PromptAttachment,
     RuntimeGenerationChanged,
     SessionHistoryNotFound,
     SessionRoute,
+    project_attachment_prompt,
     resolve_endpoint,
     validate_endpoint,
 )
@@ -1768,17 +1770,13 @@ class SessionService:
         )
         sanitized = normalizer.sanitize_data(history)
         gateway = db.get(Gateway, row.gateway_id)
-        if not isinstance(sanitized, list) or gateway is None or not gateway.env_managed:
-            return list(sanitized) if isinstance(sanitized, list) else []
+        if not isinstance(sanitized, list):
+            return []
 
         for history_index, (raw_item, safe_item) in enumerate(
             zip(history, sanitized, strict=False)
         ):
-            if (
-                not isinstance(raw_item, dict)
-                or not isinstance(safe_item, dict)
-                or raw_item.get("role") != "assistant"
-            ):
+            if not isinstance(raw_item, dict) or not isinstance(safe_item, dict):
                 continue
             content_key = (
                 "content" if isinstance(raw_item.get("content"), str)
@@ -1788,6 +1786,18 @@ class SessionService:
             if content_key is None:
                 continue
             raw_content = str(raw_item[content_key])
+            if raw_item.get("role") == "user":
+                projected_content, attachments = project_attachment_prompt(raw_content)
+                if attachments:
+                    safe_item[content_key] = normalizer.sanitize_data(projected_content)
+                    safe_item["controlAttachments"] = normalizer.sanitize_data(attachments)
+                continue
+            if (
+                raw_item.get("role") != "assistant"
+                or gateway is None
+                or not gateway.env_managed
+            ):
+                continue
             playable: list[tuple[AudioMediaMarker, SessionMediaAsset]] = []
             for media_index, marker in enumerate(_audio_media_markers(raw_content)):
                 asset = self._media_asset(
@@ -1897,6 +1907,7 @@ class SessionService:
         row: SessionLink,
         prompt: str,
         idempotency_key: str,
+        attachments: list[PromptAttachment] | None = None,
     ) -> dict[str, Any]:
         await require_capability(
             db,
@@ -2022,12 +2033,21 @@ class SessionService:
                 "durable history boundary"
             ) from exc
         try:
+            async def remember_prompt_hash(submitted_prompt: str) -> None:
+                operation.response_json = {
+                    **dict(operation.response_json or {}),
+                    "_promptHash": self._prompt_digest(submitted_prompt),
+                }
+                db.commit()
+
             routed, receipt = await self.services.session_router.submit_prompt(
                 route=self._route(row),
                 connection=connection,
                 prompt=prompt,
                 idempotency_key=idempotency_key,
                 operation_id=idempotency_key,
+                attachments=attachments,
+                before_dispatch=remember_prompt_hash if attachments else None,
             )
             # A very fast upstream can emit its terminal event before this
             # request commits the accepted receipt. Refresh so the durable
@@ -2057,7 +2077,14 @@ class SessionService:
                 "_runtimeGeneration": provider.runtime_generation,
                 **response,
             }
-            audit(db, actor=actor, action="prompt.submit", target_type="session", target_id=row.id)
+            audit(
+                db,
+                actor=actor,
+                action="prompt.submit",
+                target_type="session",
+                target_id=row.id,
+                details={"attachmentCount": len(attachments or [])},
+            )
             db.commit()
             return response
         except asyncio.CancelledError:

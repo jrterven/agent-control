@@ -8,6 +8,7 @@ from .admin import (
     sanitize_admin_payload,
     writable_config_projection,
 )
+from .attachments import compose_attachment_prompt, project_attachment_prompt
 from .normalization import EventNormalizer
 from .provider import (
     HermesGatewayProvider,
@@ -30,6 +31,8 @@ from .types import (
     HermesSession,
     NormalizedEvent,
     PromptReceipt,
+    PromptAttachment,
+    PromptAttachmentReceipt,
     SessionRoute,
 )
 
@@ -52,6 +55,8 @@ __all__ = [
     "JsonRpcError",
     "NormalizedEvent",
     "PromptReceipt",
+    "PromptAttachment",
+    "PromptAttachmentReceipt",
     "ProviderConnection",
     "ProviderPool",
     "ReplayDecision",
@@ -64,7 +69,9 @@ __all__ = [
     "UnsafeEndpointError",
     "admin_snapshot",
     "contains_secret_fields",
+    "compose_attachment_prompt",
     "resolve_endpoint",
+    "project_attachment_prompt",
     "sanitize_admin_payload",
     "validate_endpoint",
     "writable_config_projection",

@@ -359,7 +359,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-CSRF-Token", "Idempotency-Key", "X-Confirm-Delete"],
     )
-    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_bytes)
+    app.add_middleware(
+        BodySizeLimitMiddleware,
+        max_bytes=settings.max_request_bytes,
+        attachment_max_bytes=settings.prompt_attachment_request_max_bytes,
+    )
     app.include_router(router)
 
     @app.exception_handler(NotFoundError)

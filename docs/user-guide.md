@@ -221,6 +221,20 @@ New profiles start with empty memory and history and use the gateway-managed
 inference authentication pool. A Telegram bot or channel is not created
 automatically; channel setup remains a separate provider administration task.
 
+## Chat attachments
+
+Use the **+** at the left of the message composer to add an image or a supported
+file. A message can contain up to five attachments; each attachment is limited
+to 8 MB and the combined upload is limited to 12 MB. Images support JPEG, PNG,
+WebP and GIF. The file picker accepts PDF, common office documents, text,
+spreadsheets and source-code formats.
+
+Agent Control validates and forwards the bytes to the selected Hermes session
+only when the message is sent. It does not retain a second file copy or expose
+the gateway's private attachment path to the browser. Attachment names and
+sizes remain visible in the conversation. Unsent attachments are not stored in
+the offline draft and are cleared when the user changes chats.
+
 ## Configuration and agent functions
 
 Open **More → Configuration** to manage the selected profile through its

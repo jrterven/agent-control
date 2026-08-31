@@ -491,6 +491,30 @@ function mediaFromHistory(item: Record<string, unknown>) {
   });
 }
 
+function attachmentsFromHistory(item: Record<string, unknown>) {
+  if (!Array.isArray(item.controlAttachments)) return [];
+  return item.controlAttachments.slice(0, 5).flatMap((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const attachment = value as Record<string, unknown>;
+    if (
+      (attachment.kind !== "image" && attachment.kind !== "file")
+      || typeof attachment.name !== "string"
+      || !attachment.name
+      || typeof attachment.mediaType !== "string"
+      || typeof attachment.size !== "number"
+      || !Number.isFinite(attachment.size)
+      || attachment.size <= 0
+      || attachment.size > 8 * 1024 * 1024
+    ) return [];
+    return [{
+      kind: attachment.kind as "image" | "file",
+      name: attachment.name,
+      mediaType: attachment.mediaType,
+      size: attachment.size,
+    }];
+  });
+}
+
 function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index: number): MappedHistoryItem | null {
   const role = item.role;
   const createdAt = historyTime(item);
@@ -506,8 +530,9 @@ function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index:
   }
   if (role !== "user" && role !== "assistant" && role !== "system") return null;
   const media = mediaFromHistory(item);
+  const attachments = attachmentsFromHistory(item);
   const content = typeof item.content === "string" ? item.content : typeof item.text === "string" ? item.text : "";
-  if (!content && !media.length) return null;
+  if (!content && !media.length && !attachments.length) return null;
   return {
     id: String(item.id ?? `${sessionId}-history-${index}`),
     sessionId,
@@ -516,6 +541,7 @@ function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index:
     createdAt,
     delivery: role === "user" ? "sent" : undefined,
     ...(media.length ? { media } : {}),
+    ...(attachments.length ? { attachments } : {}),
   };
 }
 
@@ -1220,13 +1246,14 @@ async function reconcileAmbiguousPrompt(sessionId: string, operationId: string, 
   }
 }
 
-export async function submitPrompt(content: string) {
+export async function submitPrompt(content: string, attachments: File[] = []) {
   const state = useAppStore.getState();
-  if (!content.trim() || state.streamingBySession[state.selectedSessionId] || !state.selectedSessionId) return;
+  if ((!content.trim() && !attachments.length) || state.streamingBySession[state.selectedSessionId] || !state.selectedSessionId) return;
   const now = new Date();
   const userMessage: ChatMessage = {
     id: crypto.randomUUID(), sessionId: state.selectedSessionId, role: "user", content: content.trim(),
     createdAt: now.toLocaleTimeString(getCurrentLanguage(), { hour: "2-digit", minute: "2-digit" }), delivery: "sending",
+    ...(attachments.length ? { attachments: attachments.map((file) => ({ kind: file.type.startsWith("image/") || /\.(?:gif|jpe?g|png|webp)$/i.test(file.name) ? "image" as const : "file" as const, name: file.name, mediaType: file.type || "application/octet-stream", size: file.size })) } : {}),
   };
   const assistantId = crypto.randomUUID();
   state.appendMessage(userMessage);
@@ -1238,7 +1265,9 @@ export async function submitPrompt(content: string) {
     const idempotencyKey = crypto.randomUUID();
     state.bindOperation(idempotencyKey, assistantId);
     try {
-      const receipt = await api.submitPrompt(state.selectedSessionId, content.trim(), idempotencyKey, state.csrfToken);
+      const receipt = attachments.length
+        ? await api.submitPrompt(state.selectedSessionId, content.trim(), idempotencyKey, state.csrfToken, attachments)
+        : await api.submitPrompt(state.selectedSessionId, content.trim(), idempotencyKey, state.csrfToken);
       if (receipt.operationId !== idempotencyKey) {
         state.bindOperation(receipt.operationId, assistantId);
         state.clearOperation(idempotencyKey);

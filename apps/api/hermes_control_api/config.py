@@ -76,6 +76,9 @@ class Settings(BaseSettings):
 
     trust_private_endpoints: bool = True
     max_request_bytes: int = 1_000_000
+    prompt_attachment_request_max_bytes: int = Field(
+        default=13_500_000, ge=1_000_000, le=16_000_000
+    )
     ws_queue_size: int = 512
     ws_max_connections: int = 64
     ws_max_connections_per_user: int = 4

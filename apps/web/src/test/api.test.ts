@@ -25,6 +25,27 @@ describe("browser API boundary", () => {
     expect(init.credentials).toBe("same-origin");
   });
 
+  it("uploads prompt attachments as browser-owned multipart data", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ operationId: "op-files", status: "accepted" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "capture.png", { type: "image/png" });
+    const notes = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+    await api.submitPrompt("session/files", "Review", "prompt-files-key", "csrf-memory-only", [image, notes]);
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/v1/sessions/session%2Ffiles/prompts-with-attachments");
+    expect(init.body).toBeInstanceOf(FormData);
+    const body = init.body as FormData;
+    expect(body.get("content")).toBe("Review");
+    expect(body.getAll("attachments")).toEqual([image, notes]);
+    expect(init.headers).toEqual(expect.objectContaining({
+      "Idempotency-Key": "prompt-files-key",
+      "X-CSRF-Token": "csrf-memory-only",
+    }));
+    expect(init.headers).not.toEqual(expect.objectContaining({ "Content-Type": expect.anything() }));
+  });
+
   it("keeps the owner ElevenLabs key write-only and issues non-replayable Scribe tokens", async () => {
     const presence = { configured: true, provider: "elevenlabs", modelId: "scribe_v2_realtime" };
     const fetchMock = vi.fn()

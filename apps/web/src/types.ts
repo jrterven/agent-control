@@ -130,6 +130,13 @@ export type MessageMedia = {
   mediaType: string;
 };
 
+export type MessageAttachment = {
+  kind: "image" | "file";
+  name: string;
+  mediaType: string;
+  size: number;
+};
+
 export type DictationFeature = {
   available: boolean;
   provider: "elevenlabs";
@@ -161,6 +168,7 @@ export type ChatMessage = {
   tools?: ToolRun[];
   activity?: AgentActivityItem[];
   media?: MessageMedia[];
+  attachments?: MessageAttachment[];
   streaming?: boolean;
 };
 

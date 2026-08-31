@@ -222,12 +222,13 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const { headers: suppliedHeaders, ...rest } = init ?? {};
+  const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const response = await fetch(`/api/v1${path}`, {
     credentials: "same-origin",
     ...rest,
     headers: {
       "Accept": "application/json",
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(init?.body && !isFormData ? { "Content-Type": "application/json" } : {}),
       ...suppliedHeaders,
     },
   });
@@ -395,7 +396,19 @@ export const api = {
   ).then((row) => sessionFromWire(row)),
   sessionMediaUrl: (sessionId: string, mediaId: string) => `/api/v1/sessions/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(mediaId)}`,
   exportSession: (sessionId: string) => requestBlob(`/sessions/${encodeURIComponent(sessionId)}/export`),
-  submitPrompt: (sessionId: string, content: string, idempotencyKey: string, csrfToken?: string) => request<{ operationId: string; status: string }>(`/sessions/${encodeURIComponent(sessionId)}/prompts`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey, ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) }, body: JSON.stringify({ content }) }),
+  submitPrompt: (sessionId: string, content: string, idempotencyKey: string, csrfToken?: string, attachments: File[] = []) => {
+    if (!attachments.length) {
+      return request<{ operationId: string; status: string }>(`/sessions/${encodeURIComponent(sessionId)}/prompts`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey, ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) }, body: JSON.stringify({ content }) });
+    }
+    const body = new FormData();
+    body.append("content", content);
+    attachments.forEach((file) => body.append("attachments", file, file.name));
+    return request<{ operationId: string; status: string }>(`/sessions/${encodeURIComponent(sessionId)}/prompts-with-attachments`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey, ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) },
+      body,
+    });
+  },
   promptOperation: (sessionId: string, operationId: string) => request<{ operationId: string; status: string; acceptedAt?: string }>(`/sessions/${encodeURIComponent(sessionId)}/operations/${encodeURIComponent(operationId)}`),
   interrupt: (sessionId: string, csrfToken?: string) => request<void>(`/sessions/${encodeURIComponent(sessionId)}/interrupt`, { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID(), ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) } }),
   respondApproval: (sessionId: string, requestId: string, choice: ApprovalChoice, csrfToken?: string) => request<ApprovalResponseReceipt>(

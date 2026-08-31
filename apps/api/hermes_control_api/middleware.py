@@ -19,6 +19,14 @@ from .models import IdempotencyOperation
 from .security import constant_time_hash_matches
 
 
+def _request_body_limit(path: str, default: int, attachment_limit: int) -> int:
+    if path.startswith("/api/v1/sessions/") and path.endswith(
+        "/prompts-with-attachments"
+    ):
+        return attachment_limit
+    return default
+
+
 class BodySizeLimitMiddleware:
     """Buffer and replay request bodies with a strict, bounded ceiling.
 
@@ -27,14 +35,18 @@ class BodySizeLimitMiddleware:
     configured limit plus the server's current chunk.
     """
 
-    def __init__(self, app, max_bytes: int) -> None:
+    def __init__(self, app, max_bytes: int, attachment_max_bytes: int) -> None:
         self.app = app
         self.max_bytes = max_bytes
+        self.attachment_max_bytes = attachment_max_bytes
 
     async def __call__(self, scope, receive, send) -> None:
         if scope.get("type") != "http" or scope.get("method") in {"GET", "HEAD", "OPTIONS"}:
             await self.app(scope, receive, send)
             return
+        max_bytes = _request_body_limit(
+            str(scope.get("path") or ""), self.max_bytes, self.attachment_max_bytes
+        )
         messages: list[dict] = []
         total = 0
         while True:
@@ -46,7 +58,7 @@ class BodySizeLimitMiddleware:
                 continue
             body = message.get("body", b"")
             total += len(body)
-            if total > self.max_bytes:
+            if total > max_bytes:
                 request_id = next(
                     (
                         value.decode("latin-1")
@@ -310,7 +322,12 @@ class SecurityBoundaryMiddleware(BaseHTTPMiddleware):
         content_length = request.headers.get("content-length")
         if content_length:
             try:
-                if int(content_length) > self.settings.max_request_bytes:
+                max_bytes = _request_body_limit(
+                    request.url.path,
+                    self.settings.max_request_bytes,
+                    self.settings.prompt_attachment_request_max_bytes,
+                )
+                if int(content_length) > max_bytes:
                     return self._error(413, "REQUEST_TOO_LARGE", "Request body is too large", request_id)
             except ValueError:
                 return self._error(400, "INVALID_CONTENT_LENGTH", "Invalid content length", request_id)

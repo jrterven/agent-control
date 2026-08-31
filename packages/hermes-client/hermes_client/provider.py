@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import random
 from collections import OrderedDict, defaultdict
@@ -44,6 +45,8 @@ from .types import (
     HermesSearchResult,
     HermesSession,
     NormalizedEvent,
+    PromptAttachment,
+    PromptAttachmentReceipt,
     PromptReceipt,
     SessionRoute,
 )
@@ -326,6 +329,20 @@ class HermesProvider(Protocol):
         operation_id: str,
         expected_runtime_generation: str | None = None,
     ) -> PromptReceipt: ...
+    async def attach_prompt_attachment(
+        self,
+        route: SessionRoute,
+        attachment: PromptAttachment,
+        *,
+        expected_runtime_generation: str | None = None,
+    ) -> PromptAttachmentReceipt: ...
+    async def detach_prompt_images(
+        self,
+        route: SessionRoute,
+        paths: tuple[str, ...],
+        *,
+        expected_runtime_generation: str | None = None,
+    ) -> None: ...
     async def interrupt(
         self, route: SessionRoute, *, expected_runtime_generation: str | None = None
     ) -> None: ...
@@ -1526,6 +1543,90 @@ class HermesGatewayProvider:
             self._clear_route_for_reattach(route.stored_session_id)
         return PromptReceipt(operation_id=operation_id, status=status)
 
+    async def attach_prompt_attachment(
+        self,
+        route: SessionRoute,
+        attachment: PromptAttachment,
+        *,
+        expected_runtime_generation: str | None = None,
+    ) -> PromptAttachmentReceipt:
+        if route.runtime_session_id and route.runtime_session_id.startswith("api:"):
+            raise RuntimeError("Attachments are unavailable through the API fallback")
+        await self._ensure_connected()
+        if (
+            expected_runtime_generation is not None
+            and self.runtime_generation != expected_runtime_generation
+        ):
+            raise RuntimeGenerationChanged("Hermes reconnected before attachment dispatch")
+        generation = expected_runtime_generation or self.runtime_generation
+        rpc_generation = self._rpc_generation_for(generation)
+        self._remember_route(route, generation=generation)
+        encoded = base64.b64encode(attachment.content).decode("ascii")
+        try:
+            if attachment.kind == "image":
+                raw = await self.rpc.request(
+                    "image.attach_bytes",
+                    {
+                        "session_id": route.runtime_session_id,
+                        "filename": attachment.name,
+                        "content_base64": encoded,
+                    },
+                    expected_generation=rpc_generation,
+                )
+                if not isinstance(raw, Mapping) or raw.get("attached") is not True:
+                    raise UpstreamPayloadError("Hermes did not attach the image")
+                path = _bounded_text(raw.get("path"), label="attachment path", max_length=4096)
+                return PromptAttachmentReceipt(detach_paths=(path,))
+            data_url = f"data:{attachment.media_type};base64,{encoded}"
+            raw = await self.rpc.request(
+                "file.attach",
+                {
+                    "session_id": route.runtime_session_id,
+                    "path": attachment.name,
+                    "name": attachment.name,
+                    "data_url": data_url,
+                },
+                expected_generation=rpc_generation,
+            )
+            if not isinstance(raw, Mapping) or raw.get("attached") is not True:
+                raise UpstreamPayloadError("Hermes did not attach the file")
+            reference = _bounded_text(
+                raw.get("ref_text"), label="attachment reference", max_length=4096
+            )
+            if not reference.startswith("@file:"):
+                raise UpstreamPayloadError("Hermes returned an invalid attachment reference")
+            return PromptAttachmentReceipt(reference=reference)
+        except JsonRpcGenerationChanged as exc:
+            raise RuntimeGenerationChanged(
+                "Hermes reconnected before attachment dispatch"
+            ) from exc
+
+    async def detach_prompt_images(
+        self,
+        route: SessionRoute,
+        paths: tuple[str, ...],
+        *,
+        expected_runtime_generation: str | None = None,
+    ) -> None:
+        if not paths:
+            return
+        if (
+            expected_runtime_generation is not None
+            and self.runtime_generation != expected_runtime_generation
+        ):
+            return
+        generation = expected_runtime_generation or self.runtime_generation
+        rpc_generation = self._rpc_generation_for(generation)
+        for path in paths:
+            try:
+                await self.rpc.request(
+                    "image.detach",
+                    {"session_id": route.runtime_session_id, "path": path},
+                    expected_generation=rpc_generation,
+                )
+            except Exception:
+                _LOGGER.warning("Unable to detach a pre-dispatch image", exc_info=True)
+
     async def interrupt(
         self, route: SessionRoute, *, expected_runtime_generation: str | None = None
     ) -> None:
@@ -2495,6 +2596,7 @@ class InMemoryHermesProvider:
         self._created_profiles = self._profiles_by_gateway[connection.gateway_id]
         self._sessions: dict[str, HermesSession] = {}
         self._messages: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self._attached_images: dict[str, list[str]] = defaultdict(list)
         self._automations: dict[str, HermesAutomation] = {}
         self._automation_runs: dict[str, list[HermesRunReceipt]] = defaultdict(list)
         self._sequence = 0
@@ -2741,6 +2843,32 @@ class InMemoryHermesProvider:
         if self.event_sink is not None:
             asyncio.create_task(self._emit_response(route, prompt, operation_id))
         return PromptReceipt(operation_id=operation_id, status="streaming")
+
+    async def attach_prompt_attachment(
+        self,
+        route: SessionRoute,
+        attachment: PromptAttachment,
+        *,
+        expected_runtime_generation: str | None = None,
+    ) -> PromptAttachmentReceipt:
+        if not route.runtime_session_id:
+            raise RuntimeError("Session must be resumed before attaching")
+        if attachment.kind == "image":
+            path = f"/mock/images/{uuid4().hex}-{attachment.name}"
+            self._attached_images[route.stored_session_id].append(path)
+            return PromptAttachmentReceipt(detach_paths=(path,))
+        return PromptAttachmentReceipt(reference=f"@file:attachments/{attachment.name}")
+
+    async def detach_prompt_images(
+        self,
+        route: SessionRoute,
+        paths: tuple[str, ...],
+        *,
+        expected_runtime_generation: str | None = None,
+    ) -> None:
+        self._attached_images[route.stored_session_id] = [
+            path for path in self._attached_images[route.stored_session_id] if path not in paths
+        ]
 
     async def _emit_response(self, route: SessionRoute, prompt: str, operation_id: str) -> None:
         if "[approval]" in prompt:

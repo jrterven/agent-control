@@ -158,6 +158,24 @@ class PromptReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class PromptAttachment:
+    """One browser-selected attachment held only for the prompt hand-off."""
+
+    kind: Literal["image", "file"]
+    name: str
+    media_type: str
+    content: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class PromptAttachmentReceipt:
+    """Private Hermes attachment result used while dispatching a prompt."""
+
+    reference: str | None = None
+    detach_paths: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class HermesAutomation:
     automation_id: str
     name: str

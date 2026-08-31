@@ -32,8 +32,10 @@
   still-pending request after reconnection.
 - Control never exposes raw reasoning/chain-of-thought. It may show only a safe
   status that reasoning occurred.
-- Files and notes initially store references/metadata. Offline snapshots exclude
-  attachments and require explicit opt-in.
+- Chat attachments require the dashboard WebSocket attachment methods; they are
+  unavailable through the `8642` API fallback. A message accepts at most five
+  supported files, 8 MB each and 12 MB combined. Offline snapshots and drafts
+  exclude attachment bytes.
 - BYOK dictation currently uses ElevenLabs Scribe and needs public Internet
   access from both the Control backend (HTTPS token mint) and the browser
   (`wss://api.elevenlabs.io`). It may be unavailable while the tailnet-hosted
