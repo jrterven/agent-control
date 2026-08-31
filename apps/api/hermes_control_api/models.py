@@ -238,6 +238,9 @@ class SessionLink(Base, Timestamped):
     # canonical value reported by Hermes and continues to be refreshed during
     # synchronization.
     display_title: Mapped[str | None] = mapped_column(String(300))
+    # Pinning is a Control-only organizational preference. A timestamp keeps
+    # the pinned section deterministic without changing Hermes-owned data.
+    pinned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(30), default="idle")
     # Hermes 0.20.5/0.20.6 does not persist an RPC-created session until its
     # first prompt. This marker is the sole authority for treating that one

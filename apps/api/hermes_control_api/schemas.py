@@ -332,6 +332,7 @@ class SessionSyncRequest(ApiModel):
 class SessionUpdate(ApiModel):
     workspace_id: str | None = None
     archived: bool | None = None
+    pinned: bool | None = None
     display_title: str | None = Field(default=None, min_length=1, max_length=300)
 
     @field_validator("display_title")
@@ -358,6 +359,7 @@ class SessionView(ApiModel):
     status: str
     replay_epoch: str | None
     last_sequence: int
+    pinned_at: datetime | None
     archived_at: datetime | None
     updated_at: datetime
 

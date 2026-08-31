@@ -724,6 +724,7 @@ def bootstrap(
                 "title": row.display_title or row.title or "Conversación",
                 "preview": "",
                 "updatedAt": row.updated_at.isoformat(),
+                "pinnedAt": row.pinned_at.isoformat() if row.pinned_at else None,
                 "unread": False,
                 "archived": row.archived_at is not None,
             }
@@ -1323,11 +1324,22 @@ def update_session(
     if "workspace_id" in values and values["workspace_id"]:
         WorkspaceService().owned(db, user, values["workspace_id"])
     archived = values.pop("archived", None)
+    pinned = values.pop("pinned", None)
     for key, value in values.items():
         setattr(row, key, value)
     if archived is not None:
         row.archived_at = datetime.now(timezone.utc) if archived else None
-    action = "session.rename" if "display_title" in values else "session.update"
+    if pinned is not None:
+        row.pinned_at = datetime.now(timezone.utc) if pinned else None
+    action = (
+        "session.rename"
+        if "display_title" in values
+        else "session.pin"
+        if pinned is True
+        else "session.unpin"
+        if pinned is False
+        else "session.update"
+    )
     audit(db, actor=user, action=action, target_type="session", target_id=row.id)
     db.commit()
     db.refresh(row)

@@ -68,6 +68,97 @@ describe("sidebar session menu", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it("pins and unpins a chat in a separate list without duplicating it", async () => {
+    const user = userEvent.setup();
+    const setPinned = vi.spyOn(api, "setSessionPinned")
+      .mockResolvedValueOnce({ ...session, pinnedAt: "2026-08-31T16:00:00Z", updatedAt: "después" })
+      .mockResolvedValueOnce({ ...session, pinnedAt: undefined, updatedAt: "después" });
+    render(<LeftSidebar />);
+
+    expect(screen.queryByText("Fijados")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Opciones de “Conversación”" }));
+    await user.click(screen.getByRole("menuitem", { name: "Fijar chat" }));
+
+    await waitFor(() => expect(setPinned).toHaveBeenNthCalledWith(1, "session-a", true, "csrf-memory-only"));
+    expect(useAppStore.getState().sessions[0].pinnedAt).toBe("2026-08-31T16:00:00Z");
+    const pinnedHeading = screen.getByText("Fijados");
+    const workspacesHeading = screen.getByText("Espacios de trabajo");
+    const conversationsHeading = screen.getByText("Conversaciones");
+    expect(workspacesHeading.compareDocumentPosition(pinnedHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pinnedHeading.compareDocumentPosition(conversationsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getAllByText("Conversación")).toHaveLength(1);
+    expect(screen.getByText("Jarvis · Sin espacio de trabajo")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("se fijó en la lista");
+
+    await user.click(screen.getByRole("button", { name: "Opciones de “Conversación”" }));
+    await user.click(screen.getByRole("menuitem", { name: "Desfijar chat" }));
+
+    await waitFor(() => expect(setPinned).toHaveBeenNthCalledWith(2, "session-a", false, "csrf-memory-only"));
+    expect(useAppStore.getState().sessions[0].pinnedAt).toBeUndefined();
+    expect(screen.queryByText("Fijados")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Conversación")).toHaveLength(1);
+    expect(screen.getByRole("status")).toHaveTextContent("se quitó de Fijados");
+  });
+
+  it("collapses workspaces without hiding the pinned list", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ sessions: [{ ...session, pinnedAt: "2026-08-31T16:00:00Z" }] });
+    render(<LeftSidebar />);
+
+    const collapse = screen.getByRole("button", { name: "Colapsar espacios de trabajo" });
+    expect(collapse).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /Papers/ })).toBeInTheDocument();
+    expect(screen.getByText("Fijados")).toBeInTheDocument();
+
+    await user.click(collapse);
+
+    const expand = screen.getByRole("button", { name: "Expandir espacios de trabajo" });
+    expect(expand).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: /Papers/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Fijados")).toBeInTheDocument();
+
+    await user.click(expand);
+    expect(screen.getByRole("button", { name: /Papers/ })).toBeInTheDocument();
+  });
+
+  it("shows pinned chats from another agent and workspace and restores their context", async () => {
+    const user = userEvent.setup();
+    const otherProfile: Profile = {
+      ...profile,
+      id: "profile-newton",
+      technicalName: "newton",
+      displayName: "Newton",
+    };
+    const operations = {
+      ...workspace,
+      id: "workspace-operations",
+      name: "Operaciones",
+    };
+    const pinnedElsewhere: SessionSummary = {
+      ...session,
+      id: "session-pinned-elsewhere",
+      profileId: otherProfile.id,
+      profileName: "newton",
+      workspaceId: operations.id,
+      title: "Plan importante",
+      pinnedAt: "2026-08-31T17:00:00Z",
+    };
+    useAppStore.setState({
+      profiles: [profile, otherProfile],
+      workspaces: [workspace, operations],
+      sessions: [session, pinnedElsewhere],
+    });
+    render(<LeftSidebar />);
+
+    expect(screen.getByText("Newton · Operaciones")).toBeInTheDocument();
+    const pinnedList = screen.getByRole("list", { name: "Fijados" });
+    await user.click(within(pinnedList).getByRole("button", { name: /^Plan importante/ }));
+
+    expect(useAppStore.getState().selectedSessionId).toBe(pinnedElsewhere.id);
+    expect(useAppStore.getState().selectedProfileId).toBe(otherProfile.id);
+    expect(useAppStore.getState().selectedWorkspaceId).toBe(operations.id);
+  });
+
   it("renames the Control label without selecting another chat", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "renameSession").mockResolvedValue({ ...session, title: "Proyecto Turing", updatedAt: "después" });
@@ -132,7 +223,7 @@ describe("sidebar session menu", () => {
     const trigger = screen.getByRole("button", { name: "Opciones de “Conversación”" });
 
     await user.click(trigger);
-    expect(screen.getByRole("menuitem", { name: "Cambiar nombre" })).toHaveFocus();
+    expect(screen.getByRole("menuitem", { name: "Fijar chat" })).toHaveFocus();
     await user.keyboard("{Escape}");
 
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();

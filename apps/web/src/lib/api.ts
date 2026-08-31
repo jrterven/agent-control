@@ -146,6 +146,7 @@ type SessionWire = {
   runtimeSessionId?: string | null;
   title?: string | null;
   status: string;
+  pinnedAt?: string | null;
   archivedAt?: string | null;
   updatedAt: string;
 };
@@ -198,6 +199,7 @@ function sessionFromWire(row: SessionWire, fallbackProfileId = ""): SessionSumma
     title: row.title || "Conversación",
     preview: "",
     updatedAt: row.updatedAt,
+    pinnedAt: row.pinnedAt ?? undefined,
     archived: Boolean(row.archivedAt),
   };
 }
@@ -357,6 +359,11 @@ export const api = {
     method: "PATCH",
     headers: mutationHeaders(csrfToken),
     body: JSON.stringify({ workspaceId }),
+  }).then((row) => sessionFromWire(row)),
+  setSessionPinned: (sessionId: string, pinned: boolean, csrfToken?: string) => request<SessionWire>(`/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    headers: mutationHeaders(csrfToken),
+    body: JSON.stringify({ pinned }),
   }).then((row) => sessionFromWire(row)),
   deleteSessionFromHermes: (sessionId: string, storedSessionId: string, csrfToken?: string) => request<void>(`/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",

@@ -80,6 +80,7 @@ export type SessionSummary = Pick<SessionRoute, "storedSessionId" | "runtimeSess
   title: string;
   preview: string;
   updatedAt: string;
+  pinnedAt?: string;
   unread?: boolean;
   archived?: boolean;
 };

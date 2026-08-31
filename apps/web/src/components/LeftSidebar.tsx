@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Archive, CaretDown, ChatTeardropText, DotsThree, DotsThreeVertical, FolderSimple, GearSix, Lightning, MagnifyingGlass, PencilSimple, Plus, Robot, Trash, WarningCircle, X } from "@phosphor-icons/react";
+import { Archive, CaretDown, ChatTeardropText, DotsThree, DotsThreeVertical, FolderSimple, GearSix, Lightning, MagnifyingGlass, PencilSimple, Plus, PushPinSimple, PushPinSimpleSlash, Robot, Trash, WarningCircle, X } from "@phosphor-icons/react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Badge, Button, IconButton, StatusDot, cx } from "@hermes-control/ui";
 import { useTranslation } from "react-i18next";
@@ -34,6 +34,14 @@ export function LeftSidebar() {
   const demoMode = useAppStore((state) => state.demoMode);
   const authState = useAppStore((state) => state.authState);
   const unassignedSessions = sessions.filter((session) => !session.workspaceId);
+  const pinnedSessions = sessions
+    .filter((session) => Boolean(session.pinnedAt))
+    .sort((left, right) => (right.pinnedAt ?? "").localeCompare(left.pinnedAt ?? "") || right.updatedAt.localeCompare(left.updatedAt));
+  const visibleSessions = sessions.filter((session) => (
+    !session.pinnedAt
+    && (session.workspaceId ?? "") === selectedWorkspaceId
+    && session.profileId === selectedProfileId
+  ));
   const hydrateBootstrap = useAppStore((state) => state.hydrateBootstrap);
   const updateSession = useAppStore((state) => state.updateSession);
   const removeSession = useAppStore((state) => state.removeSession);
@@ -43,7 +51,9 @@ export function LeftSidebar() {
   const [workspaceDescription, setWorkspaceDescription] = useState("");
   const [workspaceError, setWorkspaceError] = useState("");
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [workspacesExpanded, setWorkspacesExpanded] = useState(true);
   const [sessionMenuId, setSessionMenuId] = useState("");
+  const [pinBusyId, setPinBusyId] = useState("");
   const [renameTarget, setRenameTarget] = useState<SessionSummary | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
@@ -169,6 +179,29 @@ export function LeftSidebar() {
     }
   };
 
+  const toggleSessionPin = async (session: SessionSummary) => {
+    if (pinBusyId || mutationsDisabled) return;
+    const pinned = !session.pinnedAt;
+    closeSessionMenu();
+    setPinBusyId(session.id);
+    setSessionAnnouncement("");
+    try {
+      const updated = await api.setSessionPinned(session.id, pinned, csrfToken);
+      updateSession(session.id, {
+        pinnedAt: updated.pinnedAt,
+        updatedAt: updated.updatedAt,
+      });
+      setSessionAnnouncement(t(
+        pinned ? "sidebar.pinnedAnnouncement" : "sidebar.unpinnedAnnouncement",
+        { title: session.title },
+      ));
+    } catch (error) {
+      setSessionAnnouncement(error instanceof Error ? error.message : t("sidebar.pinError"));
+    } finally {
+      setPinBusyId("");
+    }
+  };
+
   const canDeleteSession = (session: SessionSummary) => {
     const profile = profiles.find((item) => item.id === session.profileId);
     return Boolean(profile?.mutable && profile.capabilitySet?.methods.includes("session.delete"));
@@ -245,6 +278,52 @@ export function LeftSidebar() {
       setWorkspaceBusy(false);
     }
   };
+
+  const renderSessionRow = (session: SessionSummary, pinnedSection = false) => {
+    const profile = profiles.find((item) => item.id === session.profileId);
+    const workspace = workspaces.find((item) => item.id === session.workspaceId);
+    const context = pinnedSection
+      ? [profile?.displayName, workspace?.name ?? t("sidebar.noWorkspace")].filter(Boolean).join(" · ")
+      : session.preview;
+    return (
+      <div className={cx("session-list__row", session.id === selectedSessionId && "is-active")} key={session.id} role={pinnedSection ? "listitem" : undefined}>
+        <button type="button" className="session-list__select" onClick={() => selectSession(session.id)}>
+          <span className="session-list__body"><strong>{session.title}</strong><small>{context}</small></span>
+          <span className="session-list__meta">{pinnedSection ? <PushPinSimple size={12} weight="fill" aria-hidden="true" /> : null}{session.unread ? <i /> : null}{session.updatedAt}</span>
+        </button>
+        {!mutationsDisabled ? <IconButton
+          className="session-list__more"
+          label={t("sidebar.conversationMenu", { title: session.title })}
+          icon={<DotsThreeVertical size={20} weight="bold" />}
+          aria-haspopup="menu"
+          aria-expanded={sessionMenuId === session.id}
+          onClick={(event) => {
+            sessionMenuTriggerRef.current = event.currentTarget;
+            setSessionMenuId((current) => current === session.id ? "" : session.id);
+          }}
+        /> : null}
+        {sessionMenuId === session.id ? <div
+          ref={sessionMenuRef}
+          className="session-list__menu"
+          role="menu"
+          aria-label={t("sidebar.conversationMenu", { title: session.title })}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              closeSessionMenu(true);
+            }
+          }}
+        >
+          <button type="button" role="menuitem" disabled={Boolean(pinBusyId)} onClick={() => void toggleSessionPin(session)}>{session.pinnedAt ? <PushPinSimpleSlash size={18} /> : <PushPinSimple size={18} />} {t(session.pinnedAt ? "sidebar.unpinConversation" : "sidebar.pinConversation")}</button>
+          <button type="button" role="menuitem" onClick={() => openRenameDialog(session)}><PencilSimple size={18} /> {t("sidebar.renameConversation")}</button>
+          <button type="button" role="menuitem" onClick={() => openMoveDialog(session)}><FolderSimple size={18} /> {t("sidebar.moveConversation")}</button>
+          {canDeleteSession(session) ? <button type="button" role="menuitem" className="is-danger" onClick={() => openDeleteDialog(session)}><Trash size={18} /> {t("activity.deleteEllipsis")}</button> : null}
+        </div> : null}
+      </div>
+    );
+  };
+
   return (
     <>
       <button className={cx("scrim scrim--left", open && "is-visible")} aria-label={t("nav.closeNavigation")} onClick={() => close(false)} />
@@ -297,8 +376,20 @@ export function LeftSidebar() {
         </nav>
 
         <div className="sidebar-section">
-          <div className="sidebar-section__heading"><span>{t("sidebar.workspaces")}</span>{authState === "authenticated" && !demoMode ? <IconButton label={t("sidebar.createWorkspace")} icon={<Plus size={16} />} onClick={() => openWorkspaceEditor()} /> : null}</div>
-          <div className="workspace-list">
+          <div className="sidebar-section__heading">
+            <button
+              type="button"
+              className={cx("sidebar-section__toggle", !workspacesExpanded && "is-collapsed")}
+              aria-expanded={workspacesExpanded}
+              aria-controls="sidebar-workspace-list"
+              aria-label={t(workspacesExpanded ? "sidebar.collapseWorkspaces" : "sidebar.expandWorkspaces")}
+              onClick={() => setWorkspacesExpanded((expanded) => !expanded)}
+            >
+              <CaretDown size={14} /><span>{t("sidebar.workspaces")}</span>
+            </button>
+            {authState === "authenticated" && !demoMode ? <IconButton label={t("sidebar.createWorkspace")} icon={<Plus size={16} />} onClick={() => openWorkspaceEditor()} /> : null}
+          </div>
+          <div className="workspace-list" id="sidebar-workspace-list" hidden={!workspacesExpanded}>
             {workspaces.map((workspace) => (
               <div className="workspace-list__row" key={workspace.id}>
                 <button type="button" className={cx("workspace-list__select", workspace.id === selectedWorkspaceId && "is-active")} onClick={() => selectWorkspace(workspace.id)}>
@@ -312,45 +403,17 @@ export function LeftSidebar() {
           </div>
         </div>
 
+        {pinnedSessions.length ? <div className="sidebar-section sidebar-section--pinned">
+          <div className="sidebar-section__heading"><span className="sidebar-section__heading-label"><PushPinSimple size={14} weight="fill" />{t("sidebar.pinnedConversations")}</span></div>
+          <div className="session-list session-list--pinned" role="list" aria-label={t("sidebar.pinnedConversations")}>
+            {pinnedSessions.map((session) => renderSessionRow(session, true))}
+          </div>
+        </div> : null}
+
         <div className="sidebar-section sidebar-section--sessions">
           <div className="sidebar-section__heading"><span>{t("sidebar.conversations")}</span></div>
           <div className="session-list">
-            {sessions.filter((session) => (session.workspaceId ?? "") === selectedWorkspaceId && session.profileId === selectedProfileId).map((session) => (
-              <div className={cx("session-list__row", session.id === selectedSessionId && "is-active")} key={session.id}>
-                <button type="button" className="session-list__select" onClick={() => selectSession(session.id)}>
-                  <span className="session-list__body"><strong>{session.title}</strong><small>{session.preview}</small></span>
-                  <span className="session-list__meta">{session.unread ? <i /> : null}{session.updatedAt}</span>
-                </button>
-                {!mutationsDisabled ? <IconButton
-                  className="session-list__more"
-                  label={t("sidebar.conversationMenu", { title: session.title })}
-                  icon={<DotsThreeVertical size={20} weight="bold" />}
-                  aria-haspopup="menu"
-                  aria-expanded={sessionMenuId === session.id}
-                  onClick={(event) => {
-                    sessionMenuTriggerRef.current = event.currentTarget;
-                    setSessionMenuId((current) => current === session.id ? "" : session.id);
-                  }}
-                /> : null}
-                {sessionMenuId === session.id ? <div
-                  ref={sessionMenuRef}
-                  className="session-list__menu"
-                  role="menu"
-                  aria-label={t("sidebar.conversationMenu", { title: session.title })}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      closeSessionMenu(true);
-                    }
-                  }}
-                >
-                  <button type="button" role="menuitem" onClick={() => openRenameDialog(session)}><PencilSimple size={18} /> {t("sidebar.renameConversation")}</button>
-                  <button type="button" role="menuitem" onClick={() => openMoveDialog(session)}><FolderSimple size={18} /> {t("sidebar.moveConversation")}</button>
-                  {canDeleteSession(session) ? <button type="button" role="menuitem" className="is-danger" onClick={() => openDeleteDialog(session)}><Trash size={18} /> {t("activity.deleteEllipsis")}</button> : null}
-                </div> : null}
-              </div>
-            ))}
+            {visibleSessions.map((session) => renderSessionRow(session))}
           </div>
         </div>
 

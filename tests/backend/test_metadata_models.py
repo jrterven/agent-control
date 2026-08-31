@@ -200,6 +200,9 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     assert "display_title" in {
         column["name"] for column in schema.get_columns("session_links")
     }
+    assert "pinned_at" in {
+        column["name"] for column in schema.get_columns("session_links")
+    }
     assert "capabilities_checked_at" in {
         column["name"] for column in schema.get_columns("profile_refs")
     }
@@ -225,7 +228,7 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0014_profile_voice_preferences"
+        ).scalar_one() == "0015_session_pinning"
     engine.dispose()
 
     downgrade = subprocess.run(

@@ -1078,6 +1078,48 @@ def test_session_can_have_a_control_only_display_title(authenticated, app):
     assert current["title"] == "Proyecto Turing"
 
 
+def test_session_pin_is_control_only_and_round_trips(authenticated, app):
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "pin-local-session")
+    assert session["pinnedAt"] is None
+
+    pinned = client.patch(
+        f"/api/v1/sessions/{session['id']}",
+        headers=mutation_headers(csrf, "pin-local-session"),
+        json={"pinned": True},
+    )
+
+    assert pinned.status_code == 200, pinned.text
+    assert pinned.json()["pinnedAt"] is not None
+    assert pinned.json()["storedSessionId"] == session["storedSessionId"]
+    with app.state.session_factory() as db:
+        row = db.get(SessionLink, session["id"])
+        assert row is not None
+        assert row.pinned_at is not None
+
+    listed = client.get("/api/v1/sessions").json()
+    listed_session = next(item for item in listed if item["id"] == session["id"])
+    assert listed_session["pinnedAt"] == pinned.json()["pinnedAt"]
+    bootstrapped = client.get("/api/v1/bootstrap").json()
+    bootstrap_session = next(
+        item for item in bootstrapped["sessions"] if item["id"] == session["id"]
+    )
+    assert bootstrap_session["pinnedAt"] == pinned.json()["pinnedAt"]
+
+    unpinned = client.patch(
+        f"/api/v1/sessions/{session['id']}",
+        headers=mutation_headers(csrf, "unpin-local-session"),
+        json={"pinned": False},
+    )
+
+    assert unpinned.status_code == 200, unpinned.text
+    assert unpinned.json()["pinnedAt"] is None
+    with app.state.session_factory() as db:
+        row = db.get(SessionLink, session["id"])
+        assert row is not None
+        assert row.pinned_at is None
+
+
 def test_session_display_title_rejects_blank_and_oversized_values(authenticated):
     client, csrf = authenticated
     session = create_session(client, csrf, "control-dev", "display-title-validation")

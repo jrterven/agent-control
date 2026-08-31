@@ -157,7 +157,14 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .sidebar-section__heading { min-height: 36px; display: flex; align-items: center; justify-content: space-between; padding: 0 7px; color: var(--muted); font-size: 10px; font-weight: 760; letter-spacing: .09em; text-transform: uppercase; }
 .sidebar-section__heading button { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; color: var(--muted); background: transparent; cursor: pointer; }
 .sidebar-section__heading button:hover { color: var(--text); background: var(--surface-2); }
+.sidebar-section__heading .sidebar-section__toggle { width: auto; min-width: 0; flex: 1; display: flex; align-items: center; justify-content: flex-start; gap: 6px; padding: 0 5px; font: inherit; letter-spacing: inherit; text-transform: inherit; }
+.sidebar-section__toggle svg { flex: 0 0 auto; transition: transform .16s ease; }
+.sidebar-section__toggle.is-collapsed svg { transform: rotate(-90deg); }
+.sidebar-section__heading-label { display: inline-flex; align-items: center; gap: 6px; }
+.sidebar-section__heading-label svg { color: var(--accent); }
 .workspace-list, .session-list { display: grid; gap: 3px; }
+.workspace-list { max-height: min(240px, 30dvh); overflow-y: auto; }
+.workspace-list[hidden] { display: none; }
 .workspace-list__row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: center; gap: 2px; }
 .workspace-list .workspace-list__select { min-height: 44px; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; border-radius: 9px; padding: 0 8px; color: var(--muted-strong); background: transparent; text-align: left; cursor: pointer; }
 .workspace-list .workspace-list__select:hover, .workspace-list .workspace-list__select.is-active { color: var(--text); background: var(--surface-2); }
@@ -168,6 +175,9 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .workspace-editor form > div:last-child { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .workspace-editor form > div:last-child > span { display: flex; gap: 8px; }
 .session-list { min-height: 0; overflow-y: auto; }
+.sidebar-section--sessions > .session-list { flex: 1; }
+.sidebar-section--pinned { min-height: 0; }
+.session-list--pinned { max-height: min(220px, 25dvh); }
 .session-list__row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: center; border-radius: 9px; color: var(--muted); }
 .session-list__row:hover, .session-list__row.is-active { color: var(--text); background: var(--surface-2); }
 .session-list .session-list__select { min-width: 0; min-height: 58px; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 9px; padding: 8px; color: inherit; background: transparent; text-align: left; cursor: pointer; }
@@ -179,9 +189,11 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .session-list__body small { color: var(--muted); font-size: 10px; }
 .session-list__meta { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; font-size: 9px; }
 .session-list__meta i { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); }
+.session-list__meta svg { color: var(--accent); }
 .session-list__menu { grid-column: 1 / -1; display: grid; gap: 2px; margin: 0 5px 5px; padding: 5px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-elevated); box-shadow: var(--shadow); }
 .session-list .session-list__menu button { min-height: 44px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 8px; padding: 0 10px; color: var(--text); background: transparent; font-weight: 670; text-align: left; cursor: pointer; }
 .session-list .session-list__menu button:hover, .session-list .session-list__menu button:focus-visible { background: var(--surface-2); }
+.session-list .session-list__menu button:disabled { opacity: .55; cursor: wait; }
 .session-list .session-list__menu button.is-danger { color: var(--danger-text); }
 .sidebar-footer { padding: 10px 12px 14px; border-top: 1px solid var(--border); }
 .sidebar-footer > .hc-button { width: 100%; }
