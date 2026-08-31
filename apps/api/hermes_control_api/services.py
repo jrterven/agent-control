@@ -1573,79 +1573,124 @@ class SessionService:
             method="session.resume",
         )
         connection = await self.gateways.connection(db, row.gateway_id, row.profile_name)
-        route = self._route(row)
-        active_operation = db.scalar(
-            select(IdempotencyOperation)
-            .where(
-                IdempotencyOperation.user_id == row.owner_id,
-                IdempotencyOperation.scope == f"session:{row.id}:prompt",
-                IdempotencyOperation.status.in_(
-                    ("pending", "accepted", "streaming", "delivery_unknown")
-                ),
+        initial_route = self._route(row)
+        active_statuses = ("pending", "accepted", "streaming", "delivery_unknown")
+
+        def active_prompt_operation() -> IdempotencyOperation | None:
+            return db.scalar(
+                select(IdempotencyOperation)
+                .where(
+                    IdempotencyOperation.user_id == row.owner_id,
+                    IdempotencyOperation.scope == f"session:{row.id}:prompt",
+                    IdempotencyOperation.status.in_(active_statuses),
+                )
+                .order_by(IdempotencyOperation.created_at.desc())
+                .limit(1)
             )
-            .order_by(IdempotencyOperation.created_at.desc())
-            .limit(1)
-        )
-        routed, resumed = await self.services.session_router.ensure_runtime(
-            route,
-            connection,
-            # This mutation is invoked only after an explicit authenticated
-            # recovery request. Always ask Hermes for authoritative active/
-            # idle state when a prompt is unresolved, even if a concurrent
-            # inventory sync already validated the replacement runtime.
-            force=active_operation is not None,
-        )
-        provider = await self.services.provider_pool.get(connection)
-        runtime_rebound = False
-        if resumed is not None:
-            self._assign_runtime(
-                db, row, routed.runtime_session_id, provider.runtime_generation
-            )
-            row.status = resumed.status
-            row.updated_at = utc_now()
-            if active_operation is not None:
-                # Keep the operation-scoped generation independent from
-                # inventory syncs, then advance it only after an authenticated
-                # Hermes resume has authoritatively reattached this turn.
-                active_operation.response_json = {
-                    **dict(active_operation.response_json or {}),
-                    "_runtimeGeneration": provider.runtime_generation,
-                }
-        elif routed.runtime_session_id and (
-            row.runtime_session_id != routed.runtime_session_id
-            or row.runtime_generation != provider.runtime_generation
-        ):
-            # The router may already have validated the runtime in this process
-            # while the durable link still carries an older connection
-            # generation. Converge the link without issuing a second resume.
-            self._assign_runtime(
-                db, row, routed.runtime_session_id, provider.runtime_generation
-            )
-            row.updated_at = utc_now()
-            runtime_rebound = True
-        if active_operation is not None:
-            history = await self._raw_history(db, row)
-            resumed_status = str(resumed.status or "").strip().lower() if resumed else ""
-            self._reconcile_active_prompt_from_history(
-                db,
-                row,
-                history,
-                runtime_confirmed_inactive=(
-                    resumed is not None
-                    and resumed_status not in _ACTIVE_RUNTIME_STATUSES
-                ),
-            )
-        if resumed is not None or runtime_rebound or active_operation is not None:
-            audit(
-                db,
-                actor=actor,
-                action="session.resume",
-                target_type="session",
-                target_id=row.id,
-                outcome=row.status,
-            )
-            db.commit()
+
+        # Provider-level single-flight ends when the resume RPC returns. Keep a
+        # wider per-route guard until history and SQLite agree, otherwise a
+        # slightly later second HTTP request can create R2 and then be overwritten
+        # by the first handler committing R1.
+        async with self.services.session_router.recovery_lock(initial_route):
+            # The request may have waited behind another recovery while holding
+            # an older ORM snapshot. Start from the route that actually committed.
             db.refresh(row)
+            route = self._route(row)
+            original_runtime = (row.runtime_session_id, row.runtime_generation)
+            original_status = row.status
+            active_operation = active_prompt_operation()
+            routed, resumed = await self.services.session_router.ensure_runtime(
+                route,
+                connection,
+                # This mutation is invoked only after an explicit authenticated
+                # recovery request. Always ask Hermes for authoritative active/
+                # idle state when a prompt is unresolved, even if a concurrent
+                # inventory sync already validated the replacement runtime.
+                force=active_operation is not None,
+            )
+            provider = await self.services.provider_pool.get(connection)
+            routed_generation = (
+                self.services.session_router.validated_runtime_generation(routed)
+                or (provider.runtime_generation if routed.runtime_session_id else None)
+            )
+            history = (
+                await self._raw_history(db, row)
+                if active_operation is not None
+                else None
+            )
+
+            # A terminal provider event is persisted in another Session before
+            # fanout and can land while the history read is awaiting Hermes.
+            # Refresh both identities before writing so that terminal/newer-route
+            # state wins instead of being downgraded by this stale handler.
+            db.refresh(row)
+            if active_operation is not None:
+                db.refresh(active_operation)
+            current_active_operation = active_prompt_operation()
+            operation_remains_active = bool(
+                active_operation is not None
+                and active_operation.status in active_statuses
+                and current_active_operation is not None
+                and current_active_operation.id == active_operation.id
+            )
+
+            current_runtime = (row.runtime_session_id, row.runtime_generation)
+            recovered_runtime = (routed.runtime_session_id, routed_generation)
+            runtime_is_current = current_runtime == recovered_runtime
+            runtime_rebound = False
+            if routed.runtime_session_id and current_runtime == original_runtime:
+                # Compare-and-set: install the recovered route only if no event or
+                # authenticated mutation advanced this row while we were waiting.
+                self._assign_runtime(
+                    db, row, routed.runtime_session_id, routed_generation
+                )
+                runtime_rebound = current_runtime != recovered_runtime
+                runtime_is_current = True
+
+            may_apply_recovered_status = operation_remains_active or (
+                active_operation is None
+                and current_active_operation is None
+                and row.status == original_status
+            )
+            if resumed is not None and runtime_is_current and may_apply_recovered_status:
+                row.status = resumed.status
+                row.updated_at = utc_now()
+
+            if operation_remains_active and active_operation is not None:
+                if runtime_is_current and row.runtime_generation:
+                    # Keep operation recovery metadata independent from inventory
+                    # sync, and advance it only for the route this authenticated
+                    # recovery actually installed/observed.
+                    active_operation.response_json = {
+                        **dict(active_operation.response_json or {}),
+                        "_runtimeGeneration": row.runtime_generation,
+                    }
+                resumed_status = (
+                    str(resumed.status or "").strip().lower() if resumed else ""
+                )
+                self._reconcile_active_prompt_from_history(
+                    db,
+                    row,
+                    history or [],
+                    runtime_confirmed_inactive=(
+                        resumed is not None
+                        and runtime_is_current
+                        and resumed_status not in _ACTIVE_RUNTIME_STATUSES
+                    ),
+                )
+
+            if resumed is not None or runtime_rebound or active_operation is not None:
+                audit(
+                    db,
+                    actor=actor,
+                    action="session.resume",
+                    target_type="session",
+                    target_id=row.id,
+                    outcome=row.status,
+                )
+                db.commit()
+                db.refresh(row)
         return row
 
     async def _raw_history(

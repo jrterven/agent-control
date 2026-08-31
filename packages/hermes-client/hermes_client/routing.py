@@ -62,6 +62,14 @@ class HermesSessionRouter:
     def __init__(self, pool: ProviderPool) -> None:
         self.pool = pool
         self._route_locks: OrderedDict[tuple[str, str, str], asyncio.Lock] = OrderedDict()
+        # ``_route_locks`` protect one provider RPC at a time. Recovery handlers
+        # need a wider guard: the runtime returned by session.resume must remain
+        # current until Control has reconciled history and committed its durable
+        # projection. Keep that lifecycle lock separate so guarded handlers may
+        # still call the normal router methods without deadlocking themselves.
+        self._recovery_locks: OrderedDict[
+            tuple[str, str, str], asyncio.Lock
+        ] = OrderedDict()
         self._receipts: OrderedDict[
             tuple[str, str, str, str], PromptReceipt
         ] = OrderedDict()
@@ -92,6 +100,41 @@ class HermesSessionRouter:
                 (route.gateway_id, route.profile_name, route.stored_session_id, route.runtime_session_id)
             )
             self._trim(self._validated_runtime, self._max_routes * 2)
+
+    def recovery_lock(self, route: SessionRoute) -> asyncio.Lock:
+        """Serialize the complete durable recovery lifecycle for one route."""
+
+        key = (route.gateway_id, route.profile_name, route.stored_session_id)
+        lock = self._recovery_locks.get(key)
+        if lock is not None:
+            self._recovery_locks.move_to_end(key)
+            return lock
+        lock = asyncio.Lock()
+        self._recovery_locks[key] = lock
+        if len(self._recovery_locks) > self._max_routes:
+            for old_key, old_lock in tuple(self._recovery_locks.items()):
+                if (
+                    not old_lock.locked()
+                    and not getattr(old_lock, "_waiters", None)
+                    and old_key != key
+                ):
+                    self._recovery_locks.pop(old_key, None)
+                    break
+        return lock
+
+    def validated_runtime_generation(self, route: SessionRoute) -> str | None:
+        """Return the exact provider generation that validated ``route``."""
+
+        if not route.runtime_session_id:
+            return None
+        return self._validated_runtime.get(
+            (
+                route.gateway_id,
+                route.profile_name,
+                route.stored_session_id,
+                route.runtime_session_id,
+            )
+        )
 
     async def ensure_runtime(
         self,

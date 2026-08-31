@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -12,7 +14,8 @@ from hermes_client import (
     PromptReceipt,
     SessionHistoryNotFound,
 )
-from hermes_control_api.models import IdempotencyOperation, SessionLink
+from hermes_control_api.models import IdempotencyOperation, SessionLink, User
+from hermes_control_api.services import SessionService
 
 from .conftest import mutation_headers
 
@@ -686,6 +689,272 @@ def test_guarded_resume_preserves_an_active_turn_after_gateway_restart(
         f"/api/v1/sessions/{session['id']}/operations/{operation_id}"
     )
     assert status.json()["status"] == "streaming"
+
+
+def test_overlapping_guarded_resumes_commit_the_newest_runtime(
+    authenticated, app, monkeypatch
+):
+    client, csrf = authenticated
+    session = create_session(
+        client,
+        csrf,
+        "control-dev",
+        "overlapping-resume-session",
+    )
+    original_history = InMemoryHermesProvider.history_readonly
+
+    async def leave_prompt_running(
+        provider,
+        route,
+        prompt,
+        *,
+        operation_id,
+        expected_runtime_generation=None,
+    ):
+        provider._messages[route.stored_session_id].append(
+            {"id": "overlap-user", "role": "user", "content": prompt}
+        )
+        return PromptReceipt(operation_id=operation_id, status="streaming")
+
+    monkeypatch.setattr(
+        InMemoryHermesProvider,
+        "submit_prompt",
+        leave_prompt_running,
+    )
+    operation_id = "overlapping-resume-operation"
+    submitted = client.post(
+        f"/api/v1/sessions/{session['id']}/prompts",
+        headers=mutation_headers(csrf, operation_id),
+        json={"content": "Espera una aprobación mientras recuperas la sesión"},
+    )
+    assert submitted.status_code == 202, submitted.text
+
+    first_history_started = asyncio.Event()
+    release_first_history = asyncio.Event()
+    second_recovery_guard_requested = asyncio.Event()
+    resume_runtime_ids: list[str] = []
+    history_calls = 0
+    recovery_lock_requests = 0
+
+    original_recovery_lock = app.state.services.session_router.recovery_lock
+
+    def observe_recovery_lock(route):
+        nonlocal recovery_lock_requests
+        recovery_lock_requests += 1
+        if recovery_lock_requests == 2:
+            second_recovery_guard_requested.set()
+        return original_recovery_lock(route)
+
+    monkeypatch.setattr(
+        app.state.services.session_router,
+        "recovery_lock",
+        observe_recovery_lock,
+    )
+
+    async def resume_waiting(provider, stored_session_id):
+        runtime_id = f"runtime-overlap-{len(resume_runtime_ids) + 1}"
+        resume_runtime_ids.append(runtime_id)
+        resumed = HermesSession(
+            stored_session_id,
+            runtime_id,
+            "Turno solapado",
+            "waiting",
+        )
+        provider._sessions[stored_session_id] = resumed
+        assert provider.event_sink is not None
+        await provider.event_sink(
+            NormalizedEvent.create(
+                type="approval.request",
+                gateway_id=provider.connection.gateway_id,
+                profile_name=provider.connection.profile_name,
+                stored_session_id=stored_session_id,
+                runtime_session_id=runtime_id,
+                runtime_generation=provider.runtime_generation,
+                data={
+                    "request_id": f"approval-{runtime_id}",
+                    "command": "calendar.create --safe",
+                    "choices": ["once", "deny"],
+                },
+            )
+        )
+        return resumed
+
+    async def delay_only_first_recovery_history(provider, stored_session_id):
+        nonlocal history_calls
+        history_calls += 1
+        if history_calls == 1:
+            first_history_started.set()
+            await release_first_history.wait()
+        return await original_history(provider, stored_session_id)
+
+    monkeypatch.setattr(
+        InMemoryHermesProvider,
+        "resume_session",
+        resume_waiting,
+    )
+    monkeypatch.setattr(
+        InMemoryHermesProvider,
+        "history_readonly",
+        delay_only_first_recovery_history,
+    )
+
+    async def overlap_recoveries():
+        async def recover_once() -> tuple[str | None, str]:
+            with app.state.session_factory() as db:
+                actor = db.scalar(select(User).where(User.username == "admin"))
+                row = db.get(SessionLink, session["id"])
+                assert actor is not None and row is not None
+                recovered = await SessionService(app.state.services).resume(
+                    db, actor, row
+                )
+                return recovered.runtime_session_id, recovered.status
+
+        first = asyncio.create_task(recover_once())
+        await first_history_started.wait()
+        # The first resume RPC has finished, but its history/commit phase is
+        # deliberately paused. A second request must wait for that whole durable
+        # recovery lifecycle, not merely for the upstream RPC task.
+        second = asyncio.create_task(recover_once())
+        await asyncio.wait_for(second_recovery_guard_requested.wait(), timeout=1)
+        assert resume_runtime_ids == ["runtime-overlap-1"]
+        release_first_history.set()
+        return await asyncio.gather(first, second)
+
+    recovered = client.portal.call(overlap_recoveries)
+    assert recovered == [
+        ("runtime-overlap-1", "waiting"),
+        ("runtime-overlap-2", "waiting"),
+    ]
+    assert resume_runtime_ids == ["runtime-overlap-1", "runtime-overlap-2"]
+
+    history = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert history.status_code == 200, history.text
+    assert history.json()["sessionStatus"] == "waiting"
+    assert history.json()["activeOperation"]["operationId"] == operation_id
+    assert history.json()["pendingInteractions"] == [
+        {
+            "type": "approval.request",
+            "data": {
+                "request_id": "approval-runtime-overlap-2",
+                "command": "calendar.create --safe",
+                "choices": ["once", "deny"],
+            },
+        }
+    ]
+    with app.state.session_factory() as db:
+        row = db.get(SessionLink, session["id"])
+        assert row is not None
+        assert row.runtime_session_id == "runtime-overlap-2"
+
+
+def test_terminal_event_during_recovery_history_cannot_be_downgraded(
+    authenticated, app, monkeypatch
+):
+    client, csrf = authenticated
+    session = create_session(
+        client,
+        csrf,
+        "control-dev",
+        "terminal-during-history-session",
+    )
+    original_history = InMemoryHermesProvider.history_readonly
+
+    async def leave_prompt_running(
+        provider,
+        route,
+        prompt,
+        *,
+        operation_id,
+        expected_runtime_generation=None,
+    ):
+        provider._messages[route.stored_session_id].append(
+            {"id": "terminal-race-user", "role": "user", "content": prompt}
+        )
+        return PromptReceipt(operation_id=operation_id, status="streaming")
+
+    monkeypatch.setattr(
+        InMemoryHermesProvider,
+        "submit_prompt",
+        leave_prompt_running,
+    )
+    operation_id = "terminal-during-history-operation"
+    submitted = client.post(
+        f"/api/v1/sessions/{session['id']}/prompts",
+        headers=mutation_headers(csrf, operation_id),
+        json={"content": "Termina mientras Control consulta el historial"},
+    )
+    assert submitted.status_code == 202, submitted.text
+
+    async def resume_running(provider, stored_session_id):
+        resumed = HermesSession(
+            stored_session_id,
+            "runtime-terminal-race",
+            "Turno terminal",
+            "running",
+        )
+        provider._sessions[stored_session_id] = resumed
+        return resumed
+
+    terminal_emitted = False
+
+    async def finish_during_history(provider, stored_session_id):
+        nonlocal terminal_emitted
+        if not terminal_emitted:
+            terminal_emitted = True
+            provider._messages[stored_session_id].append(
+                {
+                    "id": "terminal-race-answer",
+                    "role": "assistant",
+                    "content": "La operación terminó correctamente.",
+                    "finish_reason": "stop",
+                }
+            )
+            assert provider.event_sink is not None
+            await provider.event_sink(
+                NormalizedEvent.create(
+                    type="message.complete",
+                    gateway_id=provider.connection.gateway_id,
+                    profile_name=provider.connection.profile_name,
+                    stored_session_id=stored_session_id,
+                    runtime_session_id="runtime-terminal-race",
+                    runtime_generation=provider.runtime_generation,
+                    correlation_id=operation_id,
+                    data={"status": "completed"},
+                )
+            )
+        return await original_history(provider, stored_session_id)
+
+    monkeypatch.setattr(
+        InMemoryHermesProvider,
+        "resume_session",
+        resume_running,
+    )
+    monkeypatch.setattr(
+        InMemoryHermesProvider,
+        "history_readonly",
+        finish_during_history,
+    )
+
+    resumed = client.post(
+        f"/api/v1/sessions/{session['id']}/resume",
+        headers=mutation_headers(csrf, "resume-with-terminal-race"),
+    )
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["status"] == "ready"
+
+    history = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert history.status_code == 200, history.text
+    assert history.json()["sessionStatus"] == "ready"
+    assert history.json()["activeOperation"] is None
+    assert any(
+        item.get("id") == "terminal-race-answer"
+        for item in history.json()["items"]
+    )
+    status = client.get(
+        f"/api/v1/sessions/{session['id']}/operations/{operation_id}"
+    )
+    assert status.status_code == 200, status.text
+    assert status.json()["status"] == "completed"
 
 
 def test_history_does_not_guess_completion_from_only_an_accepted_user_message(
