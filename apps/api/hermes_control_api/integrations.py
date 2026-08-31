@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import math
@@ -13,10 +14,16 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .models import User, UserIntegration
+from .models import (
+    ProfileRef,
+    ProfileVoicePreference,
+    SessionLink,
+    User,
+    UserIntegration,
+)
 from .security import SecretVault
 
 
@@ -117,6 +124,24 @@ class SpeechVoicePreviewUnavailable(IntegrationError):
             status_code=422,
             code="SPEECH_VOICE_PREVIEW_UNAVAILABLE",
             message="The selected ElevenLabs voice does not provide a safe preview",
+        )
+
+
+class ProfileVoiceTargetNotFound(IntegrationError):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=404,
+            code="PROFILE_VOICE_TARGET_NOT_FOUND",
+            message="The selected profile does not exist",
+        )
+
+
+class SpeechSessionNotFound(IntegrationError):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=404,
+            code="SPEECH_SESSION_NOT_FOUND",
+            message="The selected chat does not exist",
         )
 
 
@@ -764,11 +789,51 @@ class UserIntegrationService:
         return f"user-integration:{owner_id}:{ELEVENLABS_PROVIDER}:api-key"
 
     @staticmethod
+    def _key_fingerprint(row: UserIntegration) -> str:
+        return hashlib.sha256(row.api_key_ciphertext.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _current_preference(
+        cls,
+        row: UserIntegration | None,
+        preference: ProfileVoicePreference | None,
+    ) -> ProfileVoicePreference | None:
+        if row is None or preference is None:
+            return None
+        if not hmac.compare_digest(
+            preference.api_key_fingerprint,
+            cls._key_fingerprint(row),
+        ):
+            return None
+        return preference
+
+    @staticmethod
     def _row(db: Session, owner_id: str) -> UserIntegration | None:
         return db.scalar(
             select(UserIntegration).where(
                 UserIntegration.owner_id == owner_id,
                 UserIntegration.provider == ELEVENLABS_PROVIDER,
+            )
+        )
+
+    @staticmethod
+    def _profile(db: Session, profile_id: str) -> ProfileRef:
+        profile = db.get(ProfileRef, profile_id)
+        if profile is None:
+            raise ProfileVoiceTargetNotFound()
+        return profile
+
+    @staticmethod
+    def _preference(
+        db: Session,
+        *,
+        integration_id: str,
+        profile_id: str,
+    ) -> ProfileVoicePreference | None:
+        return db.scalar(
+            select(ProfileVoicePreference).where(
+                ProfileVoicePreference.integration_id == integration_id,
+                ProfileVoicePreference.profile_id == profile_id,
             )
         )
 
@@ -791,6 +856,89 @@ class UserIntegrationService:
             "speech_available": bool(configured and row and row.tts_voice_id),
         }
 
+    def profile_configuration(
+        self,
+        db: Session,
+        owner: User,
+        profile_id: str,
+    ) -> dict[str, object]:
+        profile = self._profile(db, profile_id)
+        row = self._row(db, owner.id)
+        preference = (
+            self._preference(
+                db,
+                integration_id=row.id,
+                profile_id=profile.id,
+            )
+            if row is not None
+            else None
+        )
+        preference = self._current_preference(row, preference)
+        return self._effective_profile_configuration(profile, row, preference)
+
+    @staticmethod
+    def _effective_profile_configuration(
+        profile: ProfileRef,
+        row: UserIntegration | None,
+        preference: ProfileVoicePreference | None,
+    ) -> dict[str, object]:
+        inherited = preference is None
+        voice_id = preference.tts_voice_id if preference else (row.tts_voice_id if row else None)
+        voice_name = (
+            preference.tts_voice_name if preference else (row.tts_voice_name if row else None)
+        )
+        raw_model_id = (
+            preference.tts_model_id
+            if preference is not None
+            else (row.tts_model_id if row is not None else ELEVENLABS_TTS_MODEL_ID)
+        )
+        model_id = (
+            raw_model_id
+            if raw_model_id in ELEVENLABS_TTS_MODEL_IDS
+            else ELEVENLABS_TTS_MODEL_ID
+        )
+        configured = bool(row and row.api_key_ciphertext)
+        return {
+            "profile_id": profile.id,
+            "gateway_id": profile.gateway_id,
+            "profile_name": profile.profile_name,
+            "tts_model_id": model_id,
+            "voice_id": voice_id,
+            "voice_name": voice_name,
+            "speech_available": bool(configured and voice_id),
+            "inherited": inherited,
+        }
+
+    def profile_configurations(
+        self,
+        db: Session,
+        owner: User,
+        profiles: list[ProfileRef],
+    ) -> dict[str, dict[str, object]]:
+        row = self._row(db, owner.id)
+        preferences: dict[str, ProfileVoicePreference] = {}
+        if row is not None and profiles:
+            preferences = {
+                preference.profile_id: current
+                for preference in db.scalars(
+                    select(ProfileVoicePreference).where(
+                        ProfileVoicePreference.integration_id == row.id,
+                        ProfileVoicePreference.profile_id.in_(
+                            [profile.id for profile in profiles]
+                        ),
+                    )
+                ).all()
+                if (current := self._current_preference(row, preference)) is not None
+            }
+        return {
+            profile.id: self._effective_profile_configuration(
+                profile,
+                row,
+                preferences.get(profile.id),
+            )
+            for profile in profiles
+        }
+
     def set_api_key(self, db: Session, owner: User, api_key: str) -> UserIntegration:
         if (
             not 16 <= len(api_key) <= 512
@@ -809,6 +957,11 @@ class UserIntegrationService:
             )
             db.add(row)
         else:
+            db.execute(
+                delete(ProfileVoicePreference).where(
+                    ProfileVoicePreference.integration_id == row.id
+                )
+            )
             row.api_key_ciphertext = ciphertext
             # A replacement credential can point at another workspace. Never
             # assume that the old voice remains authorized by the new key.
@@ -816,6 +969,73 @@ class UserIntegrationService:
             row.tts_voice_name = None
         db.flush()
         return row
+
+    def set_profile_voice(
+        self,
+        db: Session,
+        owner: User,
+        *,
+        profile_id: str,
+        voice_id: str,
+        voice_name: str,
+        model_id: ElevenLabsTtsModelId | None,
+    ) -> ProfileVoicePreference:
+        profile = self._profile(db, profile_id)
+        row = self._row(db, owner.id)
+        if row is None:
+            raise IntegrationNotConfigured()
+        preference = self._preference(
+            db,
+            integration_id=row.id,
+            profile_id=profile.id,
+        )
+        if preference is None:
+            preference = ProfileVoicePreference(
+                integration_id=row.id,
+                profile_id=profile.id,
+                api_key_fingerprint=self._key_fingerprint(row),
+                tts_voice_id=voice_id,
+                tts_voice_name=voice_name[:200],
+                tts_model_id=(
+                    model_id
+                    or (
+                        row.tts_model_id
+                        if row.tts_model_id in ELEVENLABS_TTS_MODEL_IDS
+                        else ELEVENLABS_TTS_MODEL_ID
+                    )
+                ),
+            )
+            db.add(preference)
+        else:
+            preference.api_key_fingerprint = self._key_fingerprint(row)
+            preference.tts_voice_id = voice_id
+            preference.tts_voice_name = voice_name[:200]
+            if model_id is not None:
+                preference.tts_model_id = model_id
+        db.flush()
+        return preference
+
+    def delete_profile_voice(
+        self,
+        db: Session,
+        owner: User,
+        *,
+        profile_id: str,
+    ) -> bool:
+        profile = self._profile(db, profile_id)
+        row = self._row(db, owner.id)
+        if row is None:
+            return False
+        preference = self._preference(
+            db,
+            integration_id=row.id,
+            profile_id=profile.id,
+        )
+        if preference is None:
+            return False
+        db.delete(preference)
+        db.flush()
+        return True
 
     def set_voice(
         self,
@@ -837,24 +1057,60 @@ class UserIntegrationService:
         return row
 
     def speech_configuration(
-        self, db: Session, owner: User
+        self,
+        db: Session,
+        owner: User,
+        *,
+        session_id: str | None = None,
     ) -> tuple[str, str, ElevenLabsTtsModelId]:
         row = self._row(db, owner.id)
         if row is None:
             raise IntegrationNotConfigured()
-        if not row.tts_voice_id:
+        preference: ProfileVoicePreference | None = None
+        if session_id is not None:
+            session_link = db.scalar(
+                select(SessionLink).where(
+                    SessionLink.id == session_id,
+                    SessionLink.owner_id == owner.id,
+                )
+            )
+            if session_link is None:
+                raise SpeechSessionNotFound()
+            profile = db.scalar(
+                select(ProfileRef).where(
+                    ProfileRef.gateway_id == session_link.gateway_id,
+                    ProfileRef.profile_name == session_link.profile_name,
+                )
+            )
+            if profile is None:
+                raise SpeechSessionNotFound()
+            preference = self._preference(
+                db,
+                integration_id=row.id,
+                profile_id=profile.id,
+            )
+            preference = self._current_preference(row, preference)
+        voice_id = preference.tts_voice_id if preference else row.tts_voice_id
+        voice_name = preference.tts_voice_name if preference else row.tts_voice_name
+        raw_model_id = preference.tts_model_id if preference else row.tts_model_id
+        if not voice_id:
             raise SpeechVoiceNotConfigured()
         model_id: ElevenLabsTtsModelId = (
-            row.tts_model_id
-            if row.tts_model_id in ELEVENLABS_TTS_MODEL_IDS
+            raw_model_id
+            if raw_model_id in ELEVENLABS_TTS_MODEL_IDS
             else ELEVENLABS_TTS_MODEL_ID
         )
-        return row.tts_voice_id, row.tts_voice_name or row.tts_voice_id, model_id
+        return voice_id, voice_name or voice_id, model_id
 
     def delete_api_key(self, db: Session, owner: User) -> bool:
         row = self._row(db, owner.id)
         if row is None:
             return False
+        db.execute(
+            delete(ProfileVoicePreference).where(
+                ProfileVoicePreference.integration_id == row.id
+            )
+        )
         db.delete(row)
         db.flush()
         return True

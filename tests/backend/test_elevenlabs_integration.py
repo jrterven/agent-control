@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import logging
 from datetime import datetime
@@ -19,6 +20,8 @@ from hermes_control_api.integrations import (
 from hermes_control_api.models import (
     AuditEvent,
     IdempotencyOperation,
+    ProfileRef,
+    ProfileVoicePreference,
     User,
     UserIntegration,
 )
@@ -395,6 +398,23 @@ def test_delete_is_owner_scoped_and_disables_dictation(authenticated, app):
     assert _put_key(client, csrf, "sk_delete_1234567890_private").status_code == 200
     fake = FakeScribeClient()
     app.state.elevenlabs_scribe_client = fake
+    with app.state.session_factory() as db:
+        integration = db.scalar(select(UserIntegration))
+        profile = db.scalar(select(ProfileRef))
+        assert integration is not None
+        assert profile is not None
+        db.add(
+            ProfileVoicePreference(
+                integration_id=integration.id,
+                profile_id=profile.id,
+                api_key_fingerprint=hashlib.sha256(
+                    integration.api_key_ciphertext.encode("utf-8")
+                ).hexdigest(),
+                tts_voice_id="voice_before_delete",
+                tts_voice_name="Disposable voice",
+            )
+        )
+        db.commit()
 
     deleted = client.delete(
         "/api/v1/integrations/elevenlabs/key",
@@ -404,6 +424,8 @@ def test_delete_is_owner_scoped_and_disables_dictation(authenticated, app):
     assert deleted.content == b""
     assert client.get("/api/v1/integrations/elevenlabs").json()["configured"] is False
     assert client.get("/api/v1/bootstrap").json()["features"]["dictation"]["available"] is False
+    with app.state.session_factory() as db:
+        assert db.scalars(select(ProfileVoicePreference)).all() == []
 
     token = _issue_token(client, csrf)
     assert token.status_code == 409

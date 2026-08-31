@@ -155,6 +155,46 @@ class ProfileRef(Base, Timestamped):
     )
 
 
+class ProfileVoicePreference(Base, Timestamped):
+    """Owner-scoped ElevenLabs voice override for one exact profile route."""
+
+    __tablename__ = "profile_voice_preferences"
+    __table_args__ = (
+        UniqueConstraint(
+            "integration_id",
+            "profile_id",
+            name="uq_profile_voice_preferences_integration_profile",
+        ),
+        CheckConstraint(
+            "tts_model_id IN ('eleven_flash_v2_5', 'eleven_multilingual_v2')",
+            name="ck_profile_voice_preferences_supported_tts_model",
+        ),
+        CheckConstraint(
+            "length(api_key_fingerprint) = 64",
+            name="ck_profile_voice_preferences_key_fingerprint_length",
+        ),
+        Index("ix_profile_voice_preferences_profile_id", "profile_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    integration_id: Mapped[str] = mapped_column(
+        ForeignKey("user_integrations.id", ondelete="CASCADE"), nullable=False
+    )
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("profile_refs.id", ondelete="CASCADE"), nullable=False
+    )
+    # Hash of the encrypted envelope, never of the plaintext key. This binds
+    # an override to the exact credential generation that validated its voice.
+    api_key_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    tts_voice_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    tts_voice_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    tts_model_id: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        default="eleven_flash_v2_5",
+        server_default="eleven_flash_v2_5",
+    )
+
+
 class Workspace(Base, Timestamped):
     __tablename__ = "workspaces"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)

@@ -677,6 +677,12 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .integration-settings__voice-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
 .integration-settings__voice-controls select { min-width: 0; min-height: 44px; border: 1px solid var(--border-strong); border-radius: 10px; padding: 0 11px; color: var(--text); background: var(--surface-1); }
 .integration-settings__voice-current { display: flex; align-items: center; gap: 6px; color: var(--success-text); }
+.integration-settings__profile-voices { margin-top: 10px; background: var(--surface-1); }
+.integration-settings__profile-voice-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.integration-settings__profile-voice-controls select { min-width: 0; min-height: 44px; border: 1px solid var(--border-strong); border-radius: 10px; padding: 0 11px; color: var(--text); background: var(--surface-0); }
+.integration-settings__profile-voice-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.integration-settings__profile-voices .form-error { margin: 2px 0 0; }
+.integration-settings__profile-voices > .form-hint { margin: 2px 0 0; }
 .integration-settings__notice { display: flex; align-items: center; gap: 7px; margin: 12px 0 0; color: var(--success-text); font-size: 12px; }
 .integration-settings__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .integration-settings__confirm { margin-top: 12px; border: 1px solid var(--warning); border-radius: 11px; padding: 11px; background: var(--warning-soft); }
@@ -798,6 +804,9 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
   .speech-player { width: calc(100vw - 78px); }
   .speech-player__status { min-width: 0; flex: 1; }
   .integration-settings__voice-controls { grid-template-columns: 1fr; }
+  .integration-settings__profile-voice-controls { grid-template-columns: 1fr; }
+  .integration-settings__profile-voice-actions { display: grid; grid-template-columns: 1fr; }
+  .integration-settings__profile-voice-actions > .hc-button { width: 100%; }
   .command-layer, .modal-layer { align-items: end; padding: 0; }
   .command-palette, .form-modal { width: 100%; max-height: 84dvh; border-radius: 20px 20px 0 0; overflow-y: auto; }
   .agent-creation-progress { min-height: 84dvh; align-content: start; }

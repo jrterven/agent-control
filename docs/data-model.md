@@ -5,8 +5,10 @@ erDiagram
     USER ||--o{ AUTH_SESSION : opens
     USER ||--o{ GATEWAY : owns
     USER ||--o{ USER_INTEGRATION : configures
+    USER_INTEGRATION ||--o{ PROFILE_VOICE_PREFERENCE : owns
     GATEWAY ||--|| GATEWAY_CREDENTIAL : protects
     GATEWAY ||--o{ PROFILE_REF : exposes
+    PROFILE_REF ||--o{ PROFILE_VOICE_PREFERENCE : receives
     USER ||--o{ WORKSPACE : owns
     WORKSPACE o|--o{ SESSION_LINK : groups
     GATEWAY ||--o{ SESSION_LINK : routes
@@ -31,10 +33,16 @@ erDiagram
 - Gateway credentials are separate AES-GCM records with random nonces and AAD
   containing gateway ID plus field name. Read APIs return presence only.
 - `USER_INTEGRATION` is unique by `(owner_id, provider)`. For ElevenLabs it
-  stores the encrypted API key plus the non-secret selected voice and TTS model;
+  stores the encrypted API key plus the non-secret default voice and TTS model;
   the model is constrained to Flash v2.5 or Multilingual v2. AAD binds owner ID,
   provider and field name so ciphertext cannot be moved between users or uses.
   Reads expose `configured`, provider and model metadata, never the key.
+- `PROFILE_VOICE_PREFERENCE` optionally overrides that default for one exact
+  `(user integration, profile reference)` pair. Because `PROFILE_REF` already
+  identifies both gateway and technical profile name, homonymous agents on
+  different computers never share a voice. Deleting or replacing an integration
+  credential removes its overrides so voice IDs from another ElevenLabs account
+  cannot be reused accidentally.
 - A transcription integration is independent from `GATEWAY`, `PROFILE_REF`,
   `SESSION_LINK` and every Hermes/OpenClaw object. The optional language hint
   affects only the subsequent browser/provider handshake.

@@ -290,11 +290,13 @@ type LiveRef = {
 export function useSpeechPlayback({
   available,
   sessionId,
+  historySessionId,
   csrfToken,
   streamingMessage,
 }: {
   available: boolean;
   sessionId: string;
+  historySessionId?: string;
   csrfToken?: string;
   streamingMessage?: ChatMessage;
 }) {
@@ -441,7 +443,7 @@ export function useSpeechPlayback({
         initialPlay = audio.play().then(() => undefined, (failure: unknown) => failure);
       }
 
-      const response = await api.streamSpeech(text, csrfToken, abort.signal);
+      const response = await api.streamSpeech(text, historySessionId, csrfToken, abort.signal);
       if (mediaSource) {
         await loadHistoryMediaSource(mediaSource, response, abort.signal);
         const playbackFailure = await initialPlay;
@@ -478,7 +480,7 @@ export function useSpeechPlayback({
       setStatus("error");
       setError(true);
     }
-  }, [available, csrfToken, rate, stopHistory, stopLive]);
+  }, [available, csrfToken, historySessionId, rate, stopHistory, stopLive]);
 
   const togglePause = useCallback(() => {
     const audio = historyAudioRef.current;

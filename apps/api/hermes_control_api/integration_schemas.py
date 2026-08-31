@@ -67,6 +67,17 @@ class ElevenLabsVoiceMutation(ApiModel):
     tts_model_id: ElevenLabsTtsModelId | None = None
 
 
+class ElevenLabsProfileVoiceView(ApiModel):
+    profile_id: str
+    gateway_id: str
+    profile_name: str
+    tts_model_id: ElevenLabsTtsModelId = ELEVENLABS_TTS_MODEL_ID
+    voice_id: str | None = None
+    voice_name: str | None = None
+    speech_available: bool = False
+    inherited: bool = True
+
+
 class SpeechTokenRequest(ApiModel):
     session_id: str | None = Field(default=None, min_length=1, max_length=255)
 
@@ -83,6 +94,7 @@ class SpeechRequest(ApiModel):
     # The response is already visible to the authenticated user. It is sent
     # only after an explicit playback action and is never persisted or audited.
     text: str = Field(min_length=1, max_length=20_000)
+    session_id: str | None = Field(default=None, min_length=1, max_length=255)
 
     @field_validator("text")
     @classmethod

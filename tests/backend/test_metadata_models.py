@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -15,6 +16,8 @@ from hermes_control_api.models import (
     AttachmentReference,
     Draft,
     Gateway,
+    ProfileRef,
+    ProfileVoicePreference,
     SessionLink,
     SessionTag,
     Tag,
@@ -37,6 +40,7 @@ APPLICATION_TABLES = {
     "gateways",
     "idempotency_operations",
     "profile_refs",
+    "profile_voice_preferences",
     "realtime_tickets",
     "session_links",
     "session_tags",
@@ -123,6 +127,38 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     assert "api_key_ciphertext" in integration_columns
     assert "api_key" not in integration_columns
     assert {"tts_voice_id", "tts_voice_name", "tts_model_id"} <= integration_columns
+    profile_voice_columns = {
+        column["name"]
+        for column in schema.get_columns("profile_voice_preferences")
+    }
+    assert {
+        "integration_id",
+        "profile_id",
+        "api_key_fingerprint",
+        "tts_voice_id",
+        "tts_voice_name",
+        "tts_model_id",
+        "created_at",
+        "updated_at",
+    } <= profile_voice_columns
+    profile_voice_fks = {
+        tuple(foreign_key["constrained_columns"]): foreign_key
+        for foreign_key in schema.get_foreign_keys("profile_voice_preferences")
+    }
+    assert profile_voice_fks[("integration_id",)]["referred_table"] == "user_integrations"
+    assert profile_voice_fks[("integration_id",)]["options"].get("ondelete") == "CASCADE"
+    assert profile_voice_fks[("profile_id",)]["referred_table"] == "profile_refs"
+    assert profile_voice_fks[("profile_id",)]["options"].get("ondelete") == "CASCADE"
+    assert "uq_profile_voice_preferences_integration_profile" in {
+        constraint["name"]
+        for constraint in schema.get_unique_constraints("profile_voice_preferences")
+    }
+    assert "ck_profile_voice_preferences_key_fingerprint_length" in {
+        constraint["name"]
+        for constraint in schema.get_check_constraints(
+            "profile_voice_preferences"
+        )
+    }
 
     session_tag_fks = {
         fk["name"]: (tuple(fk["constrained_columns"]), tuple(fk["referred_columns"]))
@@ -189,7 +225,7 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0013_profile_avatars"
+        ).scalar_one() == "0014_profile_voice_preferences"
     engine.dispose()
 
     downgrade = subprocess.run(
@@ -243,18 +279,64 @@ def test_metadata_constraints_enforce_owner_isolation_encryption_and_cascade():
         )
         db.add_all([owner, other, gateway])
         db.flush()
+        profile = ProfileRef(
+            gateway_id=gateway.id,
+            profile_name="default",
+            display_name="Newton",
+        )
+        secondary_profile = ProfileRef(
+            gateway_id=gateway.id,
+            profile_name="jarvis",
+            display_name="Jarvis",
+        )
         integration_envelope = SecretVault(b"d" * 32).encrypt(
             "owner-only-key",
             aad=f"user-integration:{owner.id}:elevenlabs:api-key",
         )
-        db.add(
-            UserIntegration(
-                owner_id=owner.id,
-                provider="elevenlabs",
-                api_key_ciphertext=integration_envelope,
-            )
+        integration = UserIntegration(
+            owner_id=owner.id,
+            provider="elevenlabs",
+            api_key_ciphertext=integration_envelope,
         )
+        db.add_all([profile, secondary_profile, integration])
         db.commit()
+        preference = ProfileVoicePreference(
+            integration_id=integration.id,
+            profile_id=profile.id,
+            api_key_fingerprint=hashlib.sha256(
+                integration.api_key_ciphertext.encode("utf-8")
+            ).hexdigest(),
+            tts_voice_id="voice_alpha",
+            tts_voice_name="Aria",
+            tts_model_id="eleven_flash_v2_5",
+        )
+        db.add(preference)
+        db.commit()
+        _expect_integrity_error(
+            db,
+            ProfileVoicePreference(
+                integration_id=integration.id,
+                profile_id=profile.id,
+                api_key_fingerprint=hashlib.sha256(
+                    integration.api_key_ciphertext.encode("utf-8")
+                ).hexdigest(),
+                tts_voice_id="voice_beta",
+                tts_voice_name="Brian",
+            ),
+        )
+        _expect_integrity_error(
+            db,
+            ProfileVoicePreference(
+                integration_id=integration.id,
+                profile_id=secondary_profile.id,
+                api_key_fingerprint=hashlib.sha256(
+                    integration.api_key_ciphertext.encode("utf-8")
+                ).hexdigest(),
+                tts_voice_id="voice_alpha",
+                tts_voice_name="Aria",
+                tts_model_id="eleven_v3",
+            ),
+        )
         _expect_integrity_error(
             db,
             UserIntegration(
@@ -275,6 +357,30 @@ def test_metadata_constraints_enforce_owner_isolation_encryption_and_cascade():
                 tts_model_id="eleven_v3",
             ),
         )
+        other_integration = UserIntegration(
+            owner_id=other.id,
+            provider="elevenlabs",
+            api_key_ciphertext=SecretVault(b"d" * 32).encrypt(
+                "other-owner-key",
+                aad=f"user-integration:{other.id}:elevenlabs:api-key",
+            ),
+        )
+        db.add(other_integration)
+        db.flush()
+        # The exact uniqueness key includes the owner-scoped integration, so
+        # two owners may configure the same infrastructure profile independently.
+        db.add(
+            ProfileVoicePreference(
+                integration_id=other_integration.id,
+                profile_id=profile.id,
+                api_key_fingerprint=hashlib.sha256(
+                    other_integration.api_key_ciphertext.encode("utf-8")
+                ).hexdigest(),
+                tts_voice_id="voice_beta",
+                tts_voice_name="Brian",
+            )
+        )
+        db.commit()
         session = SessionLink(
             owner_id=owner.id,
             gateway_id=gateway.id,
@@ -372,4 +478,12 @@ def test_metadata_constraints_enforce_owner_isolation_encryption_and_cascade():
         assert db.scalars(select(AttachmentReference)).all() == []
         assert db.scalars(select(Draft)).all() == []
         assert db.get(Tag, tag.id) is not None
+        db.delete(integration)
+        db.commit()
+        remaining_preferences = db.scalars(select(ProfileVoicePreference)).all()
+        assert len(remaining_preferences) == 1
+        assert remaining_preferences[0].integration_id == other_integration.id
+        db.delete(other_integration)
+        db.commit()
+        assert db.scalars(select(ProfileVoicePreference)).all() == []
     engine.dispose()

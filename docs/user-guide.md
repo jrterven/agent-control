@@ -146,19 +146,25 @@ The same write-only ElevenLabs key can synthesize agent responses:
 
 1. Open **More → Settings → Integrations**, choose **Flash v2.5** for the
    lowest latency or **Multilingual v2** for more natural, stable long-form
-   speech, and choose a voice from the catalog available to your ElevenLabs
-   account. Agent Control intentionally does not offer Eleven v3. Press
-   **Try voice** to play the
-   provider's sample before saving it; the preview can be paused and resumed
-   and does not change the active voice.
-2. In a chat, enable **Listen to responses live** to hear new answers while the
+   speech, and choose a default voice from the catalog available to your
+   ElevenLabs account. Agent Control intentionally does not offer Eleven v3.
+   Press **Try voice** to play the provider's sample before saving it; the
+   preview can be paused and resumed and does not change the active voice.
+2. Optionally assign a different voice and model to an individual agent in
+   **Voices by agent**. The preference is tied to that exact agent and gateway,
+   so profiles with the same technical name on different computers remain
+   independent. Resetting an override makes the agent inherit the default
+   again.
+3. In a chat, enable **Listen to responses live** to hear new answers while the
    agent is still generating them. This preference is local to the device and
    defaults to off.
-3. To hear an older answer, press the speaker below that answer. The inline
+4. To hear an older answer, press the speaker below that answer. The inline
    player provides play/pause, stop and 0.75×–2× speed controls.
 
-The selected model applies to both live and historical playback. Live reading
-uses the provider's TTS WebSocket and a fresh, short-lived,
+The effective agent voice and model apply to both live and historical playback.
+Agent Control resolves them from the owner-scoped Control session on the server;
+the browser cannot substitute an arbitrary voice for a playback request. Live
+reading uses the provider's TTS WebSocket and a fresh, short-lived,
 single-use `tts_websocket` token. Agent Control sends incremental answer text;
 audio chunks return directly to the PWA and begin playing as they arrive.
 Historical playback sends the selected answer to an authenticated Control
@@ -166,9 +172,10 @@ endpoint, which streams the resulting MP3 without disclosing the reusable key.
 Only visible assistant text is synthesized: code blocks, URLs and private
 `MEDIA:` paths are removed from the spoken form.
 
-Changing the API key clears the selected voice because the replacement key may
-belong to another ElevenLabs workspace. Select a voice again to re-enable
-playback. Audio synthesis consumes the quota and follows the retention settings
+Changing the API key clears the default and per-agent voices because the
+replacement key may belong to another ElevenLabs workspace. Select a default
+voice again to re-enable playback. Audio synthesis consumes the quota and
+follows the retention settings
 of the owner's ElevenLabs account. Catalog previews reuse ElevenLabs' existing
 sample audio instead of synthesizing new text, so testing a voice does not spend
 TTS characters.

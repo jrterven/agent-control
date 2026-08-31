@@ -52,6 +52,14 @@ export type Profile = {
   status: "ready" | "busy" | "offline";
   mutable: boolean;
   capabilities?: CapabilityFlags;
+  /** Effective TTS configuration for this profile. Missing on older cached bootstraps. */
+  speech?: {
+    available: boolean;
+    modelId: "eleven_flash_v2_5" | "eleven_multilingual_v2";
+    voiceId?: string | null;
+    voiceName?: string | null;
+    inherited: boolean;
+  };
   /** The only source used to reveal profile-scoped administration controls. */
   capabilitySet?: CapabilitySet;
 };

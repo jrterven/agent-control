@@ -495,9 +495,8 @@ def bootstrap(
     """Mobile-shell projection; canonical resources remain independently addressable."""
     gateways = list(db.scalars(select(Gateway).order_by(Gateway.created_at)).all())
     app_services = services(request)
-    integration_configuration = UserIntegrationService(
-        app_services.vault
-    ).configuration(db, user)
+    integration_service = UserIntegrationService(app_services.vault)
+    integration_configuration = integration_service.configuration(db, user)
     mutable_profiles = app_services.settings.mutable_profiles
     interactive_profiles = app_services.settings.interactive_profiles
     capability_observed_at = datetime.now(timezone.utc)
@@ -506,6 +505,11 @@ def bootstrap(
         for row in gateways
     }
     profiles = list(db.scalars(select(ProfileRef).order_by(ProfileRef.display_name)).all())
+    profile_speech_configurations = integration_service.profile_configurations(
+        db,
+        user,
+        profiles,
+    )
     fresh_capabilities = {
         row.id: fresh_profile_capabilities(
             row,
@@ -678,6 +682,15 @@ def bootstrap(
                     ),
                     managed_by_control=row.managed_by_control,
                 ),
+                "speech": {
+                    "available": profile_speech_configurations[row.id][
+                        "speech_available"
+                    ],
+                    "modelId": profile_speech_configurations[row.id]["tts_model_id"],
+                    "voiceId": profile_speech_configurations[row.id]["voice_id"],
+                    "voiceName": profile_speech_configurations[row.id]["voice_name"],
+                    "inherited": profile_speech_configurations[row.id]["inherited"],
+                },
             }
             for row in profiles
         ],

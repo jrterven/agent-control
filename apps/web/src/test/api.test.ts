@@ -82,6 +82,52 @@ describe("browser API boundary", () => {
     });
   });
 
+  it("uses profile-scoped voice routes and keeps legacy speech bodies compatible", async () => {
+    const profileVoice = {
+      profileId: "profile/newton",
+      gatewayId: "gateway-home",
+      profileName: "default",
+      ttsModelId: "eleven_flash_v2_5",
+      voiceId: "voice-aria",
+      voiceName: "Aria",
+      speechAvailable: true,
+      inherited: false,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(profileVoice), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(profileVoice), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...profileVoice, inherited: true }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([0x49, 0x44, 0x33]), { status: 200, headers: { "Content-Type": "audio/mpeg" } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([0x49, 0x44, 0x33]), { status: 200, headers: { "Content-Type": "audio/mpeg" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.elevenLabsProfileVoice("profile/newton");
+    await api.saveElevenLabsProfileVoice("profile/newton", "voice-aria", "eleven_flash_v2_5", "csrf-memory-only");
+    await api.deleteElevenLabsProfileVoice("profile/newton", "csrf-memory-only");
+    await api.streamSpeech("Read this response", "session/papers", "csrf-memory-only");
+    await api.streamSpeech("Read this legacy response", undefined, "csrf-memory-only");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/integrations/elevenlabs/profiles/profile%2Fnewton/voice");
+    const [putPath, putInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(putPath).toBe("/api/v1/integrations/elevenlabs/profiles/profile%2Fnewton/voice");
+    expect(putInit.method).toBe("PUT");
+    expect(JSON.parse(String(putInit.body))).toEqual({ voiceId: "voice-aria", ttsModelId: "eleven_flash_v2_5" });
+    expect(putInit.headers).toEqual(expect.objectContaining({ "Idempotency-Key": expect.any(String), "X-CSRF-Token": "csrf-memory-only" }));
+
+    const [, deleteInit] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(deleteInit.method).toBe("DELETE");
+    expect(deleteInit.headers).toEqual(expect.objectContaining({ "Idempotency-Key": expect.any(String), "X-CSRF-Token": "csrf-memory-only" }));
+
+    const [speechPath, speechInit] = fetchMock.mock.calls[3] as [string, RequestInit];
+    expect(speechPath).toBe("/api/v1/integrations/elevenlabs/speech");
+    expect(JSON.parse(String(speechInit.body))).toEqual({ text: "Read this response", sessionId: "session/papers" });
+    expect(speechInit.headers).toEqual(expect.objectContaining({ "X-CSRF-Token": "csrf-memory-only" }));
+
+    const [legacySpeechPath, legacySpeechInit] = fetchMock.mock.calls[4] as [string, RequestInit];
+    expect(legacySpeechPath).toBe("/api/v1/integrations/elevenlabs/speech");
+    expect(JSON.parse(String(legacySpeechInit.body))).toEqual({ text: "Read this legacy response" });
+  });
+
   it("responds to official approval and clarification gates through same-origin Control routes", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ requestId: "approval/1", resolved: 1, status: "resolved" }), { status: 200, headers: { "Content-Type": "application/json" } }))

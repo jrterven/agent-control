@@ -1,8 +1,8 @@
-import { CheckCircle, Key, Microphone, Pause, Play, SpeakerHigh, Trash, WarningCircle } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { CheckCircle, Key, Microphone, Pause, Play, Robot, SpeakerHigh, Trash, WarningCircle } from "@phosphor-icons/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge, Button, Field, Panel } from "@hermes-control/ui";
-import { api, type ElevenLabsIntegrationView, type ElevenLabsTtsModelId, type ElevenLabsVoice } from "../lib/api";
+import { api, type ElevenLabsIntegrationView, type ElevenLabsProfileVoiceView, type ElevenLabsTtsModelId, type ElevenLabsVoice } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 
 type Action = "load" | "save" | "test" | "voice" | "delete" | "";
@@ -14,6 +14,9 @@ export function ElevenLabsIntegration() {
   const offline = useAppStore((state) => state.authState === "offline");
   const demoMode = useAppStore((state) => state.demoMode);
   const hydrateBootstrap = useAppStore((state) => state.hydrateBootstrap);
+  const profiles = useAppStore((state) => state.profiles);
+  const gateways = useAppStore((state) => state.gateways);
+  const activeProfileId = useAppStore((state) => state.selectedProfileId);
   const [view, setView] = useState<ElevenLabsIntegrationView | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [voices, setVoices] = useState<ElevenLabsVoice[]>([]);
@@ -26,8 +29,24 @@ export function ElevenLabsIntegration() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [profileId, setProfileId] = useState("");
+  const [profileVoiceView, setProfileVoiceView] = useState<ElevenLabsProfileVoiceView | null>(null);
+  const [profileVoiceId, setProfileVoiceId] = useState("");
+  const [profileTtsModelId, setProfileTtsModelId] = useState<ElevenLabsTtsModelId | "">("");
+  const [profileVoiceLoading, setProfileVoiceLoading] = useState(false);
+  const [profileVoiceSaving, setProfileVoiceSaving] = useState(false);
+  const [profileVoiceError, setProfileVoiceError] = useState("");
+  const [profileReload, setProfileReload] = useState(0);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
-  const blocked = offline || demoMode || Boolean(action);
+  const blocked = offline || demoMode || Boolean(action) || profileVoiceSaving;
+  const profileBlocked = blocked || profileVoiceLoading;
+  const profileOptions = useMemo(() => profiles
+    .filter((profile) => profile.speech !== undefined)
+    .map((profile) => ({
+      ...profile,
+      gatewayName: gateways.find((gateway) => gateway.id === profile.gatewayId)?.name ?? profile.gatewayId,
+    })), [gateways, profiles]);
+  const selectedProfile = profiles.find((profile) => profile.id === profileId);
 
   const releasePreview = useCallback(() => {
     const audio = previewAudioRef.current;
@@ -56,8 +75,8 @@ export function ElevenLabsIntegration() {
   }, [view?.ttsModelId]);
 
   useEffect(() => {
-    if (previewVoiceId && previewVoiceId !== voiceId) stopPreview();
-  }, [previewVoiceId, stopPreview, voiceId]);
+    setVoiceId(view?.voiceId ?? "");
+  }, [view?.voiceId]);
 
   useEffect(() => {
     if (offline || demoMode) return;
@@ -83,12 +102,59 @@ export function ElevenLabsIntegration() {
       .then(({ items }) => {
         if (!active) return;
         setVoices(items);
-        setVoiceId(view.voiceId ?? "");
       })
       .catch(() => { if (active) setError(t("integrations.voicesError")); })
       .finally(() => { if (active) setVoicesLoading(false); });
     return () => { active = false; };
   }, [demoMode, offline, t, view?.configured]);
+
+  useEffect(() => {
+    if (!profileOptions.length) {
+      setProfileId("");
+      return;
+    }
+    setProfileId((current) => {
+      if (profileOptions.some((profile) => profile.id === current)) return current;
+      return profileOptions.some((profile) => profile.id === activeProfileId)
+        ? activeProfileId
+        : profileOptions[0].id;
+    });
+  }, [activeProfileId, profileOptions]);
+
+  useEffect(() => {
+    if (!view?.configured || offline || demoMode || !profileId || !profileOptions.some((profile) => profile.id === profileId)) {
+      setProfileVoiceView(null);
+      setProfileVoiceId("");
+      setProfileTtsModelId("");
+      setProfileVoiceError("");
+      setProfileVoiceLoading(false);
+      return;
+    }
+    let active = true;
+    setProfileVoiceLoading(true);
+    setProfileVoiceView(null);
+    setProfileVoiceId("");
+    setProfileTtsModelId("");
+    setProfileVoiceError("");
+    void api.elevenLabsProfileVoice(profileId)
+      .then((configuration) => {
+        if (!active) return;
+        setProfileVoiceView(configuration);
+        setProfileVoiceId(configuration.voiceId ?? "");
+        setProfileTtsModelId(configuration.ttsModelId);
+      })
+      .catch(() => {
+        if (!active) return;
+        setProfileVoiceView(null);
+        setProfileVoiceId("");
+        setProfileTtsModelId("");
+        setProfileVoiceError(t("integrations.profileVoices.loadError"));
+      })
+      .finally(() => {
+        if (active) setProfileVoiceLoading(false);
+      });
+    return () => { active = false; };
+  }, [demoMode, offline, profileId, profileOptions, profileReload, t, view?.configured]);
 
   const refreshFeatures = async () => {
     const bootstrap = await api.bootstrap();
@@ -109,6 +175,7 @@ export function ElevenLabsIntegration() {
       const integration = await api.saveElevenLabsKey(submittedKey, csrfToken);
       setView(integration);
       setNotice(t("integrations.saved"));
+      setProfileReload((current) => current + 1);
       void refreshFeatures().catch(() => undefined);
     } catch {
       setError(t("integrations.saveError"));
@@ -146,6 +213,7 @@ export function ElevenLabsIntegration() {
         model: t(`integrations.models.${integration.ttsModelId ?? ttsModelId}`),
       }));
       await refreshFeatures();
+      setProfileReload((current) => current + 1);
     } catch {
       setError(t("integrations.voiceSaveError"));
     } finally {
@@ -153,13 +221,13 @@ export function ElevenLabsIntegration() {
     }
   };
 
-  const previewVoice = async () => {
-    const selected = voices.find((voice) => voice.id === voiceId);
+  const previewVoice = async (selectedVoiceId: string) => {
+    const selected = voices.find((voice) => voice.id === selectedVoiceId);
     if (!selected?.previewAvailable || blocked) return;
     setError("");
 
     const current = previewAudioRef.current;
-    if (current && previewVoiceId === voiceId) {
+    if (current && previewVoiceId === selectedVoiceId) {
       if (previewState === "playing" || previewState === "loading") {
         current.pause();
         setPreviewState("paused");
@@ -177,10 +245,10 @@ export function ElevenLabsIntegration() {
     }
 
     releasePreview();
-    const audio = new Audio(api.elevenLabsVoicePreviewUrl(voiceId));
+    const audio = new Audio(api.elevenLabsVoicePreviewUrl(selectedVoiceId));
     audio.preload = "none";
     previewAudioRef.current = audio;
-    setPreviewVoiceId(voiceId);
+    setPreviewVoiceId(selectedVoiceId);
     setPreviewState("loading");
     audio.onplaying = () => setPreviewState("playing");
     audio.onwaiting = () => setPreviewState("loading");
@@ -199,6 +267,56 @@ export function ElevenLabsIntegration() {
       releasePreview();
       setPreviewState("error");
       setError(t("integrations.previewError"));
+    }
+  };
+
+  const saveProfileVoice = async () => {
+    if (!profileId || !profileVoiceId || !profileTtsModelId || profileBlocked) return;
+    stopPreview();
+    setProfileVoiceSaving(true);
+    setProfileVoiceError("");
+    setNotice("");
+    try {
+      const configuration = await api.saveElevenLabsProfileVoice(
+        profileId,
+        profileVoiceId,
+        profileTtsModelId,
+        csrfToken,
+      );
+      setProfileVoiceView(configuration);
+      setProfileVoiceId(configuration.voiceId ?? "");
+      setProfileTtsModelId(configuration.ttsModelId);
+      setNotice(t("integrations.profileVoices.saved", {
+        profile: selectedProfile?.displayName ?? configuration.profileName,
+        voice: configuration.voiceName ?? configuration.voiceId ?? "",
+      }));
+      await refreshFeatures();
+    } catch {
+      setProfileVoiceError(t("integrations.profileVoices.saveError"));
+    } finally {
+      setProfileVoiceSaving(false);
+    }
+  };
+
+  const resetProfileVoice = async () => {
+    if (!profileId || profileVoiceView?.inherited !== false || profileBlocked) return;
+    stopPreview();
+    setProfileVoiceSaving(true);
+    setProfileVoiceError("");
+    setNotice("");
+    try {
+      const configuration = await api.deleteElevenLabsProfileVoice(profileId, csrfToken);
+      setProfileVoiceView(configuration);
+      setProfileVoiceId(configuration.voiceId ?? "");
+      setProfileTtsModelId(configuration.ttsModelId);
+      setNotice(t("integrations.profileVoices.reset", {
+        profile: selectedProfile?.displayName ?? configuration.profileName,
+      }));
+      await refreshFeatures();
+    } catch {
+      setProfileVoiceError(t("integrations.profileVoices.resetError"));
+    } finally {
+      setProfileVoiceSaving(false);
     }
   };
 
@@ -272,7 +390,10 @@ export function ElevenLabsIntegration() {
             aria-label={t("integrations.voice")}
             value={voiceId}
             disabled={blocked || voicesLoading}
-            onChange={(event) => setVoiceId(event.target.value)}
+            onChange={(event) => {
+              if (previewVoiceId && previewVoiceId !== event.target.value) stopPreview();
+              setVoiceId(event.target.value);
+            }}
           >
             <option value="">{voicesLoading ? t("integrations.loadingVoices") : t("integrations.chooseVoice")}</option>
             {voices.map((voice) => <option key={voice.id} value={voice.id}>{voice.name}{voice.category ? ` · ${voice.category}` : ""}</option>)}
@@ -281,7 +402,7 @@ export function ElevenLabsIntegration() {
             variant="secondary"
             leadingIcon={previewVoiceId === voiceId && (previewState === "playing" || previewState === "loading") ? <Pause /> : <Play />}
             disabled={blocked || voicesLoading || !voiceId || !voices.find((voice) => voice.id === voiceId)?.previewAvailable}
-            onClick={() => void previewVoice()}
+            onClick={() => void previewVoice(voiceId)}
           >
             {previewVoiceId === voiceId && previewState === "loading"
               ? t("integrations.loadingPreview")
@@ -296,6 +417,81 @@ export function ElevenLabsIntegration() {
         {voiceId && !voicesLoading && !voices.find((voice) => voice.id === voiceId)?.previewAvailable ? <small className="form-hint">{t("integrations.previewUnavailable")}</small> : null}
         {view.voiceName ? <small className="integration-settings__voice-current"><CheckCircle weight="fill" /> {t("integrations.currentVoice", { voice: view.voiceName, model: t(`integrations.models.${view.ttsModelId ?? "eleven_flash_v2_5"}`) })}</small> : <small className="form-hint">{t("integrations.voiceRequired")}</small>}
       </div> : null}
+      {view?.configured && profileOptions.length ? <section className="integration-settings__voice integration-settings__profile-voices" aria-labelledby="profile-voices-title">
+        <div className="integration-settings__voice-heading"><Robot weight="duotone" /><span><strong id="profile-voices-title">{t("integrations.profileVoices.title")}</strong><small>{t("integrations.profileVoices.description")}</small></span></div>
+        <>
+          <label className="integration-settings__model">
+            <span>{t("integrations.profileVoices.profile")}</span>
+            <select
+              aria-label={t("integrations.profileVoices.profile")}
+              value={profileId}
+              disabled={blocked || profileVoiceSaving}
+              onChange={(event) => {
+                stopPreview();
+                setProfileId(event.target.value);
+              }}
+            >
+              {profileOptions.map((profile) => <option key={profile.id} value={profile.id}>{profile.displayName} · {profile.technicalName} · {profile.gatewayName}</option>)}
+            </select>
+            <small>{t("integrations.profileVoices.profileHint")}</small>
+          </label>
+          {profileVoiceLoading ? <p className="form-hint" role="status">{t("integrations.profileVoices.loading")}</p> : <>
+            <label className="integration-settings__model">
+              <span>{t("integrations.profileVoices.model")}</span>
+              <select
+                aria-label={t("integrations.profileVoices.model")}
+                value={profileTtsModelId}
+                disabled={profileBlocked}
+                onChange={(event) => setProfileTtsModelId(event.target.value as ElevenLabsTtsModelId)}
+              >
+                <option value="">{t("integrations.profileVoices.chooseModel")}</option>
+                <option value="eleven_flash_v2_5">{t("integrations.models.eleven_flash_v2_5")}</option>
+                <option value="eleven_multilingual_v2">{t("integrations.models.eleven_multilingual_v2")}</option>
+              </select>
+              {profileTtsModelId ? <small>{t(`integrations.modelHints.${profileTtsModelId}`)}</small> : null}
+            </label>
+            <div className="integration-settings__profile-voice-controls">
+              <select
+                aria-label={t("integrations.profileVoices.voice")}
+                value={profileVoiceId}
+                disabled={profileBlocked || voicesLoading}
+                onChange={(event) => {
+                  if (previewVoiceId && previewVoiceId !== event.target.value) stopPreview();
+                  setProfileVoiceId(event.target.value);
+                }}
+              >
+                <option value="">{voicesLoading ? t("integrations.loadingVoices") : t("integrations.chooseVoice")}</option>
+                {profileVoiceId && !voices.some((voice) => voice.id === profileVoiceId) ? <option value={profileVoiceId}>{profileVoiceView?.voiceName ?? profileVoiceId}</option> : null}
+                {voices.map((voice) => <option key={voice.id} value={voice.id}>{voice.name}{voice.category ? ` · ${voice.category}` : ""}</option>)}
+              </select>
+              <Button
+                variant="secondary"
+                leadingIcon={previewVoiceId === profileVoiceId && (previewState === "playing" || previewState === "loading") ? <Pause /> : <Play />}
+                disabled={profileBlocked || voicesLoading || !profileVoiceId || !voices.find((voice) => voice.id === profileVoiceId)?.previewAvailable}
+                onClick={() => void previewVoice(profileVoiceId)}
+              >
+                {previewVoiceId === profileVoiceId && previewState === "loading"
+                  ? t("integrations.loadingPreview")
+                  : previewVoiceId === profileVoiceId && previewState === "playing"
+                    ? t("integrations.pausePreview")
+                    : previewVoiceId === profileVoiceId && previewState === "paused"
+                      ? t("integrations.resumePreview")
+                      : t("integrations.previewVoice")}
+              </Button>
+            </div>
+            <div className="integration-settings__profile-voice-actions">
+              <Button
+                variant="secondary"
+                disabled={profileBlocked || voicesLoading || !profileVoiceId || !profileTtsModelId || (profileVoiceView?.inherited === false && profileVoiceId === profileVoiceView.voiceId && profileTtsModelId === profileVoiceView.ttsModelId)}
+                onClick={() => void saveProfileVoice()}
+              >{profileVoiceSaving ? t("integrations.profileVoices.saving") : t("integrations.profileVoices.save")}</Button>
+              <Button variant="ghost" disabled={profileBlocked || profileVoiceView?.inherited !== false} onClick={() => void resetProfileVoice()}>{t("integrations.profileVoices.useDefault")}</Button>
+            </div>
+            {profileVoiceView?.inherited ? <small className={profileVoiceView.speechAvailable ? "integration-settings__voice-current" : "form-hint"}>{profileVoiceView.speechAvailable ? <CheckCircle weight="fill" /> : <WarningCircle />}{t(profileVoiceView.speechAvailable ? "integrations.profileVoices.inherited" : "integrations.profileVoices.noDefault", { voice: profileVoiceView.voiceName ?? "", model: t(`integrations.models.${profileVoiceView.ttsModelId}`) })}</small> : profileVoiceView ? <small className="integration-settings__voice-current"><CheckCircle weight="fill" /> {t("integrations.profileVoices.custom", { voice: profileVoiceView.voiceName ?? profileVoiceView.voiceId ?? "", model: t(`integrations.models.${profileVoiceView.ttsModelId}`) })}</small> : null}
+          </>}
+          {profileVoiceError ? <p className="form-error" role="alert"><WarningCircle weight="fill" /> {profileVoiceError}</p> : null}
+        </>
+      </section> : null}
       {!view?.configured && action !== "load" ? <p className="form-hint"><Microphone /> {t("integrations.nativeFallback")}</p> : null}
       {notice ? <p className="integration-settings__notice" role="status" aria-live="polite"><CheckCircle weight="fill" /> {notice}</p> : null}
       {error ? <p className="form-error" role="alert"><WarningCircle weight="fill" /> {error}</p> : null}

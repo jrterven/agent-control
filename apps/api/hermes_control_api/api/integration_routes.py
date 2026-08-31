@@ -11,6 +11,7 @@ from ..integration_schemas import (
     ElevenLabsIntegrationTestView,
     ElevenLabsIntegrationView,
     ElevenLabsKeyMutation,
+    ElevenLabsProfileVoiceView,
     ElevenLabsVoiceListView,
     ElevenLabsVoiceMutation,
     ElevenLabsVoiceView,
@@ -43,6 +44,10 @@ def _service(request: Request) -> UserIntegrationService:
 
 def _view(configuration: dict[str, object]) -> ElevenLabsIntegrationView:
     return ElevenLabsIntegrationView(**configuration)
+
+
+def _profile_voice_view(configuration: dict[str, object]) -> ElevenLabsProfileVoiceView:
+    return ElevenLabsProfileVoiceView(**configuration)
 
 
 def _audit_integration(
@@ -314,6 +319,111 @@ async def set_elevenlabs_voice(
     return _view(_service(request).configuration(db, owner))
 
 
+@router.get(
+    "/api/v1/integrations/elevenlabs/profiles/{profile_id}/voice",
+    response_model=ElevenLabsProfileVoiceView,
+)
+def get_elevenlabs_profile_voice(
+    profile_id: Annotated[str, Path(min_length=1, max_length=36)],
+    request: Request,
+    owner: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ElevenLabsProfileVoiceView:
+    return _profile_voice_view(
+        _service(request).profile_configuration(db, owner, profile_id)
+    )
+
+
+@router.put(
+    "/api/v1/integrations/elevenlabs/profiles/{profile_id}/voice",
+    response_model=ElevenLabsProfileVoiceView,
+)
+async def set_elevenlabs_profile_voice(
+    profile_id: Annotated[str, Path(min_length=1, max_length=36)],
+    payload: ElevenLabsVoiceMutation,
+    request: Request,
+    auth: AuthSession = Depends(require_csrf),
+    __: str = Depends(require_idempotency),
+    db: Session = Depends(get_db),
+) -> ElevenLabsProfileVoiceView:
+    owner = auth.user
+    try:
+        service = _service(request)
+        # Resolve the target before contacting ElevenLabs so an invalid local
+        # profile cannot consume provider quota.
+        service.profile_configuration(db, owner, profile_id)
+        api_key = service.api_key(db, owner)
+        request.app.state.speech_rate_limiter.consume(owner.id)
+        voices = await request.app.state.elevenlabs_speech_client.list_voices(api_key)
+        selected = next(
+            (voice for voice in voices if voice["id"] == payload.voice_id),
+            None,
+        )
+        if selected is None:
+            raise SpeechVoiceUnavailable()
+        service.set_profile_voice(
+            db,
+            owner,
+            profile_id=profile_id,
+            voice_id=str(selected["id"]),
+            voice_name=str(selected["name"]),
+            model_id=payload.tts_model_id,
+        )
+    except IntegrationError:
+        _audit_integration(
+            db,
+            actor=owner,
+            request=request,
+            action="integration.elevenlabs.profile-voice.set",
+            outcome="failure",
+        )
+        db.commit()
+        raise
+    _audit_integration(
+        db,
+        actor=owner,
+        request=request,
+        action="integration.elevenlabs.profile-voice.set",
+    )
+    db.commit()
+    return _profile_voice_view(service.profile_configuration(db, owner, profile_id))
+
+
+@router.delete(
+    "/api/v1/integrations/elevenlabs/profiles/{profile_id}/voice",
+    response_model=ElevenLabsProfileVoiceView,
+)
+def delete_elevenlabs_profile_voice(
+    profile_id: Annotated[str, Path(min_length=1, max_length=36)],
+    request: Request,
+    auth: AuthSession = Depends(require_csrf),
+    __: str = Depends(require_idempotency),
+    db: Session = Depends(get_db),
+) -> ElevenLabsProfileVoiceView:
+    owner = auth.user
+    service = _service(request)
+    try:
+        service.delete_profile_voice(db, owner, profile_id=profile_id)
+    except IntegrationError:
+        _audit_integration(
+            db,
+            actor=owner,
+            request=request,
+            action="integration.elevenlabs.profile-voice.delete",
+            outcome="failure",
+        )
+        db.commit()
+        raise
+    _audit_integration(
+        db,
+        actor=owner,
+        request=request,
+        action="integration.elevenlabs.profile-voice.delete",
+    )
+    db.commit()
+    return _profile_voice_view(service.profile_configuration(db, owner, profile_id))
+
+
 @router.post(
     "/api/v1/realtime/speech-token",
     response_model=SpeechTokenView,
@@ -324,12 +434,15 @@ async def issue_speech_token(
     auth: AuthSession = Depends(require_csrf),
     db: Session = Depends(get_db),
 ) -> SpeechTokenView:
-    del payload
     owner = auth.user
     try:
         service = _service(request)
+        voice_id, voice_name, model_id = service.speech_configuration(
+            db,
+            owner,
+            session_id=payload.session_id,
+        )
         api_key = service.api_key(db, owner)
-        voice_id, voice_name, model_id = service.speech_configuration(db, owner)
         request.app.state.speech_rate_limiter.consume(owner.id)
         token = await request.app.state.elevenlabs_speech_client.issue_realtime_token(
             api_key
@@ -370,8 +483,12 @@ async def stream_elevenlabs_speech(
     owner = auth.user
     try:
         service = _service(request)
+        voice_id, _, model_id = service.speech_configuration(
+            db,
+            owner,
+            session_id=payload.session_id,
+        )
         api_key = service.api_key(db, owner)
-        voice_id, _, model_id = service.speech_configuration(db, owner)
         request.app.state.speech_rate_limiter.consume(owner.id)
         upstream, own_client = (
             await request.app.state.elevenlabs_speech_client.open_audio_stream(

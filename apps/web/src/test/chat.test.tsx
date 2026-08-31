@@ -277,6 +277,77 @@ describe("mobile-first chat", () => {
     expect(screen.getAllByRole("button", { name: "Escuchar esta respuesta" }).length).toBeGreaterThan(0);
   });
 
+  it("prefers the active profile's effective speech configuration and falls back for old snapshots", () => {
+    useAppStore.setState({
+      features: {
+        dictation: { available: true, provider: "elevenlabs", modelId: "scribe_v2_realtime" },
+        speech: { available: false, provider: "elevenlabs", modelId: "eleven_flash_v2_5", voiceId: null, voiceName: null },
+      },
+      profiles: profiles.map((profile) => profile.id === "profile-newton" ? {
+        ...profile,
+        speech: { available: true, modelId: "eleven_multilingual_v2", voiceId: "voice-roger", voiceName: "Roger", inherited: false },
+      } : profile),
+    });
+    const override = render(<ChatView />);
+    expect(screen.getAllByRole("button", { name: "Escuchar esta respuesta" }).length).toBeGreaterThan(0);
+    override.unmount();
+
+    useAppStore.setState({
+      features: {
+        dictation: { available: true, provider: "elevenlabs", modelId: "scribe_v2_realtime" },
+        speech: { available: true, provider: "elevenlabs", modelId: "eleven_flash_v2_5", voiceId: "voice-aria", voiceName: "Aria" },
+      },
+      profiles: profiles.map((profile) => profile.id === "profile-newton" ? {
+        ...profile,
+        speech: { available: false, modelId: "eleven_flash_v2_5", voiceId: null, voiceName: null, inherited: true },
+      } : profile),
+    });
+    const unavailable = render(<ChatView />);
+    expect(screen.queryByRole("button", { name: "Escuchar esta respuesta" })).not.toBeInTheDocument();
+    unavailable.unmount();
+
+    useAppStore.setState({ profiles });
+    render(<ChatView />);
+    expect(screen.getAllByRole("button", { name: "Escuchar esta respuesta" }).length).toBeGreaterThan(0);
+  });
+
+  it("binds historical speech to a session only for profile-aware bootstraps", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+    useAppStore.setState({
+      features: {
+        dictation: { available: false, provider: "elevenlabs", modelId: "scribe_v2_realtime" },
+        speech: { available: true, provider: "elevenlabs", modelId: "eleven_flash_v2_5", voiceId: "voice-aria", voiceName: "Aria" },
+      },
+      profiles: profiles.map((profile) => profile.id === "profile-newton" ? {
+        ...profile,
+        speech: { available: true, modelId: "eleven_flash_v2_5", voiceId: "voice-aria", voiceName: "Aria", inherited: true },
+      } : profile),
+    });
+    const streamSpeech = vi.spyOn(api, "streamSpeech").mockImplementation(() => new Promise(() => undefined));
+    const user = userEvent.setup();
+    const profileAware = render(<ChatView />);
+
+    await user.click(screen.getAllByRole("button", { name: "Escuchar esta respuesta" })[0]);
+    expect(streamSpeech).toHaveBeenLastCalledWith(
+      expect.any(String),
+      "session-papers",
+      "csrf-memory-only",
+      expect.any(AbortSignal),
+    );
+    profileAware.unmount();
+
+    useAppStore.setState({ profiles });
+    render(<ChatView />);
+    await user.click(screen.getAllByRole("button", { name: "Escuchar esta respuesta" })[0]);
+    expect(streamSpeech).toHaveBeenLastCalledWith(
+      expect.any(String),
+      undefined,
+      "csrf-memory-only",
+      expect.any(AbortSignal),
+    );
+  });
+
   it("turns Markdown into bounded, speakable response text", () => {
     expect(textForSpeech("## Informe\n**Listo** [detalle](https://example.com)\n```sh\nsecret\n```\nMEDIA:[private](/tmp/a.mp3)"))
       .toBe("Informe Listo detalle");
@@ -340,6 +411,10 @@ describe("mobile-first chat", () => {
         dictation: { available: false, provider: "elevenlabs", modelId: "scribe_v2_realtime" },
         speech: { available: true, provider: "elevenlabs", modelId: "eleven_flash_v2_5", voiceId: "voice-aria", voiceName: "Aria" },
       },
+      profiles: profiles.map((profile) => profile.id === "profile-newton" ? {
+        ...profile,
+        speech: { available: true, modelId: "eleven_flash_v2_5", voiceId: "voice-aria", voiceName: "Aria", inherited: true },
+      } : profile),
     });
     let releaseSpeech!: (response: Response) => void;
     const streamSpeech = vi.spyOn(api, "streamSpeech").mockImplementation(() => new Promise((resolve) => {
@@ -352,6 +427,12 @@ describe("mobile-first chat", () => {
     expect(FakeAudio.instances).toHaveLength(1);
     expect(FakeAudio.instances[0].play).toHaveBeenCalledTimes(1);
     expect(streamSpeech).toHaveBeenCalledTimes(1);
+    expect(streamSpeech).toHaveBeenCalledWith(
+      expect.any(String),
+      "session-papers",
+      "csrf-memory-only",
+      expect.any(AbortSignal),
+    );
     expect(FakeAudio.instances[0].play.mock.invocationCallOrder[0])
       .toBeLessThan(streamSpeech.mock.invocationCallOrder[0]);
 
