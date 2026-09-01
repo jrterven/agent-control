@@ -242,6 +242,9 @@ class FailoverProvider:
     async def update_config(self, config):
         return await self._call("update_config", config)
 
+    async def replace_config(self, config):
+        return await self._call("replace_config", config)
+
     async def get_soul(self):
         return await self._call("get_soul")
 

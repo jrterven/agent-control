@@ -5,7 +5,11 @@ import asyncio
 import pytest
 from sqlalchemy import select
 
-from hermes_client import HermesRunReceipt, InMemoryHermesProvider
+from hermes_client import (
+    AdminResourceSnapshot,
+    HermesRunReceipt,
+    InMemoryHermesProvider,
+)
 from hermes_control_api.models import (
     Automation,
     AutomationRun,
@@ -329,6 +333,102 @@ def test_move_profile_preserves_control_identity_and_metadata(authenticated, app
             select(ProfileRef.id).where(
                 ProfileRef.gateway_id == source_gateway_id,
                 ProfileRef.profile_name == "move-preserved",
+            )
+        ) is None
+
+
+def test_move_restores_and_verifies_secret_free_config_before_cutover(
+    authenticated, app, monkeypatch
+):
+    client, csrf = authenticated
+    source_gateway_id = client.get("/api/v1/bootstrap").json()["gateways"][0]["id"]
+    destination_gateway_id = _create_destination_gateway(
+        client, csrf, "move-config"
+    )
+    agent = _create_agent(client, csrf, source_gateway_id, "move-config-agent")
+    original_get = InMemoryHermesProvider.get_config
+    original_replace = InMemoryHermesProvider.replace_config
+    restored: list[dict] = []
+
+    async def source_config_with_security_preference(self):
+        snapshot = await original_get(self)
+        data = dict(snapshot.data)
+        if self.connection.gateway_id == source_gateway_id:
+            data["security"] = {"redact_secrets": True}
+        return AdminResourceSnapshot(resource="config", data=data)
+
+    async def record_replacement(self, config):
+        if self.connection.gateway_id == destination_gateway_id:
+            restored.append(config)
+        return await original_replace(self, config)
+
+    monkeypatch.setattr(
+        InMemoryHermesProvider,
+        "get_config",
+        source_config_with_security_preference,
+    )
+    monkeypatch.setattr(
+        InMemoryHermesProvider,
+        "replace_config",
+        record_replacement,
+    )
+
+    moved = client.post(
+        f"/api/v1/profiles/{agent['id']}/move",
+        headers=mutation_headers(csrf, "move-config-confirmed"),
+        json={
+            "destinationGatewayId": destination_gateway_id,
+            "confirmation": "move-config-agent",
+        },
+    )
+
+    assert moved.status_code == 200, moved.text
+    assert len(restored) == 1
+    assert restored[0]["security"] == {"redact_secrets": True}
+
+
+def test_move_rolls_back_when_destination_config_cannot_be_restored(
+    authenticated, app, monkeypatch
+):
+    client, csrf = authenticated
+    source_gateway_id = client.get("/api/v1/bootstrap").json()["gateways"][0]["id"]
+    destination_gateway_id = _create_destination_gateway(
+        client, csrf, "move-config-fail"
+    )
+    agent = _create_agent(
+        client, csrf, source_gateway_id, "move-config-fail-agent"
+    )
+    original_replace = InMemoryHermesProvider.replace_config
+
+    async def reject_destination_config(self, config):
+        if self.connection.gateway_id == destination_gateway_id:
+            raise RuntimeError("destination config remained invalid")
+        return await original_replace(self, config)
+
+    monkeypatch.setattr(
+        InMemoryHermesProvider,
+        "replace_config",
+        reject_destination_config,
+    )
+    moved = client.post(
+        f"/api/v1/profiles/{agent['id']}/move",
+        headers=mutation_headers(csrf, "move-config-fail-confirmed"),
+        json={
+            "destinationGatewayId": destination_gateway_id,
+            "confirmation": "move-config-fail-agent",
+        },
+    )
+
+    assert moved.status_code == 409, moved.text
+    assert moved.json()["code"] == "MUTATION_DELIVERY_UNKNOWN"
+    with app.state.session_factory() as db:
+        row = db.get(ProfileRef, agent["id"])
+        assert row is not None
+        assert row.gateway_id == source_gateway_id
+        assert db.scalar(
+            select(ProfileRef.id).where(
+                ProfileRef.gateway_id == destination_gateway_id,
+                ProfileRef.profile_name == "move-config-fail-agent",
             )
         ) is None
 

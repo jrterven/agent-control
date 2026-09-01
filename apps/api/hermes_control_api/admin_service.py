@@ -13,6 +13,7 @@ from .services import (
     ConflictError,
     GatewayService,
     NotFoundError,
+    UpstreamUnavailableError,
     audit,
     profile_route_guard,
     require_capability,
@@ -113,4 +114,10 @@ class AdminResourceService:
                 raise NotFoundError("Hermes administration resource was not found") from exc
             if exc.response.status_code in {400, 409, 422}:
                 raise ConflictError("Hermes rejected the administration mutation") from exc
+            raise
+        except RuntimeError as exc:
+            if str(exc) == "MUTATION_DELIVERY_UNKNOWN":
+                raise UpstreamUnavailableError(
+                    "Hermes did not confirm the administration change; refresh before retrying"
+                ) from exc
             raise

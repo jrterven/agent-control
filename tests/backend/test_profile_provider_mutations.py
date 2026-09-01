@@ -91,6 +91,33 @@ async def test_delete_profile_rejects_unconfirmed_response():
 
 
 @pytest.mark.asyncio
+async def test_replace_config_uses_parsed_raw_endpoint_with_json_yaml():
+    provider = HermesGatewayProvider(_connection("source"))
+    config = {
+        "model": {"provider": "openai-codex", "default": "gpt-5.6-sol"},
+        "security": {"redact_secrets": True},
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "PUT"
+        assert request.url.path == "/api/config/raw"
+        assert request.url.params["profile"] == "control-dev"
+        payload = json.loads(await request.aread())
+        assert payload["profile"] == "control-dev"
+        assert json.loads(payload["yaml_text"]) == config
+        return httpx.Response(200, json={"ok": True})
+
+    await _use_transport(provider, handler)
+    try:
+        result = await provider.replace_config(config)
+    finally:
+        await provider.close()
+
+    assert result.resource == "config"
+    assert result.data == {"ok": True}
+
+
+@pytest.mark.asyncio
 async def test_transfer_streams_native_archive_imports_and_cleans_both_gateways():
     source = HermesGatewayProvider(_connection("source", token="source-token"))
     destination = HermesGatewayProvider(

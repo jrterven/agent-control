@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import random
 from collections import OrderedDict, defaultdict
@@ -484,6 +485,7 @@ class HermesProvider(Protocol):
     ) -> AdminResourceSnapshot: ...
     async def get_config(self) -> AdminResourceSnapshot: ...
     async def update_config(self, config: dict[str, Any]) -> AdminResourceSnapshot: ...
+    async def replace_config(self, config: dict[str, Any]) -> AdminResourceSnapshot: ...
     async def get_soul(self) -> AdminResourceSnapshot: ...
     async def update_soul(self, content: str) -> AdminResourceSnapshot: ...
     async def get_memory(self) -> AdminResourceSnapshot: ...
@@ -2490,6 +2492,32 @@ class HermesGatewayProvider:
             payload={"config": config, "profile": self.connection.profile_name},
         )
 
+    async def replace_config(self, config: dict[str, Any]) -> AdminResourceSnapshot:
+        """Replace a transferred profile's config with a secret-free snapshot.
+
+        Hermes' regular config mutation deep-merges with the document on disk,
+        so it cannot recover an archive whose YAML was made unparsable by the
+        upstream export redactor. JSON is valid YAML and lets the native raw
+        endpoint perform an atomic, fully parsed replacement.
+        """
+
+        if contains_secret_fields(config):
+            raise ValueError(
+                "Secret-shaped config values must use the write-only secrets endpoint"
+            )
+        yaml_text = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
+        if len(yaml_text.encode("utf-8")) > 2 * 1024 * 1024:
+            raise UpstreamPayloadTooLarge("Hermes config is too large")
+        return await self._admin_mutation_snapshot(
+            "config",
+            "PUT",
+            "/api/config/raw",
+            payload={
+                "yaml_text": yaml_text,
+                "profile": self.connection.profile_name,
+            },
+        )
+
     async def get_soul(self) -> AdminResourceSnapshot:
         profile = quote(self.connection.profile_name, safe="")
         return await self._admin_read_snapshot(
@@ -3526,6 +3554,20 @@ class InMemoryHermesProvider:
                 "Secret-shaped config values must use the write-only secrets endpoint"
             )
         self._config = {**self._config, **config}
+        return admin_snapshot("config", {"ok": True, "config": self._config})
+
+    async def replace_config(self, config: dict[str, Any]) -> AdminResourceSnapshot:
+        if contains_secret_fields(config):
+            raise ValueError(
+                "Secret-shaped config values must use the write-only secrets endpoint"
+            )
+        self._config = json.loads(json.dumps(config))
+        model = self._config.get("model")
+        if isinstance(model, Mapping):
+            self._model = {
+                "provider": str(model.get("provider") or ""),
+                "model": str(model.get("default") or model.get("model") or ""),
+            }
         return admin_snapshot("config", {"ok": True, "config": self._config})
 
     async def get_soul(self) -> AdminResourceSnapshot:

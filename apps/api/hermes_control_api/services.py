@@ -2067,7 +2067,15 @@ class ProfileService:
                 db,
                 gateway_id=source_gateway_id,
                 profile_name=target.profile_name,
-                methods=frozenset({"session.list", "cron.list", "soul.get"}),
+                methods=frozenset(
+                    {
+                        "session.list",
+                        "cron.list",
+                        "soul.get",
+                        "config.get",
+                        "models.list",
+                    }
+                ),
             )
             source_sessions = await source_provider.list_sessions()
             if not bool(getattr(source_provider, "session_inventory_complete", False)):
@@ -2090,6 +2098,10 @@ class ProfileService:
                     "Agent Control has sessions absent from Hermes; refresh before moving"
                 )
             source_soul = (await source_provider.get_soul()).data
+            source_config = (await source_provider.get_config()).data
+            source_model = dict(
+                (await source_provider.list_models()).data.get("current") or {}
+            )
             source_automations = await source_provider.list_automations()
             await self._assert_upstream_automation_runs_idle(
                 source_provider, source_automations
@@ -2106,7 +2118,14 @@ class ProfileService:
                     gateway_id=source_gateway_id,
                     profile_name=target.profile_name,
                     methods=frozenset(
-                        {"session.list", "cron.list", "cron.update", "soul.get"}
+                        {
+                            "session.list",
+                            "cron.list",
+                            "cron.update",
+                            "soul.get",
+                            "config.get",
+                            "models.list",
+                        }
                     ),
                 )
 
@@ -2167,7 +2186,14 @@ class ProfileService:
                         "The imported agent is absent from the destination"
                     )
 
-                destination_methods = {"session.list", "cron.list", "soul.get"}
+                destination_methods = {
+                    "session.list",
+                    "cron.list",
+                    "soul.get",
+                    "config.get",
+                    "config.set",
+                    "models.list",
+                }
                 if enabled_automation_ids:
                     destination_methods.add("cron.update")
                 destination_provider, imported_capabilities = (
@@ -2179,6 +2205,29 @@ class ProfileService:
                         managed_by_control=True,
                     )
                 )
+                # Hermes 0.20.6's share-export redactor can rewrite the
+                # legitimate ``security.redact_secrets`` boolean as bare
+                # ``***``, leaving imported YAML unparsable. Credentials are
+                # intentionally absent from source_config; replace the staged
+                # document through Hermes' parsed raw endpoint before any
+                # verification or irreversible source deletion.
+                try:
+                    await destination_provider.replace_config(source_config)
+                except Exception as exc:
+                    raise UpstreamUnavailableError(
+                        "Hermes could not restore the imported agent config"
+                    ) from exc
+                if (await destination_provider.get_config()).data != source_config:
+                    raise UpstreamUnavailableError(
+                        "Imported Hermes config does not match the source"
+                    )
+                if dict(
+                    (await destination_provider.list_models()).data.get("current")
+                    or {}
+                ) != source_model:
+                    raise UpstreamUnavailableError(
+                        "Imported Hermes model does not match the source"
+                    )
                 imported_sessions = await destination_provider.list_sessions()
                 if not bool(
                     getattr(destination_provider, "session_inventory_complete", False)
@@ -2229,6 +2278,16 @@ class ProfileService:
                 if (await source_provider.get_soul()).data != source_soul:
                     raise ConflictError(
                         "The source SOUL changed during agent transfer"
+                    )
+                if (await source_provider.get_config()).data != source_config:
+                    raise ConflictError(
+                        "The source config changed during agent transfer"
+                    )
+                if dict(
+                    (await source_provider.list_models()).data.get("current") or {}
+                ) != source_model:
+                    raise ConflictError(
+                        "The source model changed during agent transfer"
                     )
                 final_source_automations = (
                     await source_provider.list_automations()

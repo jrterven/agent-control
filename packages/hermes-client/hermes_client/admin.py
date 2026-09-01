@@ -97,6 +97,12 @@ def _is_secret_key(key: str) -> bool:
     normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key.strip())
     normalized = re.sub(r"[^A-Za-z0-9]+", "_", normalized).strip("_")
     lowered = normalized.lower()
+    # This is a boolean security preference, not a credential. Hermes 0.20.6
+    # force-redacts the name while exporting profiles and turns ``true`` into
+    # an invalid bare ``***`` YAML alias. Keep the preference in Control's
+    # secret-free config projection so a transfer can restore a valid document.
+    if lowered == "redact_secrets":
+        return False
     return bool(_SECRET_KEY.search(normalized)) and not (
         lowered.startswith(("has_", "is_"))
         or lowered.endswith(("_configured", "_is_set"))

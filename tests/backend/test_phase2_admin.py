@@ -105,6 +105,16 @@ def test_sanitized_config_projection_can_round_trip_without_secret_markers():
     assert contains_secret_fields(projected) is False
 
 
+def test_redact_secrets_preference_is_preserved_as_non_secret_config():
+    sanitized = sanitize_admin_payload(
+        {"security": {"redact_secrets": True}, "api_key": "PRIVATE"}
+    )
+    projected = writable_config_projection(sanitized)
+
+    assert projected == {"security": {"redact_secrets": True}}
+    assert contains_secret_fields(projected) is False
+
+
 def _admin_base(client: TestClient) -> str:
     gateway_id = client.get("/api/v1/gateways").json()[0]["id"]
     return f"/api/v1/admin/gateways/{gateway_id}/profiles/control-dev"
@@ -183,6 +193,31 @@ def test_write_only_secrets_are_never_returned_and_are_idempotent(authenticated)
         "configured": True,
         "status": "applied",
     }
+
+
+def test_unknown_model_mutation_is_reconciled_instead_of_returning_internal_error(
+    authenticated, monkeypatch
+):
+    client, csrf = authenticated
+    monkeypatch.setattr(
+        InMemoryHermesProvider,
+        "set_model",
+        AsyncMock(side_effect=RuntimeError("MUTATION_DELIVERY_UNKNOWN")),
+    )
+
+    response = client.patch(
+        f"{_admin_base(client)}/models",
+        headers=mutation_headers(csrf, "unknown-model-mutation"),
+        json={
+            "provider": "mock",
+            "model": "mock-model",
+            "confirmExpensiveModel": False,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "MUTATION_DELIVERY_UNKNOWN"
+    assert "internal error" not in response.text.casefold()
 
 
 def test_mcp_and_channel_secret_fields_are_write_only(authenticated):
