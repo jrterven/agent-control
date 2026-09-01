@@ -238,14 +238,20 @@ describe("rehydrated Hermes tool history", () => {
       removeEventListener: vi.fn(),
       dispatchEvent: vi.fn(),
     }));
-    const openWindow = vi.spyOn(window, "open").mockImplementation(() => null);
+    vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(
+      "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/128.0 Mobile Safari/537.36",
+    );
 
     await user.click(searchLink);
     await waitFor(() => expect(resolveTarget).toHaveBeenCalledWith(
       "session-papers",
       "0123456789abcdef0123456789abcdef",
     ));
-    expect(openWindow).toHaveBeenCalledWith(targetUrl, "_self");
+    const gmailAppLink = await screen.findByRole("link", { name: "Abrir en la app de Gmail" });
+    const expectedIntent = `intent://mail.google.com/mail/#search/rfc822msgid%3Atest%40example.com#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${encodeURIComponent(targetUrl)};end`;
+    expect(gmailAppLink).toHaveAttribute("href", expectedIntent);
+    expect(gmailAppLink).toHaveAttribute("target", "_self");
+    expect(screen.getByRole("link", { name: "Abrir en navegador" })).toHaveAttribute("href", targetUrl);
   });
 
   it("drops mail cards whose preview route escapes the same-origin session contract", async () => {

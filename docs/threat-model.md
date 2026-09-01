@@ -61,7 +61,11 @@ with host access.
   they return `no-store` and never render remote email HTML. Installed PWAs may
   request the allowlisted provider target as authenticated JSON before an
   out-of-scope mobile navigation; the client revalidates the provider host and
-  retains the target only in memory for that navigation.
+  retains the target only in memory for that navigation. Android Gmail handoff
+  is built only from the validated `mail.google.com/mail/#search/rfc822msgid:`
+  target, fixes the destination package to `com.google.android.gm`, encodes the
+  same HTTPS target as the browser fallback and never accepts an agent-provided
+  intent or custom scheme.
 - Offline email previews are AES-GCM Vault envelopes bound with AAD to the
   owner, session and opaque reference. Their fixed seven-day TTL is purged at
   startup and hourly; an accessed expired entry is also deleted. Normal reads

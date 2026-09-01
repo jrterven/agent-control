@@ -113,7 +113,7 @@ test("usa un resumen compacto cuando el proveedor no entregó el cuerpo", async 
   expect(box!.height).toBeLessThanOrEqual(viewport.height * 0.75);
 });
 
-test("la PWA móvil resuelve el destino autenticado antes de salir a Gmail", async ({ page }, testInfo) => {
+test("la PWA Android entrega el mensaje correcto directamente a la app de Gmail", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-mobile", "Este flujo corresponde a la PWA móvil instalada");
   await page.addInitScript(() => {
     const browserMatchMedia = window.matchMedia.bind(window);
@@ -130,16 +130,23 @@ test("la PWA móvil resuelve el destino autenticado antes de salir a Gmail", asy
         dispatchEvent() { return false; },
       } : browserMatchMedia(query),
     });
+    Object.defineProperty(window.navigator, "userAgent", {
+      configurable: true,
+      get: () => "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/128.0 Mobile Safari/537.36",
+    });
   });
-  await page.context().route("https://mail.google.com/**", (route) => route.fulfill({
-    status: 200,
-    contentType: "text/html",
-    body: "<!doctype html><title>Gmail</title><p>Destino Gmail abierto</p>",
-  }));
 
   await page.goto("/chats");
   await page.getByRole("link", { name: `Buscar en Gmail: ${emailReferenceSubject}` }).click();
 
-  await expect(page.getByText("Destino Gmail abierto")).toBeVisible();
-  expect(page.url()).toBe(emailReferenceProviderTarget);
+  const dialog = page.getByRole("dialog", { name: emailReferenceSubject });
+  await expect(dialog).toBeVisible();
+  const gmailAppLink = dialog.getByRole("link", { name: "Abrir en la app de Gmail" });
+  const expectedIntent = `intent://mail.google.com/mail/#search/rfc822msgid%3Ae2e%40example.com#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${encodeURIComponent(emailReferenceProviderTarget)};end`;
+  await expect(gmailAppLink).toHaveAttribute("href", expectedIntent);
+  await expect(gmailAppLink).toHaveAttribute("target", "_self");
+  await expect(dialog.getByRole("link", { name: "Abrir en navegador" })).toHaveAttribute(
+    "href",
+    emailReferenceProviderTarget,
+  );
 });

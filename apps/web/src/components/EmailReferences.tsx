@@ -8,6 +8,7 @@ import { useAppStore } from "../store/appStore";
 import type { EmailReference } from "../types";
 
 type PreviewState = "idle" | "loading" | "ready" | "error";
+type OpenTargetState = "idle" | "loading" | "ready" | "error";
 
 function referenceSender(reference: EmailReference, providerLabel: string) {
   return reference.senderName || reference.senderAddress || providerLabel;
@@ -20,7 +21,11 @@ function openActionKey(reference: EmailReference) {
 function isInstalledPwa() {
   const standaloneNavigator = navigator as Navigator & { standalone?: boolean };
   return standaloneNavigator.standalone === true
-    || window.matchMedia?.("(display-mode: standalone)").matches === true;
+    || window.matchMedia?.("(display-mode: standalone)")?.matches === true;
+}
+
+function isAndroidDevice() {
+  return /Android/i.test(navigator.userAgent);
 }
 
 function safeResolvedTarget(reference: EmailReference, value: unknown) {
@@ -29,10 +34,25 @@ function safeResolvedTarget(reference: EmailReference, value: unknown) {
     const target = new URL(value);
     if (target.protocol !== "https:" || target.username || target.password || (target.port && target.port !== "443")) return "";
     const host = target.hostname.toLowerCase().replace(/\.$/, "");
-    if (reference.provider === "gmail" && host !== "mail.google.com") return "";
+    if (reference.provider === "gmail" && (
+      host !== "mail.google.com"
+      || target.pathname !== "/mail/"
+      || !target.hash.toLowerCase().startsWith("#search/rfc822msgid%3a")
+    )) return "";
     if (reference.provider === "outlook" && !["outlook.live.com", "outlook.office.com", "outlook.office365.com"].includes(host)) return "";
     if (reference.provider === "imap") return "";
     return target.href;
+  } catch {
+    return "";
+  }
+}
+
+function androidGmailIntent(target: string) {
+  try {
+    const parsed = new URL(target);
+    if (parsed.protocol !== "https:" || parsed.hostname !== "mail.google.com" || target.includes("#Intent;")) return "";
+    const intentTarget = parsed.href.replace(/^https:/, "intent:");
+    return `${intentTarget}#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${encodeURIComponent(parsed.href)};end`;
   } catch {
     return "";
   }
@@ -52,6 +72,8 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
   const [bodyText, setBodyText] = useState("");
   const [summaryOnly, setSummaryOnly] = useState(false);
   const [openError, setOpenError] = useState("");
+  const [openTargetState, setOpenTargetState] = useState<OpenTargetState>("idle");
+  const [resolvedOpenTarget, setResolvedOpenTarget] = useState("");
   const requestGenerationRef = useRef(0);
   const headingId = useId();
   const descriptionId = useId();
@@ -64,6 +86,8 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
     setBodyText("");
     setSummaryOnly(false);
     setOpenError("");
+    setOpenTargetState("idle");
+    setResolvedOpenTarget("");
   };
   const dialog = useOverlayDialog<HTMLDivElement>({
     open: Boolean(selected),
@@ -73,6 +97,24 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
 
   useEffect(() => () => { requestGenerationRef.current += 1; }, []);
 
+  const resolveInstalledOpenTarget = async (reference: EmailReference, generation: number) => {
+    setOpenTargetState("loading");
+    setResolvedOpenTarget("");
+    setOpenError("");
+    try {
+      const resolved = await api.emailReferenceOpenTarget(sessionId, reference.id);
+      const target = safeResolvedTarget(reference, resolved.targetUrl);
+      if (!target) throw new Error("Unsafe email target");
+      if (requestGenerationRef.current !== generation) return;
+      setResolvedOpenTarget(target);
+      setOpenTargetState("ready");
+    } catch {
+      if (requestGenerationRef.current !== generation) return;
+      setOpenTargetState("error");
+      setOpenError(t("chat.emailReferences.openError"));
+    }
+  };
+
   const openPreview = async (reference: EmailReference) => {
     const generation = requestGenerationRef.current + 1;
     requestGenerationRef.current = generation;
@@ -80,7 +122,12 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
     setBodyText("");
     setSummaryOnly(false);
     setOpenError("");
+    setOpenTargetState("idle");
+    setResolvedOpenTarget("");
     setPreviewState("loading");
+    if (reference.openUrl && isInstalledPwa()) {
+      void resolveInstalledOpenTarget(reference, generation);
+    }
     try {
       const preview = await api.emailReferencePreview(sessionId, reference.id);
       if (requestGenerationRef.current !== generation) return;
@@ -97,21 +144,20 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
     }
   };
 
-  const openFromInstalledPwa = async (event: MouseEvent<HTMLAnchorElement>, reference: EmailReference) => {
+  const openFromInstalledPwa = (event: MouseEvent<HTMLAnchorElement>, reference: EmailReference) => {
     if (!isInstalledPwa()) return;
     event.preventDefault();
-    setOpenError("");
-    try {
-      const resolved = await api.emailReferenceOpenTarget(sessionId, reference.id);
-      const target = safeResolvedTarget(reference, resolved.targetUrl);
-      if (!target) throw new Error("Unsafe email target");
-      // Navigating the standalone context does not depend on the external
-      // browser sharing Agent Control's HttpOnly session cookie.
-      window.open(target, "_self");
-    } catch {
-      setOpenError(t("chat.emailReferences.openError"));
-    }
+    // Android only launches an external app from a direct user gesture. Open
+    // the safe preview while Control resolves the authenticated target, then
+    // render the prepared Intent as the user's next explicit tap.
+    void openPreview(reference);
   };
+
+  const installedPwa = isInstalledPwa();
+  const androidGmail = Boolean(installedPwa && isAndroidDevice() && selected?.provider === "gmail");
+  const installedDestination = androidGmail
+    ? androidGmailIntent(resolvedOpenTarget)
+    : resolvedOpenTarget;
 
   return <>
     <section className="email-references" aria-label={t("chat.emailReferences.listLabel")}>
@@ -148,7 +194,7 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
             target="_blank"
             rel="noopener noreferrer"
             referrerPolicy="no-referrer"
-            onClick={(event) => void openFromInstalledPwa(event, reference)}
+            onClick={(event) => openFromInstalledPwa(event, reference)}
             aria-label={t(reference.openMode === "search" ? "chat.emailReferences.searchAria" : "chat.emailReferences.openAria", { provider: providerLabel, subject: reference.subject })}
             title={t(`chat.emailReferences.${openActionKey(reference)}`, { provider: providerLabel })}
           ><ArrowSquareOut weight="bold" /></a> : null}
@@ -192,13 +238,34 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
             <span><FileText aria-hidden="true" /> {t(summaryOnly ? "chat.emailReferences.summaryPreview" : "chat.emailReferences.safePreview")}</span>
             {openError ? <span className="email-preview-sheet__open-error" role="alert"><WarningCircle aria-hidden="true" /> {openError}</span> : null}
           </div>
-          {selected.openUrl ? <a
+          {selected.openUrl && !installedPwa ? <a
             href={selected.openUrl}
             target="_blank"
             rel="noopener noreferrer"
             referrerPolicy="no-referrer"
-            onClick={(event) => void openFromInstalledPwa(event, selected)}
           ><EnvelopeSimple weight="fill" /> {t(`chat.emailReferences.${openActionKey(selected)}`, { provider: t(`chat.emailReferences.providers.${selected.provider}`) })}<ArrowSquareOut /></a> : null}
+          {selected.openUrl && installedPwa ? <div className="email-preview-sheet__actions">
+            {openTargetState === "ready" && installedDestination ? <>
+              <a
+                href={installedDestination}
+                target="_self"
+                rel="noopener noreferrer"
+                referrerPolicy="no-referrer"
+              ><EnvelopeSimple weight="fill" /> {t(androidGmail ? "chat.emailReferences.openInGmailApp" : `chat.emailReferences.${openActionKey(selected)}`, { provider: t(`chat.emailReferences.providers.${selected.provider}`) })}<ArrowSquareOut /></a>
+              {androidGmail ? <a
+                className="email-preview-sheet__browser-action"
+                href={resolvedOpenTarget}
+                target="_self"
+                rel="noopener noreferrer"
+                referrerPolicy="no-referrer"
+              >{t("chat.emailReferences.openInBrowser")}</a> : null}
+            </> : <button
+              type="button"
+              className="email-preview-sheet__prepare-action"
+              disabled={openTargetState === "loading"}
+              onClick={() => void resolveInstalledOpenTarget(selected, requestGenerationRef.current)}
+            >{openTargetState === "loading" ? <SpinnerGap className="email-preview-sheet__spinner" aria-hidden="true" /> : <WarningCircle aria-hidden="true" />} {t(openTargetState === "loading" ? "chat.emailReferences.preparingOpen" : "chat.emailReferences.retryOpen")}</button>}
+          </div> : null}
         </footer>
       </section>
     </div> : null}
