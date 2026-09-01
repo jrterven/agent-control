@@ -197,6 +197,39 @@ describe("mobile-first chat", () => {
     expect((await axe.run(container)).violations).toHaveLength(0);
   });
 
+  it("collapses streaming tool history by default and bounds it when expanded", async () => {
+    const streamingMessage = {
+      id: "assistant-tools-progress",
+      sessionId: "session-papers",
+      role: "assistant" as const,
+      content: "",
+      createdAt: "10:43",
+      streaming: true,
+      tools: [
+        { id: "tool-1", name: "web_search", label: "web_search", summary: "Cinco resultados encontrados", status: "running" as const },
+        { id: "tool-2", name: "terminal", label: "terminal", summary: "Comando completado", status: "completed" as const },
+      ],
+    };
+    useAppStore.setState({
+      messages: [...initialMessages, streamingMessage],
+      streamingBySession: { "session-papers": streamingMessage.id },
+    });
+    const user = userEvent.setup();
+    const { container } = render(<ChatView />);
+
+    const toggle = screen.getByRole("button", { name: "Mostrar historial de herramientas de Newton" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Herramientas · 2")).toBeVisible();
+    expect(screen.queryByText("Cinco resultados encontrados")).not.toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAccessibleName("Ocultar historial de herramientas de Newton");
+    const history = screen.getByRole("region", { name: "Historial de herramientas de Newton" });
+    expect(history).toHaveAttribute("data-max-items", "10");
+    expect(screen.getByText("Cinco resultados encontrados")).toBeVisible();
+    expect((await axe.run(container)).violations).toHaveLength(0);
+  });
+
   it("keeps following a streaming answer only while the reader remains near the bottom", async () => {
     const streamingMessage = {
       id: "assistant-scroll-progress",

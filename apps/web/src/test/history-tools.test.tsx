@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../i18n";
 import { ChatView } from "../components/ChatView";
@@ -117,7 +118,7 @@ describe("rehydrated Hermes tool history", () => {
     ]);
   });
 
-  it("shows partial tool evidence when an interrupted turn has no assistant text", async () => {
+  it("keeps partial tool evidence collapsed when an interrupted turn has no assistant text", async () => {
     vi.spyOn(api, "sessionHistory").mockResolvedValue({
       sessionStatus: "interrupted",
       activeOperation: null,
@@ -141,9 +142,20 @@ describe("rehydrated Hermes tool history", () => {
       ],
     });
 
+    const user = userEvent.setup();
     render(<ReopenedChat />);
 
-    expect(await screen.findByText("Se alcanzó a crear un evento")).toBeVisible();
+    const toggle = await screen.findByRole("button", { name: "Mostrar historial de herramientas de Newton" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Se alcanzó a crear un evento")).not.toBeInTheDocument();
     expect(screen.getByText(/se interrumpió antes/i)).toBeVisible();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAccessibleName("Ocultar historial de herramientas de Newton");
+    const history = screen.getByRole("region", { name: "Historial de herramientas de Newton" });
+    expect(history).toHaveAttribute("data-max-items", "10");
+    expect(history).toHaveClass("message-evidence__viewport");
+    expect(screen.getByText("Se alcanzó a crear un evento")).toBeVisible();
   });
 });

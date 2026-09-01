@@ -1,4 +1,4 @@
-import { CaretDown, Check, Checks, File, Image, Lightning, Microphone, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle, X } from "@phosphor-icons/react";
+import { CaretDown, Check, Checks, File, Image, Lightning, Microphone, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle, Wrench, X } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { TFunction } from "i18next";
@@ -20,6 +20,7 @@ import { ProfileAvatar } from "./ProfileAvatar";
 const emptyApprovals: ApprovalRequest[] = [];
 const emptyClarifications: ClarificationRequest[] = [];
 const automationInstructionMaxLines = 10;
+const toolEvidenceMaxItems = 10;
 const conversationFollowThreshold = 48;
 const attachmentMaxFiles = 5;
 const attachmentMaxBytes = 8 * 1024 * 1024;
@@ -137,6 +138,52 @@ function AgentActivityDisclosure({ agentName, message }: { agentName: string; me
               <span className="sr-only">{t(`chat.toolStatus.${item.status}`)}</span>
             </div>
           ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+type ToolEvidenceItem = { id: string; label: string; summary: string };
+
+function ToolEvidenceDisclosure({ agentName, evidence, messageId, toolCount }: { agentName: string; evidence: ToolEvidenceItem[]; messageId: string; toolCount: number }) {
+  const { t } = useTranslation();
+  const panelId = useId();
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => setExpanded(false), [messageId]);
+
+  return (
+    <div className="message-evidence">
+      <button
+        type="button"
+        className="message-evidence__toggle"
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        aria-label={t(expanded ? "chat.toolEvidence.hide" : "chat.toolEvidence.show", { agent: agentName })}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <span className="message-evidence__identity">
+          <Wrench size={17} aria-hidden="true" />
+          <span>
+            <strong>{t("chat.toolsCount", { count: toolCount || evidence.length })}</strong>
+            <small>{t(expanded ? "chat.toolEvidence.hideHint" : "chat.toolEvidence.showHint")}</small>
+          </span>
+        </span>
+        <CaretDown className="message-evidence__caret" size={15} weight="bold" aria-hidden="true" />
+      </button>
+      {expanded ? (
+        <div
+          id={panelId}
+          className="message-evidence__viewport"
+          role="region"
+          aria-label={t("chat.toolEvidence.label", { agent: agentName })}
+          data-max-items={toolEvidenceMaxItems}
+          tabIndex={0}
+        >
+          <ul>
+            {evidence.map((item) => <li key={item.id}><span>{item.label}</span><small>{item.summary}</small></li>)}
+          </ul>
         </div>
       ) : null}
     </div>
@@ -493,14 +540,7 @@ function Message({ message, profile, agentName, speech, automationInstruction = 
           {message.content.trim() ? (
             <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{message.content}</ReactMarkdown>
           ) : evidence.length ? (
-            <div className="message-evidence" role="note" aria-label={t("chat.activity.label", { agent: agentName })}>
-              <strong>{message.tools?.length
-                ? t("chat.toolsCount", { count: message.tools.length })
-                : t("chat.activity.label", { agent: agentName })}</strong>
-              <ul>
-                {evidence.map((item) => <li key={item.id}><span>{item.label}</span><small>{item.summary}</small></li>)}
-              </ul>
-            </div>
+            <ToolEvidenceDisclosure agentName={agentName} evidence={evidence} messageId={message.id} toolCount={message.tools?.length ?? 0} />
           ) : " "}
           {message.streaming ? <span className="stream-caret" aria-hidden="true" /> : null}
         </div>
