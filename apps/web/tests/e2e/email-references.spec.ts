@@ -3,6 +3,7 @@ import {
   test,
   emailReferenceOpenPath,
   emailReferenceSubject,
+  emailSummarySubject,
 } from "./fixtures";
 
 test("abre una tarjeta de correo en una vista previa responsive y de texto plano", async ({ page }, testInfo) => {
@@ -87,4 +88,26 @@ test("abre una tarjeta de correo en una vista previa responsive y de texto plano
   await dialog.locator(".email-preview-sheet__close").click();
   await expect(dialog).toHaveCount(0);
   expect(page.url()).toBe(initialUrl);
+});
+
+test("usa un resumen compacto cuando el proveedor no entregó el cuerpo", async ({ page }, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "chromium-mobile" && testInfo.project.name !== "chromium-desktop",
+    "La aceptación responsive se valida en Chromium móvil y escritorio",
+  );
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("El proyecto Playwright requiere un viewport explícito");
+
+  await page.goto("/chats");
+  await page.getByRole("button", { name: `Ver correo: ${emailSummarySubject}` }).click();
+
+  const dialog = page.getByRole("dialog", { name: emailSummarySubject });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Solicita una breve asesoría para exponer el estado de su protocolo.")).toBeVisible();
+  await expect(dialog.getByText("Resumen proporcionado por el agente; no es el cuerpo completo del correo.")).toBeVisible();
+  await expect(dialog.getByText("Este correo no tiene contenido de texto disponible.")).toHaveCount(0);
+  await expect(dialog.locator(".email-preview-sheet")).toHaveClass(/is-summary-only/);
+  const box = await dialog.locator(".email-preview-sheet").boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.height).toBeLessThanOrEqual(viewport.height * 0.75);
 });

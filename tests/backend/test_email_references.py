@@ -58,7 +58,8 @@ def _marker(payload: dict) -> str:
 
 def test_email_reference_prompt_is_private_and_marker_projection_is_bounded():
     submitted = compose_email_reference_prompt("¿Qué correo requiere atención?")
-    assert "hermes-control-email-ui-instruction-v1" in submitted
+    assert "hermes-control-email-ui-instruction-v2" in submitted
+    assert "copy it to bodyText" in submitted
     visible, no_references = project_email_reference_prompt(submitted)
     assert visible == "¿Qué correo requiere atención?"
     assert no_references == []
@@ -119,6 +120,14 @@ def test_email_reference_prompt_is_private_and_marker_projection_is_bounded():
     assert delimiter_visible == "Visible"
     assert delimiter_references[0].body_text.endswith("stays JSON data")
 
+    legacy_visible, legacy_references = project_email_reference_prompt(
+        "Pregunta visible\n"
+        "<hermes-control-email-ui-instruction-v1>legacy private protocol"
+        "</hermes-control-email-ui-instruction-v1>"
+    )
+    assert legacy_visible == "Pregunta visible"
+    assert legacy_references == []
+
 
 @pytest.mark.parametrize(
     "prompt",
@@ -133,7 +142,7 @@ def test_email_reference_prompt_is_private_and_marker_projection_is_bounded():
 )
 def test_email_protocol_is_intent_scoped_and_periodically_reprimed(prompt):
     first = SessionService._prompt_with_email_protocol(prompt, [])
-    assert "hermes-control-email-ui-instruction-v1" in first
+    assert "hermes-control-email-ui-instruction-v2" in first
 
     recent = [
         {"role": "user", "content": first},
@@ -142,13 +151,23 @@ def test_email_protocol_is_intent_scoped_and_periodically_reprimed(prompt):
     second = SessionService._prompt_with_email_protocol(prompt, recent)
     assert second == prompt
 
+    legacy_recent = [{
+        "role": "user",
+        "content": (
+            "Legacy\n<hermes-control-email-ui-instruction-v1>old"
+            "</hermes-control-email-ui-instruction-v1>"
+        ),
+    }]
+    upgraded = SessionService._prompt_with_email_protocol(prompt, legacy_recent)
+    assert "hermes-control-email-ui-instruction-v2" in upgraded
+
     old = [{"role": "user", "content": first}]
     old.extend(
         {"role": "user", "content": f"Mensaje normal {index}"}
         for index in range(20)
     )
     reprimed = SessionService._prompt_with_email_protocol(prompt, old)
-    assert "hermes-control-email-ui-instruction-v1" in reprimed
+    assert "hermes-control-email-ui-instruction-v2" in reprimed
     visible, _ = project_email_reference_prompt(reprimed)
     assert visible == prompt
 
@@ -168,6 +187,18 @@ def test_email_preview_body_is_bounded_to_twelve_thousand_characters():
         }
     )
     assert candidate.body_text == "x" * 12_000
+
+
+def test_email_preview_accepts_plain_text_body_returned_by_provider_adapter():
+    [candidate] = email_reference_candidates(
+        {
+            "provider": "gmail",
+            "subject": "Adapter body",
+            "messageId": "<adapter-body@example.com>",
+            "body": "Plain text returned by the provider adapter.",
+        }
+    )
+    assert candidate.body_text == "Plain text returned by the provider adapter."
 
 
 def test_email_candidate_rejects_unsafe_urls_uids_and_unbounded_identity_fields():
@@ -354,6 +385,40 @@ def test_generic_himalaya_reference_projects_as_preview_only_imap():
             "messageId": "<message-id-alone-is-not-enough@example.com>",
         }
     ) == []
+
+
+def test_himalaya_consumer_accounts_recover_provider_affordances():
+    [gmail] = email_reference_candidates(
+        {
+            "provider": "himalaya",
+            "accountAddress": "owner@gmail.com",
+            "account": "personal",
+            "mailbox": "INBOX",
+            "uid": 315,
+            "messageId": "<gmail-over-imap@example.com>",
+            "subject": "Gmail over IMAP",
+        }
+    )
+    assert gmail.provider == "gmail"
+    assert gmail.open_mode == "search"
+    assert gmail.source_url.endswith(
+        "rfc822msgid%3Agmail-over-imap%40example.com"
+    )
+
+    [outlook] = email_reference_candidates(
+        {
+            "provider": "imap",
+            "accountAddress": "owner@outlook.com",
+            "account": "work",
+            "mailbox": "INBOX",
+            "uid": 316,
+            "messageId": "<outlook-over-imap@example.com>",
+            "subject": "Outlook over IMAP",
+        }
+    )
+    assert outlook.provider == "outlook"
+    assert outlook.source_url is None
+    assert outlook.open_mode is None
 
 
 def test_every_split_email_marker_boundary_is_statefully_private():

@@ -29,6 +29,7 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
   const [selected, setSelected] = useState<EmailReference>();
   const [previewState, setPreviewState] = useState<PreviewState>("idle");
   const [bodyText, setBodyText] = useState("");
+  const [summaryOnly, setSummaryOnly] = useState(false);
   const requestGenerationRef = useRef(0);
   const headingId = useId();
   const descriptionId = useId();
@@ -39,6 +40,7 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
     setSelected(undefined);
     setPreviewState("idle");
     setBodyText("");
+    setSummaryOnly(false);
   };
   const dialog = useOverlayDialog<HTMLDivElement>({
     open: Boolean(selected),
@@ -53,11 +55,17 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
     requestGenerationRef.current = generation;
     setSelected(reference);
     setBodyText("");
+    setSummaryOnly(false);
     setPreviewState("loading");
     try {
       const preview = await api.emailReferencePreview(sessionId, reference.id);
       if (requestGenerationRef.current !== generation) return;
-      setBodyText(typeof preview.bodyText === "string" ? preview.bodyText.slice(0, 100_000) : "");
+      const fullBody = typeof preview.bodyText === "string" ? preview.bodyText.slice(0, 100_000) : "";
+      const fallbackSnippet = typeof preview.snippet === "string"
+        ? preview.snippet
+        : typeof reference.snippet === "string" ? reference.snippet : "";
+      setBodyText(fullBody || fallbackSnippet);
+      setSummaryOnly(!fullBody && Boolean(fallbackSnippet));
       setPreviewState("ready");
     } catch {
       if (requestGenerationRef.current !== generation) return;
@@ -117,7 +125,7 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
       aria-describedby={descriptionId}
     >
       <button className="modal-scrim" tabIndex={-1} aria-label={t("chat.emailReferences.close")} onClick={closePreview} />
-      <section className="hc-panel email-preview-sheet">
+      <section className={`hc-panel email-preview-sheet${summaryOnly ? " is-summary-only" : ""}`}>
         <header className="email-preview-sheet__header">
           <EmailProviderMark provider={selected.provider} />
           <span>
@@ -139,7 +147,7 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
         <footer className="email-preview-sheet__footer">
           <div className="email-preview-sheet__notices">
             <span className="email-reference-trust"><Info weight="fill" aria-hidden="true" /> {t("chat.emailReferences.citedNotVerified", { agent: agentName })}</span>
-            <span><FileText aria-hidden="true" /> {t("chat.emailReferences.safePreview")}</span>
+            <span><FileText aria-hidden="true" /> {t(summaryOnly ? "chat.emailReferences.summaryPreview" : "chat.emailReferences.safePreview")}</span>
           </div>
           {selected.openUrl ? <a
             href={selected.openUrl}

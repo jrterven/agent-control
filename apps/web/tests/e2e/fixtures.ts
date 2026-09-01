@@ -84,6 +84,9 @@ export const emailReferenceId = "0123456789abcdef0123456789abcdef";
 export const emailReferencePreviewPath = `/api/v1/sessions/session-e2e/email-references/${emailReferenceId}`;
 export const emailReferenceOpenPath = `${emailReferencePreviewPath}/open`;
 export const emailReferenceSubject = "[Action required] Verifica tu cuenta";
+export const emailSummaryReferenceId = "abcdef0123456789abcdef0123456789";
+export const emailSummaryPreviewPath = `/api/v1/sessions/session-e2e/email-references/${emailSummaryReferenceId}`;
+export const emailSummarySubject = "Solicitud de asesoría previa al tutoral";
 
 const history = {
   items: [
@@ -110,6 +113,16 @@ const history = {
         previewUrl: emailReferencePreviewPath,
         openUrl: emailReferenceOpenPath,
         openMode: "search",
+      }, {
+        schemaVersion: 1,
+        id: emailSummaryReferenceId,
+        provider: "imap",
+        senderName: "Samuel Gualito",
+        senderAddress: "samgualito@gmail.com",
+        subject: emailSummarySubject,
+        receivedAt: "2026-08-24T16:17:00Z",
+        snippet: "Solicita una breve asesoría para exponer el estado de su protocolo.",
+        previewUrl: emailSummaryPreviewPath,
       }],
     },
   ],
@@ -128,6 +141,18 @@ const emailReferencePreview = {
   openUrl: emailReferenceOpenPath,
   openMode: "search",
   bodyText: "Start advertiser verification now.\n\n<img src=\"https://tracker.invalid/pixel.png\" onerror=\"alert(1)\">\n<strong>Tu cuenta se pausará en 10 días.</strong>",
+};
+
+const emailSummaryPreview = {
+  schemaVersion: 1,
+  id: emailSummaryReferenceId,
+  provider: "imap",
+  senderName: "Samuel Gualito",
+  senderAddress: "samgualito@gmail.com",
+  subject: emailSummarySubject,
+  receivedAt: "2026-08-24T16:17:00Z",
+  snippet: "Solicita una breve asesoría para exponer el estado de su protocolo.",
+  previewUrl: emailSummaryPreviewPath,
 };
 
 function json(route: Route, body: unknown, status = 200) {
@@ -164,6 +189,7 @@ export async function installMockApi(
     if (path === "/api/v1/automations/sync" && method === "POST") return json(route, []);
     if (path === "/api/v1/sessions/session-e2e/messages") return json(route, history);
     if (path === emailReferencePreviewPath && method === "GET") return json(route, emailReferencePreview);
+    if (path === emailSummaryPreviewPath && method === "GET") return json(route, emailSummaryPreview);
     if (path === emailReferenceOpenPath && method === "GET") return route.fulfill({ status: 204 });
     if (path === "/api/v1/realtime/tickets" && method === "POST") {
       return json(route, { detail: "Realtime intentionally disabled in deterministic E2E" }, 503);

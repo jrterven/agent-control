@@ -9,10 +9,11 @@ from typing import Any, Mapping, Sequence
 from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
 
-_INSTRUCTION_START = "<hermes-control-email-ui-instruction-v1>"
-_INSTRUCTION_END = "</hermes-control-email-ui-instruction-v1>"
+_INSTRUCTION_START = "<hermes-control-email-ui-instruction-v2>"
+_INSTRUCTION_END = "</hermes-control-email-ui-instruction-v2>"
 _INSTRUCTION_BLOCK = re.compile(
-    rf"\n?{re.escape(_INSTRUCTION_START)}.*?{re.escape(_INSTRUCTION_END)}\s*",
+    r"\n?<hermes-control-email-ui-instruction-v(?:1|2)>.*?"
+    r"</hermes-control-email-ui-instruction-v(?:1|2)>\s*",
     re.DOTALL,
 )
 EMAIL_REFERENCE_MARKER_NAME = "hermes-control-email-reference-v1"
@@ -37,6 +38,11 @@ When citing a specific email returned by a mail tool, append after the answer:
 <!-- hermes-control-email-reference-v1 {{"provider":"gmail|outlook|imap","accountAddress":"optional","account":"optional","mailbox":"optional","uid":"optional IMAP UID","messageId":"optional RFC Message-ID","senderName":"optional","senderAddress":"optional","subject":"required","receivedAt":"optional ISO-8601","snippet":"optional","bodyText":"optional tool-returned plain text, max 12000 chars","sourceUrl":"optional Outlook Graph webLink"}} -->
 Use tool facts only. Require messageId, a provider read URL, or
 uid+mailbox+account/accountAddress. Omit unknowns; never include auth or reasoning.
+Preserve Gmail messageId and Outlook Graph webLink/sourceUrl exactly. If the
+mail tool returned a plain-text field named body, copy it to bodyText. Never
+invent bodyText: when only a search/list snippet is available, preserve snippet
+and leave bodyText absent. For a small set of actionable messages, prefer the
+provider get/read command before citing them so their full preview is available.
 Do not mention the marker.
 {_INSTRUCTION_END}"""
 
@@ -168,7 +174,7 @@ def project_email_reference_prompt(content: str) -> tuple[str, list[EmailReferen
     lowered = content.casefold()
     if (
         "hermes-control-email-reference-v1" not in lowered
-        and _INSTRUCTION_START not in lowered
+        and "hermes-control-email-ui-instruction-v" not in lowered
     ):
         return content, []
     without_instruction = _INSTRUCTION_BLOCK.sub("\n", content)
@@ -283,7 +289,10 @@ def email_reference_candidate(value: Any) -> EmailReferenceCandidate | None:
     if sender_address and not _EMAIL_ADDRESS.fullmatch(sender_address):
         sender_address = None
     body_text = _body_text(
-        value.get("bodyText") or value.get("body_text") or value.get("textBody")
+        value.get("bodyText")
+        or value.get("body_text")
+        or value.get("textBody")
+        or value.get("body")
     )
     snippet = _single_line(
         value.get("snippet") or value.get("preview") or value.get("summary"),
@@ -303,6 +312,22 @@ def email_reference_candidate(value: Any) -> EmailReferenceCandidate | None:
         or value.get("internetMessageId")
         or value.get("internet_message_id")
     )
+    # Himalaya is a transport, not necessarily the mailbox product. When its
+    # private account address proves that the message belongs to a well-known
+    # consumer mailbox, expose the correct provider affordance. This lets an
+    # existing Gmail-via-IMAP reference use Control's safe RFC Message-ID
+    # search route without trusting a URL supplied by the agent.
+    if provider == "imap" and account_address:
+        account_domain = account_address.rsplit("@", 1)[-1].casefold()
+        if account_domain in {"gmail.com", "googlemail.com"}:
+            provider = "gmail"
+        elif account_domain in {
+            "hotmail.com",
+            "live.com",
+            "msn.com",
+            "outlook.com",
+        }:
+            provider = "outlook"
     source_url = (
         safe_email_open_url(
             provider,

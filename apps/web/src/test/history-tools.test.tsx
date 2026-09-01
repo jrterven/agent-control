@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../i18n";
@@ -287,5 +287,44 @@ describe("rehydrated Hermes tool history", () => {
     await user.click(card);
     expect(await screen.findByText("Tu factura ya está disponible.")).toBeVisible();
     expect(screen.getByRole("dialog", { name: "Factura disponible" })).toBeVisible();
+  });
+
+  it("shows a compact summary when the agent did not retain the full email body", async () => {
+    const previewUrl = "/api/v1/sessions/session-papers/email-references/abcdef0123456789abcdef0123456790";
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      sessionStatus: "ready",
+      activeOperation: null,
+      items: [{
+        id: "assistant-summary-mail",
+        role: "assistant",
+        content: "Encontré un correo que requiere atención.",
+        controlEmailReferences: [{
+          schemaVersion: 1,
+          id: "abcdef0123456789abcdef0123456790",
+          provider: "imap",
+          subject: "Resumen disponible",
+          snippet: "Solicita una respuesta antes del viernes.",
+          previewUrl,
+        }],
+      }],
+    });
+    vi.spyOn(api, "emailReferencePreview").mockResolvedValue({
+      schemaVersion: 1,
+      id: "abcdef0123456789abcdef0123456790",
+      provider: "imap",
+      subject: "Resumen disponible",
+      snippet: "Solicita una respuesta antes del viernes.",
+      previewUrl,
+    });
+
+    const user = userEvent.setup();
+    render(<ReopenedChat />);
+    await user.click(await screen.findByRole("button", { name: "Ver correo: Resumen disponible" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Resumen disponible" });
+    expect(within(dialog).getByText("Solicita una respuesta antes del viernes.")).toBeVisible();
+    expect(within(dialog).getByText("Resumen proporcionado por el agente; no es el cuerpo completo del correo.")).toBeVisible();
+    expect(within(dialog).queryByText("Este correo no tiene contenido de texto disponible.")).not.toBeInTheDocument();
+    expect(dialog.querySelector(".email-preview-sheet")).toHaveClass("is-summary-only");
   });
 });

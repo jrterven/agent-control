@@ -134,14 +134,20 @@ subject, local date and a short preview. Opening the card fetches an
 authenticated, session-bound plain-text preview; email HTML, scripts, forms and
 remote images are never rendered. The technical reference carried through the
 Hermes transcript is removed from the visible answer and from speech playback.
+If the mail tool returned only a search/list snippet, the sheet stays compact
+and labels that text as a summary instead of showing an empty full-body viewer.
+For a small set of actionable messages, Control asks the agent to read each
+message and retain the provider's plain-text body for the full preview.
 
 The provider button is shown only when Control can derive or validate a safe
 destination. Gmail references with an RFC Message-ID use a best-effort
 **Search in Gmail** action; Control ignores Gmail URLs supplied by the agent.
 Outlook opens only a strictly validated Microsoft Graph message `webLink`.
 Generic Himalaya/IMAP references remain preview-only because mailbox UIDs are
-local to one account/folder and are not safe web identifiers. The card is
-durable across history reloads, but its metadata is
+local to one account/folder and are not safe web identifiers. When Himalaya
+reads a `gmail.com`/`googlemail.com` account, Control recognizes the underlying
+provider and can still derive the safe Gmail Message-ID search action. The card
+is durable across history reloads, but its metadata is
 display evidence supplied by the agent, not cryptographic proof of the mailbox
 record. Credentials, local account names, mailbox UIDs and upstream identifiers
 do not reach the browser.
