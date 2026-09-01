@@ -22,6 +22,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from .api import router
 from .config import Settings, get_settings
 from .database import Base, build_engine, build_session_factory
+from .email_reference_cache import purge_expired as purge_expired_email_reference_cache
 from .eventing import EventHub
 from .integrations import (
     ElevenLabsSpeechClient,
@@ -185,12 +186,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     async def durable_event_sink(event) -> None:
-        event_hub.remember_correlation(event)
         completion = persist_normalized_event(
             session_factory,
             event,
             gateway_health_ttl_seconds=settings.upstream_health_ttl_seconds,
+            vault=vault,
         )
+        # Private validated cache seeds have completed their only durable use.
+        # Do not retain them in replay/correlation memory or browser fanout.
+        event.private_data.clear()
+        event_hub.remember_correlation(event)
         await event_hub.publish(event)
         push_notification_service.schedule(completion)
 
@@ -302,11 +307,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             interval_seconds=settings.automation_route_watch_seconds,
         )
 
+    async def purge_email_reference_cache_periodically() -> None:
+        while True:
+            await asyncio.sleep(60 * 60)
+            with session_factory() as db:
+                purge_expired_email_reference_cache(db)
+                db.commit()
+
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if settings.create_schema_on_start:
             Base.metadata.create_all(engine)
         with session_factory() as db:
+            purge_expired_email_reference_cache(db)
             GatewayService(service_container).seed_environment_gateway(db)
             # This runs before requests are accepted, so these dispatch rows
             # belong to a previous process and must never be retried.
@@ -318,6 +331,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         capability_watcher = asyncio.create_task(
             supervise_capabilities(), name="hermes-capability-refresh-watcher"
+        )
+        email_reference_cache_watcher = asyncio.create_task(
+            purge_email_reference_cache_periodically(),
+            name="email-reference-cache-purge",
         )
         app.state.automation_route_watcher_task = automation_watcher
         app.state.capability_refresh_watcher_task = capability_watcher
@@ -331,7 +348,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             automation_watcher.cancel()
             capability_watcher.cancel()
-            for watcher in (automation_watcher, capability_watcher):
+            email_reference_cache_watcher.cancel()
+            for watcher in (
+                automation_watcher,
+                capability_watcher,
+                email_reference_cache_watcher,
+            ):
                 with contextlib.suppress(asyncio.CancelledError):
                     await watcher
             await push_notification_service.close()

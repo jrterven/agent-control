@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from "dexie";
-import type { BootstrapData, ChatMessage } from "../types";
+import type { BootstrapData, ChatMessage, EmailReference } from "../types";
 
 export type DraftRecord = { sessionId: string; content: string; updatedAt: number };
 export type PreferenceRecord = { key: string; value: string; updatedAt: number };
@@ -111,6 +111,39 @@ function boundedText(value: string | undefined | null, maxLength = 512) {
   return typeof value === "string" ? value.slice(0, maxLength) : value;
 }
 
+function sanitizedEmailReferences(sessionId: string, references: EmailReference[] | undefined) {
+  if (!Array.isArray(references)) return undefined;
+  const items = references.slice(0, 8).flatMap((reference) => {
+    if (
+      !reference
+      || reference.schemaVersion !== 1
+      || (reference.provider !== "gmail" && reference.provider !== "outlook" && reference.provider !== "imap")
+      || typeof reference.id !== "string"
+      || !/^[0-9a-f]{32}$/.test(reference.id)
+      || typeof reference.subject !== "string"
+      || !reference.subject.trim()
+    ) return [];
+    const previewUrl = `/api/v1/sessions/${encodeURIComponent(sessionId)}/email-references/${encodeURIComponent(reference.id)}`;
+    if (reference.previewUrl !== previewUrl) return [];
+    const expectedOpenUrl = `${previewUrl}/open`;
+    const openUrl = reference.openUrl === expectedOpenUrl ? expectedOpenUrl : undefined;
+    return [{
+      schemaVersion: 1 as const,
+      id: reference.id,
+      provider: reference.provider,
+      subject: reference.subject.replace(/\s+/g, " ").trim().slice(0, 500),
+      previewUrl,
+      ...(typeof reference.senderName === "string" && reference.senderName.trim() ? { senderName: reference.senderName.replace(/\s+/g, " ").trim().slice(0, 200) } : {}),
+      ...(typeof reference.senderAddress === "string" && reference.senderAddress.trim() ? { senderAddress: reference.senderAddress.replace(/\s+/g, " ").trim().slice(0, 320) } : {}),
+      ...(typeof reference.receivedAt === "string" && reference.receivedAt.trim() ? { receivedAt: reference.receivedAt.replace(/\s+/g, " ").trim().slice(0, 80) } : {}),
+      ...(typeof reference.snippet === "string" && reference.snippet.trim() ? { snippet: reference.snippet.replace(/\s+/g, " ").trim().slice(0, 1_000) } : {}),
+      ...(openUrl ? { openUrl } : {}),
+      ...(openUrl && (reference.openMode === "direct" || reference.openMode === "search") ? { openMode: reference.openMode } : {}),
+    }];
+  });
+  return items.length ? items : undefined;
+}
+
 function bytesToBase64(value: Uint8Array) {
   let binary = "";
   for (let offset = 0; offset < value.length; offset += 0x8000) {
@@ -153,23 +186,27 @@ async function shellCacheKey(create: boolean): Promise<CryptoKey | undefined> {
 }
 
 function sanitizeTranscript(messages: ChatMessage[]): ChatMessage[] {
-  return messages.slice(-200).map((message) => ({
-    id: message.id,
-    sessionId: message.sessionId,
-    role: message.role,
-    content: message.content,
-    createdAt: message.createdAt,
-    delivery: message.delivery,
-    tools: message.tools?.map((tool) => ({
-      id: tool.id,
-      name: tool.name,
-      label: tool.label,
-      status: tool.status,
-      durationMs: tool.durationMs,
-      summary: tool.summary,
-    })),
-    streaming: false,
-  }));
+  return messages.slice(-200).map((message) => {
+    const emailReferences = sanitizedEmailReferences(message.sessionId, message.emailReferences);
+    return {
+      id: message.id,
+      sessionId: message.sessionId,
+      role: message.role,
+      content: message.content,
+      createdAt: message.createdAt,
+      delivery: message.delivery,
+      tools: message.tools?.map((tool) => ({
+        id: tool.id,
+        name: tool.name,
+        label: tool.label,
+        status: tool.status,
+        durationMs: tool.durationMs,
+        summary: tool.summary,
+      })),
+      ...(emailReferences ? { emailReferences } : {}),
+      streaming: false,
+    };
+  });
 }
 
 export async function saveEncryptedTranscript(

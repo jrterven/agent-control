@@ -25,6 +25,7 @@ from .admin import (
     sanitize_admin_payload,
     writable_config_projection,
 )
+from .email_references import project_email_reference_prompt
 from .limits import (
     UpstreamPayloadError,
     UpstreamPayloadTooLarge,
@@ -2779,6 +2780,15 @@ class HermesGatewayProvider:
         if self.event_sink is not None:
             message = body.get("message") if isinstance(body.get("message"), dict) else {}
             content = str(message.get("content") or "")
+            visible_content, email_references = project_email_reference_prompt(content)
+            event_data: dict[str, Any] = {
+                "delta": visible_content,
+                "fallback": "api-server",
+            }
+            if email_references:
+                event_data["controlEmailReferences"] = [
+                    reference.transport_view() for reference in email_references[:8]
+                ]
             try:
                 await self.event_sink(
                     NormalizedEvent.create(
@@ -2789,7 +2799,17 @@ class HermesGatewayProvider:
                         runtime_session_id=route.runtime_session_id,
                         correlation_id=operation_id,
                         runtime_generation=self.runtime_generation,
-                        data={"delta": content, "fallback": "api-server"},
+                        data=event_data,
+                        private_data=(
+                            {
+                                "emailReferences": [
+                                    reference.private_payload()
+                                    for reference in email_references[:8]
+                                ]
+                            }
+                            if email_references
+                            else None
+                        ),
                     )
                 )
                 await self.event_sink(
@@ -3337,7 +3357,8 @@ class InMemoryHermesProvider:
                 )
             )
             return
-        content = f"Respuesta simulada: {prompt}"
+        visible_prompt, _ = project_email_reference_prompt(prompt)
+        content = f"Respuesta simulada: {visible_prompt}"
         for part in (content[: len(content) // 2], content[len(content) // 2 :]):
             self._sequence += 1
             await self.event_sink(

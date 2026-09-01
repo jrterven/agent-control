@@ -16,6 +16,25 @@ describe("browser API boundary", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/auth/me", expect.objectContaining({ credentials: "same-origin" }));
   });
 
+  it("loads email previews only through the owner-scoped Control session route", async () => {
+    const payload = {
+      schemaVersion: 1,
+      id: "0123456789abcdef0123456789abcdef",
+      provider: "gmail",
+      subject: "Action required",
+      previewUrl: "/api/v1/sessions/session%2Fmail/email-references/0123456789abcdef0123456789abcdef",
+      bodyText: "Plain text only",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await api.emailReferencePreview("session/mail", payload.id)).toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/session%2Fmail/email-references/0123456789abcdef0123456789abcdef",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
   it("adds idempotency to prompt mutations without persisting credentials", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ operationId: "op-1", status: "accepted" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);

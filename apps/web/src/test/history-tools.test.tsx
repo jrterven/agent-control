@@ -158,4 +158,134 @@ describe("rehydrated Hermes tool history", () => {
     expect(history).toHaveClass("message-evidence__viewport");
     expect(screen.getByText("Se alcanzó a crear un evento")).toBeVisible();
   });
+
+  it("renders mail-tool references as cards and loads a plain-text preview on demand", async () => {
+    const previewUrl = "/api/v1/sessions/session-papers/email-references/0123456789abcdef0123456789abcdef";
+    const openUrl = `${previewUrl}/open`;
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      sessionStatus: "ready",
+      activeOperation: null,
+      items: [
+        { id: "user-mail", role: "user", content: "¿Hay algo urgente?" },
+        {
+          id: "mail-tool",
+          role: "tool",
+          tool_name: "mail.read",
+          content: "Correo encontrado",
+          controlEmailReferences: [{
+            schemaVersion: 1,
+            id: "0123456789abcdef0123456789abcdef",
+            provider: "gmail",
+            senderName: "Google Ads",
+            senderAddress: "noreply@ads.google.com",
+            subject: "[Action required] Your account will be paused",
+            receivedAt: "2026-08-31T07:29:00Z",
+            snippet: "Complete advertiser verification before the deadline.",
+            previewUrl,
+            openUrl,
+            openMode: "search",
+          }],
+        },
+        { id: "assistant-mail", role: "assistant", content: "Sí, este correo requiere atención." },
+      ],
+    });
+    const preview = vi.spyOn(api, "emailReferencePreview").mockResolvedValue({
+      schemaVersion: 1,
+      id: "0123456789abcdef0123456789abcdef",
+      provider: "gmail",
+      senderName: "Google Ads",
+      senderAddress: "noreply@ads.google.com",
+      subject: "[Action required] Your account will be paused",
+      receivedAt: "2026-08-31T07:29:00Z",
+      snippet: "Complete advertiser verification before the deadline.",
+      previewUrl,
+      openUrl,
+      openMode: "search",
+      bodyText: "Start advertiser verification now.\n\nYour account will be paused in 10 days.",
+    });
+    const user = userEvent.setup();
+    render(<ReopenedChat />);
+
+    const card = await screen.findByRole("button", { name: "Ver correo: [Action required] Your account will be paused" });
+    expect(card).toBeVisible();
+    expect(screen.getByText("Google Ads")).toBeVisible();
+    expect(screen.getByText("Citado por Newton · no verificado con el buzón")).toBeVisible();
+    const searchLink = screen.getByRole("link", { name: "Buscar en Gmail: [Action required] Your account will be paused" });
+    expect(searchLink).toHaveAttribute("href", openUrl);
+    expect(searchLink).toHaveAttribute("target", "_blank");
+    expect(searchLink).toHaveAttribute("rel", expect.stringContaining("noopener"));
+
+    await user.click(card);
+    expect(preview).toHaveBeenCalledWith("session-papers", "0123456789abcdef0123456789abcdef");
+    expect(await screen.findByText(/Your account will be paused in 10 days/)).toBeVisible();
+    const dialog = screen.getByRole("dialog", { name: "[Action required] Your account will be paused" });
+    expect(dialog).toBeVisible();
+    expect(dialog).toHaveTextContent("Vista en texto plano");
+    expect(dialog).toHaveTextContent("Citado por Newton · no verificado con el buzón");
+    expect(dialog.querySelector("img")).toBeNull();
+    expect(screen.getByRole("link", { name: "Buscar en Gmail" })).toHaveAttribute("href", openUrl);
+  });
+
+  it("drops mail cards whose preview route escapes the same-origin session contract", async () => {
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      sessionStatus: "ready",
+      activeOperation: null,
+      items: [{
+        id: "assistant-unsafe-mail",
+        role: "assistant",
+        content: "No abriré referencias no verificadas por Control.",
+        controlEmailReferences: [{
+          schemaVersion: 1,
+          id: "fedcba9876543210fedcba9876543210",
+          provider: "gmail",
+          subject: "Referencia insegura",
+          previewUrl: "https://attacker.example/email",
+          openUrl: "javascript:alert(1)",
+        }],
+      }],
+    });
+    render(<ReopenedChat />);
+
+    expect(await screen.findByText("No abriré referencias no verificadas por Control.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Ver correo: Referencia insegura" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Referencia insegura/ })).not.toBeInTheDocument();
+  });
+
+  it("renders a Hostinger/Himalaya reference as a preview-only IMAP card", async () => {
+    const previewUrl = "/api/v1/sessions/session-papers/email-references/abcdef0123456789abcdef0123456789";
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      sessionStatus: "ready",
+      activeOperation: null,
+      items: [{
+        id: "assistant-imap-mail",
+        role: "assistant",
+        content: "Encontré este correo en Hostinger.",
+        controlEmailReferences: [{
+          schemaVersion: 1,
+          id: "abcdef0123456789abcdef0123456789",
+          provider: "imap",
+          subject: "Factura disponible",
+          previewUrl,
+        }],
+      }],
+    });
+    vi.spyOn(api, "emailReferencePreview").mockResolvedValue({
+      schemaVersion: 1,
+      id: "abcdef0123456789abcdef0123456789",
+      provider: "imap",
+      subject: "Factura disponible",
+      previewUrl,
+      bodyText: "Tu factura ya está disponible.",
+    });
+
+    const user = userEvent.setup();
+    render(<ReopenedChat />);
+    const card = await screen.findByRole("button", { name: "Ver correo: Factura disponible" });
+    expect(screen.getByText("Correo IMAP")).toBeVisible();
+    expect(screen.queryByRole("link", { name: /Factura disponible/ })).not.toBeInTheDocument();
+
+    await user.click(card);
+    expect(await screen.findByText("Tu factura ya está disponible.")).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Factura disponible" })).toBeVisible();
+  });
 });

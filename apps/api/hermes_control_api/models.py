@@ -258,6 +258,45 @@ class SessionLink(Base, Timestamped):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class EmailReferenceCache(Base, Timestamped):
+    """Encrypted, short-lived projection of one session-owned mail citation."""
+
+    __tablename__ = "email_reference_cache"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["session_link_id", "owner_id"],
+            ["session_links.id", "session_links.owner_id"],
+            ondelete="CASCADE",
+            name="fk_email_reference_cache_session_owner",
+        ),
+        UniqueConstraint(
+            "session_link_id",
+            "reference_id",
+            name="uq_email_reference_cache_session_reference",
+        ),
+        CheckConstraint(
+            "length(reference_id) = 32",
+            name="ck_email_reference_cache_reference_id_length",
+        ),
+        CheckConstraint(
+            "payload_ciphertext LIKE 'v1.%'",
+            name="ck_email_reference_cache_encrypted_payload",
+        ),
+        Index(
+            "ix_email_reference_cache_owner_session",
+            "owner_id",
+            "session_link_id",
+        ),
+        Index("ix_email_reference_cache_expires_at", "expires_at"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    owner_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    session_link_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    reference_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class PushSubscription(Base, Timestamped):
     """One encrypted, owner-scoped browser Web Push subscription."""
 

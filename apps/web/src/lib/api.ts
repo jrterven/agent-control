@@ -1,4 +1,4 @@
-import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, Gateway, Profile, PushNotificationConfig, RealtimeEvent, SearchResult, SessionSummary, Workspace } from "../types";
+import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, EmailReferencePreview, Gateway, Profile, PushNotificationConfig, RealtimeEvent, SearchResult, SessionSummary, Workspace } from "../types";
 
 export type AdminResourceName = "models" | "config" | "soul" | "skills" | "toolsets" | "mcp" | "channels" | "usage" | "secrets";
 
@@ -429,6 +429,9 @@ export const api = {
     },
   ).then((row) => sessionFromWire(row)),
   sessionMediaUrl: (sessionId: string, mediaId: string) => `/api/v1/sessions/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(mediaId)}`,
+  emailReferencePreview: (sessionId: string, referenceId: string) => request<EmailReferencePreview>(
+    `/sessions/${encodeURIComponent(sessionId)}/email-references/${encodeURIComponent(referenceId)}`,
+  ),
   exportSession: (sessionId: string) => requestBlob(`/sessions/${encodeURIComponent(sessionId)}/export`),
   submitPrompt: (sessionId: string, content: string, idempotencyKey: string, csrfToken?: string, attachments: File[] = []) => {
     if (!attachments.length) {

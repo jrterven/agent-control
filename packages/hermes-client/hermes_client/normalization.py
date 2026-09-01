@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import re
+from collections import OrderedDict
 from collections.abc import Mapping
 from copy import deepcopy
 from math import isfinite
 from typing import Any
 
+from .email_references import (
+    EMAIL_REFERENCE_MARKER_NAME,
+    email_reference_candidates,
+    parse_email_reference_marker,
+    project_email_reference_prompt,
+)
 from .types import NormalizedEvent
 
 
@@ -49,6 +56,21 @@ _USAGE_NUMERIC_FIELDS = frozenset(
         "active_subagents",
     }
 )
+_EMAIL_STREAM_MAX_FRAGMENTS = 64
+_EMAIL_STREAM_MAX_TOMBSTONES = 512
+_EMAIL_STREAM_MAX_BUFFER_BYTES = 20 * 1024
+_HTML_COMMENT_PREFIX = "<!--"
+_EMAIL_STREAM_TERMINAL_TYPES = frozenset(
+    {
+        "message.cancelled",
+        "message.complete",
+        "message.completed",
+        "message.done",
+        "message.error",
+        "message.failed",
+        "message.interrupted",
+    }
+)
 
 
 class EventNormalizer:
@@ -57,8 +79,19 @@ class EventNormalizer:
     def __init__(self, *, gateway_id: str, profile_name: str) -> None:
         self.gateway_id = gateway_id
         self.profile_name = profile_name
+        # The client retains this normalizer across reconnect/replay. Buffers
+        # are independently keyed by route/message so a replayed marker tail
+        # remains quarantined even when the transport reconnects mid-marker.
+        self._email_stream_fragments: OrderedDict[
+            tuple[str, str, str], str
+        ] = OrderedDict()
+        self._email_stream_tombstones: OrderedDict[
+            tuple[str, str, str], None
+        ] = OrderedDict()
+        self._email_stream_global_quarantine = False
 
     def normalize(self, raw: Mapping[str, Any]) -> NormalizedEvent:
+        private_email_references: list[Any] = []
         params = raw.get("params") if isinstance(raw.get("params"), Mapping) else {}
         is_event_envelope = raw.get("method") == "event" and bool(params)
         if is_event_envelope:
@@ -73,6 +106,8 @@ class EventNormalizer:
             )
         if not isinstance(payload, Mapping):
             payload = {"value": payload}
+        if event_type in {"message.start", "message.started"}:
+            self._discard_email_streams(payload, metadata)
         if event_type.startswith("control."):
             # control.* is reserved for events created inside this process.
             # An upstream frame must never impersonate a trusted global state.
@@ -99,6 +134,44 @@ class EventNormalizer:
                         "finish_reason", "fallback", "message_id", "id",
                     },
                 )
+                references = []
+                for field in ("emailReferences", "email_references"):
+                    references.extend(email_reference_candidates(payload.get(field)))
+                content_fields = [
+                    field
+                    for field in ("delta", "text", "content")
+                    if isinstance(payload.get(field), str)
+                ]
+                primary_content_field = content_fields[0] if content_fields else None
+                for field in content_fields:
+                    if field != primary_content_field:
+                        safe.pop(field, None)
+                        continue
+                    value = str(payload[field])
+                    if event_type == "message.delta" or self._has_email_stream(
+                        payload, metadata
+                    ):
+                        cleaned, embedded = self._project_email_stream_chunk(
+                            payload,
+                            metadata,
+                            value,
+                        )
+                    else:
+                        cleaned, embedded = project_email_reference_prompt(value)
+                    safe[field] = self._sanitize(cleaned, field, 1)
+                    references.extend(embedded)
+                if references:
+                    projected: list[dict[str, Any]] = []
+                    seen: set[str] = set()
+                    for reference in references:
+                        if reference.fingerprint in seen:
+                            continue
+                        seen.add(reference.fingerprint)
+                        projected.append(reference.transport_view())
+                        private_email_references.append(reference.private_payload())
+                        if len(projected) == 8:
+                            break
+                    safe["controlEmailReferences"] = projected
                 if isinstance(payload.get("usage"), Mapping):
                     safe["usage"] = self._project_usage(payload["usage"])
         elif event_type.startswith("tool."):
@@ -109,6 +182,16 @@ class EventNormalizer:
                     "duration_s", "duration_ms",
                 },
             )
+            references = []
+            for field in ("emailReferences", "email_references"):
+                references.extend(email_reference_candidates(payload.get(field)))
+            if references:
+                safe["controlEmailReferences"] = [
+                    reference.transport_view() for reference in references[:8]
+                ]
+                private_email_references.extend(
+                    reference.private_payload() for reference in references[:8]
+                )
         elif event_type.startswith(("approval.", "clarify.")):
             safe = self._project_interaction(event_type, payload)
         elif event_type == "session.usage":
@@ -141,6 +224,8 @@ class EventNormalizer:
             }
         else:
             safe = self._sanitize(dict(payload))
+        if event_type in _EMAIL_STREAM_TERMINAL_TYPES:
+            self._discard_email_streams(payload, metadata)
         sequence = self._int_or_none(raw.get("seq", metadata.get("seq", payload.get("seq"))))
         return NormalizedEvent.create(
             event_id=str(raw.get("event_id") or raw.get("id") or "") or None,
@@ -172,7 +257,185 @@ class EventNormalizer:
                 max_length=200,
             ),
             data=safe,
+            private_data=(
+                {"emailReferences": private_email_references}
+                if private_email_references
+                else None
+            ),
         )
+
+    def _project_email_stream_chunk(
+        self,
+        payload: Mapping[str, Any],
+        metadata: Mapping[str, Any],
+        chunk: str,
+    ) -> tuple[str, list[Any]]:
+        key = self._active_email_stream_key(payload, metadata)
+        if self._email_stream_global_quarantine:
+            return "", []
+        if key in self._email_stream_tombstones:
+            self._email_stream_tombstones.move_to_end(key)
+            return "", []
+        if key in self._email_stream_fragments:
+            fragment = self._email_stream_fragments.pop(key)
+        else:
+            fragment = ""
+        combined = fragment + chunk
+        visible: list[str] = []
+        references: list[Any] = []
+        while combined:
+            marker_index = combined.find(_HTML_COMMENT_PREFIX)
+            if marker_index >= 0:
+                visible.append(combined[:marker_index])
+                combined = combined[marker_index:]
+                marker_state = self._email_comment_state(combined)
+                if marker_state == "email":
+                    parsed = parse_email_reference_marker(combined)
+                    if parsed is None:
+                        self._remember_email_stream(key, combined)
+                        return "".join(visible), references
+                    if parsed.candidate is not None:
+                        references.append(parsed.candidate)
+                    combined = combined[parsed.end:]
+                    continue
+                if marker_state == "possible":
+                    self._remember_email_stream(key, combined)
+                    return "".join(visible), references
+                comment_end = combined.find("-->", len(_HTML_COMMENT_PREFIX))
+                if comment_end < 0:
+                    self._remember_email_stream(key, combined)
+                    return "".join(visible), references
+                combined = combined[comment_end + 3 :]
+                continue
+
+            suffix_length = self._email_marker_prefix_suffix_length(combined)
+            if suffix_length:
+                visible.append(combined[:-suffix_length])
+                self._remember_email_stream(key, combined[-suffix_length:])
+            else:
+                visible.append(combined)
+            break
+        return "".join(visible), references
+
+    def _remember_email_stream(
+        self,
+        key: tuple[str, str, str],
+        value: str,
+    ) -> None:
+        if len(value.encode("utf-8")) > _EMAIL_STREAM_MAX_BUFFER_BYTES:
+            self._quarantine_email_stream(key)
+            return
+        if key not in self._email_stream_fragments and len(
+            self._email_stream_fragments
+        ) >= _EMAIL_STREAM_MAX_FRAGMENTS:
+            evicted, _ = self._email_stream_fragments.popitem(last=False)
+            self._quarantine_email_stream(evicted)
+            if self._email_stream_global_quarantine:
+                return
+        self._email_stream_fragments[key] = value
+        self._email_stream_fragments.move_to_end(key)
+
+    def _quarantine_email_stream(self, key: tuple[str, str, str]) -> None:
+        self._email_stream_fragments.pop(key, None)
+        if key in self._email_stream_tombstones:
+            self._email_stream_tombstones.move_to_end(key)
+            return
+        if len(self._email_stream_tombstones) >= _EMAIL_STREAM_MAX_TOMBSTONES:
+            # Never evict a quarantine marker and accidentally release its
+            # private tail. A hostile cardinality overflow fails closed.
+            self._email_stream_global_quarantine = True
+            return
+        self._email_stream_tombstones[key] = None
+
+    @staticmethod
+    def _email_marker_prefix_suffix_length(value: str) -> int:
+        maximum = min(len(value), len(_HTML_COMMENT_PREFIX) - 1)
+        for length in range(maximum, 0, -1):
+            if value.endswith(_HTML_COMMENT_PREFIX[:length]):
+                return length
+        return 0
+
+    @staticmethod
+    def _email_comment_state(value: str) -> str:
+        """Classify a buffered HTML comment without exposing near-markers."""
+
+        if not value.startswith(_HTML_COMMENT_PREFIX):
+            return "other"
+        remainder = value[len(_HTML_COMMENT_PREFIX) :].lstrip()
+        lowered = remainder.casefold()
+        if not lowered or EMAIL_REFERENCE_MARKER_NAME.startswith(lowered):
+            return "possible"
+        if lowered.startswith(EMAIL_REFERENCE_MARKER_NAME):
+            boundary = remainder[len(EMAIL_REFERENCE_MARKER_NAME) : len(EMAIL_REFERENCE_MARKER_NAME) + 1]
+            return "email" if not boundary or boundary.isspace() or boundary == "{" else "other"
+        return "other"
+
+    @staticmethod
+    def _email_stream_route(
+        payload: Mapping[str, Any],
+        metadata: Mapping[str, Any],
+    ) -> tuple[str, str, str]:
+        stored = str(
+            metadata.get("stored_session_id")
+            or metadata.get("session_key")
+            or payload.get("stored_session_id")
+            or payload.get("session_key")
+            or ""
+        )[:255]
+        runtime = str(
+            metadata.get("session_id") or payload.get("session_id") or ""
+        )[:255]
+        message = str(
+            payload.get("message_id") or payload.get("messageId") or ""
+        )[:255]
+        return stored, runtime, message
+
+    def _discard_email_streams(
+        self,
+        payload: Mapping[str, Any],
+        metadata: Mapping[str, Any],
+    ) -> None:
+        stored, runtime, message = self._email_stream_route(payload, metadata)
+        for collection in (
+            self._email_stream_fragments,
+            self._email_stream_tombstones,
+        ):
+            for key in tuple(collection):
+                key_stored, key_runtime, key_message = key
+                if stored and key_stored == stored:
+                    collection.pop(key, None)
+                elif runtime and key_runtime == runtime:
+                    collection.pop(key, None)
+                elif message and key_message == message:
+                    collection.pop(key, None)
+
+    def _has_email_stream(
+        self,
+        payload: Mapping[str, Any],
+        metadata: Mapping[str, Any],
+    ) -> bool:
+        key = self._active_email_stream_key(payload, metadata)
+        return (
+            self._email_stream_global_quarantine
+            or key in self._email_stream_fragments
+            or key in self._email_stream_tombstones
+        )
+
+    def _active_email_stream_key(
+        self,
+        payload: Mapping[str, Any],
+        metadata: Mapping[str, Any],
+    ) -> tuple[str, str, str]:
+        exact = self._email_stream_route(payload, metadata)
+        if exact in self._email_stream_fragments or exact in self._email_stream_tombstones:
+            return exact
+        stored, runtime, _ = exact
+        matches = [
+            key
+            for key in (*self._email_stream_fragments, *self._email_stream_tombstones)
+            if (stored and key[0] == stored) or (runtime and key[1] == runtime)
+        ]
+        return matches[0] if len(matches) == 1 else exact
 
     def sanitize_data(self, value: Any) -> Any:
         """Sanitize non-event payloads such as recovered message history."""

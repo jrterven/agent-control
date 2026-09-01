@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import re
 from contextlib import asynccontextmanager
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,6 +14,7 @@ from uuid import uuid4
 
 from hermes_client import (
     CapabilitySet,
+    EmailReferenceCandidate,
     EndpointPolicy,
     EventNormalizer,
     HermesAutomation,
@@ -24,7 +27,11 @@ from hermes_client import (
     RuntimeGenerationChanged,
     SessionHistoryNotFound,
     SessionRoute,
+    compose_email_reference_prompt,
+    email_reference_candidates,
+    has_email_reference_instruction,
     project_attachment_prompt,
+    project_email_reference_prompt,
     resolve_endpoint,
     validate_endpoint,
 )
@@ -34,6 +41,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import ObjectDeletedError
 
 from .config import Settings
+from .email_reference_cache import (
+    cache_references,
+    cached_reference,
+    reference_id as scoped_email_reference_id,
+)
 from .eventing import EventHub
 from .gateway_health import aggregate_profile_health
 from .models import (
@@ -111,6 +123,15 @@ _AUDIO_MEDIA_TAG = re.compile(
 )
 _SAFE_PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$")
 _SAFE_MEDIA_ID = re.compile(r"^[0-9a-f]{32}$")
+_SAFE_EMAIL_REFERENCE_ID = re.compile(r"^[0-9a-f]{32}$")
+_EMAIL_INTENT_PATTERN = re.compile(
+    r"\b(?:e-?mails?|mails?|gmail|outlook|inbox|correos?|correios?|courriels?|posteingang)\b"
+    r"|\bbandejas?\s+de\s+entrada\b"
+    r"|\bcaixas?\s+de\s+entrada\b"
+    r"|\bbo[iî]tes?\s+(?:mail|de\s+r[ée]ception)\b"
+    r"|\b(?:buz[oó]n(?:es)?|mailboxes?|himalaya|hostinger|imap|messageries?)\b",
+    re.IGNORECASE,
+)
 _ACTIVE_RUNTIME_STATUSES = {
     "pending",
     "queued",
@@ -158,6 +179,12 @@ class SessionMediaAsset:
     media_id: str
     path: Path
     media_type: str
+
+
+@dataclass(frozen=True)
+class SessionEmailReferenceAsset:
+    reference_id: str
+    reference: EmailReferenceCandidate
 
 
 def _audio_media_markers(content: str) -> list[AudioMediaMarker]:
@@ -2749,7 +2776,11 @@ class SearchService:
                         )
                         if not isinstance(safe, dict) or safe.get("omitted"):
                             continue
-                        excerpt = self._compact(safe.get("content") or "", 240)
+                        safe_content = str(safe.get("content") or "")
+                        safe_content, _ = project_email_reference_prompt(safe_content)
+                        if "hermes-control-email-" in safe_content.casefold():
+                            safe_content = ""
+                        excerpt = self._compact(safe_content, 240)
                         result_kind = "message" if hit.role else "session"
                         if kind != "all" and result_kind != kind:
                             continue
@@ -3226,38 +3257,121 @@ class SessionService:
         normalizer = EventNormalizer(
             gateway_id=row.gateway_id, profile_name=row.profile_name
         )
-        sanitized = normalizer.sanitize_data(history)
+        # The sanitizer's public collection bound is 500. Preserve the most
+        # recent transcript window rather than exposing stale oldest rows.
+        bounded_history = history[-500:]
+        sanitized = normalizer.sanitize_data(bounded_history)
         gateway = db.get(Gateway, row.gateway_id)
         if not isinstance(sanitized, list):
             return []
+        projectable_email_fingerprints = {
+            reference.fingerprint
+            for reference in self._email_references_from_history(
+                bounded_history,
+                limit=512,
+            )
+        }
 
         for history_index, (raw_item, safe_item) in enumerate(
-            zip(history, sanitized, strict=False)
+            zip(bounded_history, sanitized, strict=False)
         ):
             if not isinstance(raw_item, dict) or not isinstance(safe_item, dict):
                 continue
+            # These upstream extension names are transport-only. Never let a
+            # permissive history sanitizer expose their body text or source URL.
+            safe_item.pop("emailReferences", None)
+            safe_item.pop("email_references", None)
             content_key = (
                 "content" if isinstance(raw_item.get("content"), str)
                 else "text" if isinstance(raw_item.get("text"), str)
                 else None
             )
-            if content_key is None:
-                continue
-            raw_content = str(raw_item[content_key])
+            raw_content = str(raw_item[content_key]) if content_key else ""
             if raw_item.get("role") == "user":
+                if content_key is None:
+                    continue
                 projected_content, attachments = project_attachment_prompt(raw_content)
+                projected_content, _ = project_email_reference_prompt(projected_content)
+                safe_item[content_key] = normalizer.sanitize_data(projected_content)
                 if attachments:
-                    safe_item[content_key] = normalizer.sanitize_data(projected_content)
                     safe_item["controlAttachments"] = normalizer.sanitize_data(attachments)
                 continue
-            if (
-                raw_item.get("role") != "assistant"
-                or gateway is None
-                or not gateway.env_managed
-            ):
+            if raw_item.get("role") == "tool":
+                if content_key is not None:
+                    cleaned_tool_content, _ = project_email_reference_prompt(raw_content)
+                    safe_item[content_key] = normalizer.sanitize_data(
+                        cleaned_tool_content
+                    )
+                references: list[EmailReferenceCandidate] = []
+                for field in ("emailReferences", "email_references"):
+                    references.extend(email_reference_candidates(raw_item.get(field)))
+                if references:
+                    base = f"/api/v1/sessions/{row.id}/email-references"
+                    projected_references: list[dict[str, Any]] = []
+                    seen: set[str] = set()
+                    for reference in references:
+                        if reference.fingerprint not in projectable_email_fingerprints:
+                            continue
+                        if reference.fingerprint in seen:
+                            continue
+                        seen.add(reference.fingerprint)
+                        reference_id = self._email_reference_id(row, reference)
+                        reference_url = f"{base}/{reference_id}"
+                        projected_references.append(
+                            reference.public_view(
+                                reference_id=reference_id,
+                                preview_url=reference_url,
+                                open_url=(
+                                    f"{reference_url}/open"
+                                    if reference.source_url
+                                    else None
+                                ),
+                            )
+                        )
+                    safe_item["controlEmailReferences"] = projected_references[:8]
+                continue
+            if raw_item.get("role") != "assistant":
+                continue
+
+            references: list[EmailReferenceCandidate] = []
+            for field in ("emailReferences", "email_references"):
+                references.extend(email_reference_candidates(raw_item.get(field)))
+            projected_content, embedded = project_email_reference_prompt(raw_content)
+            references.extend(embedded)
+            if content_key is not None:
+                safe_item[content_key] = normalizer.sanitize_data(projected_content)
+            if references:
+                base = f"/api/v1/sessions/{row.id}/email-references"
+                projected_references: list[dict[str, Any]] = []
+                seen: set[str] = set()
+                for reference in references:
+                    if reference.fingerprint not in projectable_email_fingerprints:
+                        continue
+                    if reference.fingerprint in seen:
+                        continue
+                    seen.add(reference.fingerprint)
+                    reference_id = self._email_reference_id(row, reference)
+                    reference_url = f"{base}/{reference_id}"
+                    projected_references.append(
+                        reference.public_view(
+                            reference_id=reference_id,
+                            preview_url=reference_url,
+                            open_url=(
+                                f"{reference_url}/open"
+                                if reference.source_url
+                                else None
+                            ),
+                        )
+                    )
+                    if len(projected_references) == 8:
+                        break
+                if projected_references:
+                    safe_item["controlEmailReferences"] = projected_references
+
+            if content_key is None or gateway is None or not gateway.env_managed:
                 continue
             playable: list[tuple[AudioMediaMarker, SessionMediaAsset]] = []
-            for media_index, marker in enumerate(_audio_media_markers(raw_content)):
+            for media_index, marker in enumerate(_audio_media_markers(projected_content)):
                 asset = self._media_asset(
                     row,
                     history_index=history_index,
@@ -3270,7 +3384,7 @@ class SessionService:
                 continue
             safe_item[content_key] = normalizer.sanitize_data(
                 _without_media_markers(
-                    raw_content,
+                    projected_content,
                     [marker for marker, _ in playable],
                 )
             )
@@ -3284,11 +3398,136 @@ class SessionService:
             ]
         return list(sanitized)
 
+    @staticmethod
+    def _iter_email_references_from_history(
+        history: list[dict[str, Any]],
+    ) -> Iterator[EmailReferenceCandidate]:
+        seen: set[str] = set()
+        # Hermes returns chronological history; select newest citations first
+        # so long automation transcripts cannot starve recent cards.
+        for item in reversed(history):
+            if not isinstance(item, dict) or item.get("role") not in {
+                "assistant",
+                "tool",
+            }:
+                continue
+            candidates: list[EmailReferenceCandidate] = []
+            for field in ("emailReferences", "email_references"):
+                candidates.extend(email_reference_candidates(item.get(field)))
+            content = item.get("content", item.get("text"))
+            if item.get("role") == "assistant" and isinstance(content, str):
+                _, embedded = project_email_reference_prompt(content)
+                candidates.extend(embedded)
+            for candidate in reversed(candidates):
+                if candidate.fingerprint in seen:
+                    continue
+                seen.add(candidate.fingerprint)
+                yield candidate
+
+    @classmethod
+    def _email_references_from_history(
+        cls,
+        history: list[dict[str, Any]],
+        *,
+        limit: int = 512,
+    ) -> list[EmailReferenceCandidate]:
+        references: list[EmailReferenceCandidate] = []
+        for candidate in cls._iter_email_references_from_history(history):
+            references.append(candidate)
+            if len(references) == limit:
+                break
+        return references
+
+    def _email_reference_id(
+        self,
+        row: SessionLink,
+        reference: EmailReferenceCandidate,
+    ) -> str:
+        return scoped_email_reference_id(self.services.vault, row, reference)
+
+    def _cache_email_references(
+        self,
+        db: Session,
+        row: SessionLink,
+        references: list[EmailReferenceCandidate],
+    ) -> None:
+        cache_references(
+            db,
+            self.services.vault,
+            row,
+            references,
+            candidate_limit=512,
+            retain_only=True,
+        )
+
+    def _cached_email_reference(
+        self,
+        db: Session,
+        row: SessionLink,
+        reference_id: str,
+    ) -> EmailReferenceCandidate | None:
+        return cached_reference(
+            db,
+            self.services.vault,
+            row,
+            reference_id,
+        )
+
     async def history(self, db: Session, actor: User, row: SessionLink) -> list[dict[str, Any]]:
         history = await self._raw_history(db, row)
         self._reconcile_active_prompt_from_history(db, row, history)
+        projected = self._project_history(db, row, history)
+        self._cache_email_references(
+            db,
+            row,
+            self._email_references_from_history(history),
+        )
         db.commit()
-        return self._project_history(db, row, history)
+        return projected
+
+    async def email_reference(
+        self,
+        db: Session,
+        actor: User,
+        row: SessionLink,
+        reference_id: str,
+    ) -> SessionEmailReferenceAsset:
+        """Resolve an opaque reference from encrypted cache, then live history."""
+
+        if not _SAFE_EMAIL_REFERENCE_ID.fullmatch(reference_id):
+            raise NotFoundError("Email reference not found")
+        cached = self._cached_email_reference(db, row, reference_id)
+        if cached is not None:
+            db.commit()
+            return SessionEmailReferenceAsset(
+                reference_id=reference_id,
+                reference=cached,
+            )
+        history = await self._raw_history(db, row)
+        recent: list[EmailReferenceCandidate] = []
+        resolved: EmailReferenceCandidate | None = None
+        for reference in self._iter_email_references_from_history(history):
+            if len(recent) < 512:
+                recent.append(reference)
+            scoped_id = self._email_reference_id(row, reference)
+            if hmac.compare_digest(scoped_id, reference_id):
+                resolved = reference
+                break
+        cache_references(
+            db,
+            self.services.vault,
+            row,
+            recent,
+            candidate_limit=512,
+        )
+        if resolved is not None:
+            db.commit()
+            return SessionEmailReferenceAsset(
+                reference_id=reference_id,
+                reference=resolved,
+            )
+        db.commit()
+        raise NotFoundError("Email reference not found")
 
     async def runtime_recovery_required(
         self,
@@ -3386,6 +3625,7 @@ class SessionService:
         idempotency_key: str,
         attachments: list[PromptAttachment] | None = None,
     ) -> dict[str, Any]:
+        control_prompt = prompt
         await require_capability(
             db,
             self.services,
@@ -3480,6 +3720,10 @@ class SessionService:
                     else {}
                 ),
             }
+            control_prompt = self._prompt_with_email_protocol(
+                prompt,
+                baseline_history,
+            )
             # Consume the exception before dispatch and persist that fact with
             # the boundary. A later 404 can never inherit this authorization,
             # including after a crash or an ambiguous first mutation.
@@ -3520,11 +3764,11 @@ class SessionService:
             routed, receipt = await self.services.session_router.submit_prompt(
                 route=self._route(row),
                 connection=connection,
-                prompt=prompt,
+                prompt=control_prompt,
                 idempotency_key=idempotency_key,
                 operation_id=idempotency_key,
                 attachments=attachments,
-                before_dispatch=remember_prompt_hash if attachments else None,
+                before_dispatch=remember_prompt_hash,
             )
             # A very fast upstream can emit its terminal event before this
             # request commits the accepted receipt. Refresh so the durable
@@ -3622,6 +3866,31 @@ class SessionService:
     @staticmethod
     def _prompt_digest(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _prompt_with_email_protocol(
+        prompt: str,
+        history: list[dict[str, Any]],
+    ) -> str:
+        """Prime mail-card output only for explicit, currently relevant intent."""
+
+        if _EMAIL_INTENT_PATTERN.search(prompt) is None:
+            return prompt
+        recent_user_content: list[str] = []
+        for item in reversed(history):
+            if not isinstance(item, dict) or item.get("role") != "user":
+                continue
+            content = item.get("content", item.get("text"))
+            if isinstance(content, str):
+                recent_user_content.append(content)
+            if len(recent_user_content) == 20:
+                break
+        if any(
+            has_email_reference_instruction(content)
+            for content in recent_user_content
+        ):
+            return prompt
+        return compose_email_reference_prompt(prompt)
 
     @classmethod
     def _reconcile_active_prompt_from_history(
@@ -4511,7 +4780,11 @@ class AutomationService:
                 run_id=receipt.run_id,
                 automation_id=row.hermes_automation_id,
             ):
-                persist_normalized_event(self.services.session_factory, event)
+                persist_normalized_event(
+                    self.services.session_factory,
+                    event,
+                    vault=self.services.vault,
+                )
         return run
 
     async def execute_queued_trigger(self, run_id: str) -> None:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
 import json
 import re
 import time
@@ -11,7 +13,7 @@ from pathlib import PurePath
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Path, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -51,6 +53,7 @@ from ..schemas import (
     CapabilitiesView,
     ClarificationResponseRequest,
     ClarificationResponseView,
+    EmailReferencePreviewView,
     GatewayCreate,
     GatewayUpdate,
     GatewayView,
@@ -82,6 +85,7 @@ from ..schemas import (
 from ..services import (
     AutomationService,
     GatewayService,
+    NotFoundError,
     ProfileService,
     SearchService,
     SessionService,
@@ -1709,6 +1713,65 @@ async def session_history(
     }
 
 
+@router.get(
+    "/sessions/{session_id}/email-references/{reference_id}",
+    response_model=EmailReferencePreviewView,
+)
+async def session_email_reference(
+    session_id: str,
+    reference_id: str,
+    request: Request,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Return a bounded plain-text preview from owned cache/history."""
+
+    service = SessionService(services(request))
+    row = service.owned(db, user, session_id)
+    asset = await service.email_reference(db, user, row, reference_id)
+    base = f"/api/v1/sessions/{row.id}/email-references/{asset.reference_id}"
+    payload = asset.reference.public_view(
+        reference_id=asset.reference_id,
+        preview_url=base,
+        open_url=f"{base}/open" if asset.reference.source_url else None,
+        include_body=True,
+    )
+    return JSONResponse(
+        payload,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Security-Policy": "default-src 'none'",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/sessions/{session_id}/email-references/{reference_id}/open")
+async def open_session_email_reference(
+    session_id: str,
+    reference_id: str,
+    request: Request,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Redirect through an owned reference to one allowlisted mail provider."""
+
+    service = SessionService(services(request))
+    row = service.owned(db, user, session_id)
+    asset = await service.email_reference(db, user, row, reference_id)
+    if not asset.reference.source_url:
+        raise NotFoundError("Email open target not found")
+    return RedirectResponse(
+        asset.reference.source_url,
+        status_code=307,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.get("/sessions/{session_id}/media/{media_id}")
 async def session_media(
     session_id: str,
@@ -2159,6 +2222,7 @@ def bind_owned_realtime_event(
     *,
     user_id: str,
     payload: dict[str, Any],
+    email_reference_key: bytes | None = None,
 ) -> dict[str, Any] | None:
     """Bind an upstream event only when every supplied route identity agrees."""
 
@@ -2299,6 +2363,55 @@ def bind_owned_realtime_event(
         bound["sessionId"] = control_session.id
         bound["storedSessionId"] = control_session.stored_session_id
         bound["runtimeSessionId"] = control_session.runtime_session_id
+        data = bound.get("data")
+        if isinstance(data, dict) and isinstance(
+            data.get("controlEmailReferences"), list
+        ):
+            projected_references: list[dict[str, Any]] = []
+            for item in data["controlEmailReferences"][:8]:
+                if not isinstance(item, dict):
+                    continue
+                fingerprint = item.get("_fingerprint")
+                if (
+                    email_reference_key is None
+                    or not isinstance(fingerprint, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+                ):
+                    continue
+                reference_id = hmac.new(
+                    email_reference_key,
+                    b"hermes-control.email-reference-id.v1\0"
+                    + control_session.id.encode("utf-8")
+                    + b"\0"
+                    + bytes.fromhex(fingerprint),
+                    hashlib.sha256,
+                ).hexdigest()[:32]
+                # The EventHub intentionally retains a pre-binding fingerprint.
+                # Build a fresh allowlisted browser view so no future private
+                # transport extension can cross this ownership boundary.
+                projected = {
+                    key: item[key]
+                    for key in (
+                        "schemaVersion",
+                        "provider",
+                        "subject",
+                        "senderName",
+                        "senderAddress",
+                        "receivedAt",
+                        "snippet",
+                    )
+                    if key in item
+                }
+                projected["id"] = reference_id
+                projected["previewUrl"] = (
+                    f"/api/v1/sessions/{control_session.id}/email-references/"
+                    f"{reference_id}"
+                )
+                projected_references.append(projected)
+            bound["data"] = {
+                **data,
+                "controlEmailReferences": projected_references,
+            }
         return bound
 
 
@@ -2335,6 +2448,7 @@ async def realtime_socket(websocket: WebSocket) -> None:
             websocket.app.state.session_factory,
             user_id=row.user_id,
             payload=payload,
+            email_reference_key=websocket.app.state.services.vault.key,
         )
 
     def auth_session_is_active() -> bool:

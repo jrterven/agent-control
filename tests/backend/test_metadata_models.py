@@ -15,6 +15,7 @@ from hermes_control_api.database import Base, build_engine, build_session_factor
 from hermes_control_api.models import (
     AttachmentReference,
     Draft,
+    EmailReferenceCache,
     Gateway,
     ProfileRef,
     ProfileVoicePreference,
@@ -36,6 +37,7 @@ APPLICATION_TABLES = {
     "automation_runs",
     "automations",
     "drafts",
+    "email_reference_cache",
     "gateway_credentials",
     "gateways",
     "idempotency_operations",
@@ -212,6 +214,24 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     }
     assert "subscription_ciphertext" in push_columns
     assert not ({"endpoint", "p256dh", "auth"} & push_columns)
+    email_cache_columns = {
+        column["name"] for column in schema.get_columns("email_reference_cache")
+    }
+    assert {
+        "owner_id",
+        "session_link_id",
+        "reference_id",
+        "payload_ciphertext",
+        "expires_at",
+    } <= email_cache_columns
+    assert not ({"body", "body_text", "source_url", "message_id"} & email_cache_columns)
+    email_cache_fks = {
+        foreign_key["name"]: foreign_key
+        for foreign_key in schema.get_foreign_keys("email_reference_cache")
+    }
+    cache_session_fk = email_cache_fks["fk_email_reference_cache_session_owner"]
+    assert cache_session_fk["referred_table"] == "session_links"
+    assert cache_session_fk["options"].get("ondelete") == "CASCADE"
     assert "capabilities_checked_at" in {
         column["name"] for column in schema.get_columns("profile_refs")
     }
@@ -237,7 +257,7 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0016_chat_notifications"
+        ).scalar_one() == "0017_email_reference_cache"
     engine.dispose()
 
     downgrade = subprocess.run(

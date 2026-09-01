@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { profiles } from "../data";
-import { applyRealtimeEvent } from "../hooks";
+import {
+  applyRealtimeEvent,
+  clearStreamingContentFilterState,
+  streamingContentFilterStatsForTests,
+} from "../hooks";
 import { useAppStore } from "../store/appStore";
 import type { ChatMessage, RealtimeEvent } from "../types";
 
@@ -15,6 +19,7 @@ function event(type: string, data: Record<string, unknown> = {}): RealtimeEvent 
 
 describe("normalized realtime events", () => {
   beforeEach(() => {
+    clearStreamingContentFilterState();
     useAppStore.setState({
       messages: [structuredClone(assistant)],
       sessionUsageById: {},
@@ -71,6 +76,165 @@ describe("normalized realtime events", () => {
     expect(activity).toHaveLength(80);
     expect(activity[0].id).toBe("activity-10");
     expect(activity.at(-1)?.summary?.length).toBeLessThanOrEqual(240);
+  });
+
+  it("attaches bounded same-origin email references to the active response", () => {
+    const previewUrl = "/api/v1/sessions/session-a/email-references/0123456789abcdef0123456789abcdef";
+    expect(applyRealtimeEvent(event("message.delta", {
+      delta: "Encontré un correo importante.",
+      controlEmailReferences: [{
+        schemaVersion: 1,
+        id: "0123456789abcdef0123456789abcdef",
+        provider: "gmail",
+        senderName: "Google Ads",
+        subject: "Verifica tu cuenta",
+        previewUrl,
+        openUrl: `${previewUrl}/open`,
+        openMode: "search",
+      }, {
+        schemaVersion: 1,
+        id: "fedcba9876543210fedcba9876543210",
+        provider: "imap",
+        subject: "Correo de Hostinger",
+        previewUrl: "/api/v1/sessions/session-a/email-references/fedcba9876543210fedcba9876543210",
+      }, {
+        schemaVersion: 1,
+        id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        provider: "outlook",
+        subject: "Ruta rechazada",
+        previewUrl: "https://attacker.example/preview",
+      }],
+    }))).toBe(true);
+
+    expect(useAppStore.getState().messages[0].emailReferences).toEqual([{
+      schemaVersion: 1,
+      id: "0123456789abcdef0123456789abcdef",
+      provider: "gmail",
+      senderName: "Google Ads",
+      subject: "Verifica tu cuenta",
+      previewUrl,
+      openUrl: `${previewUrl}/open`,
+      openMode: "search",
+    }, {
+      schemaVersion: 1,
+      id: "fedcba9876543210fedcba9876543210",
+      provider: "imap",
+      subject: "Correo de Hostinger",
+      previewUrl: "/api/v1/sessions/session-a/email-references/fedcba9876543210fedcba9876543210",
+    }]);
+  });
+
+  it("never flashes a mail-reference transport marker split across deltas", () => {
+    const marker = "<!-- hermes-control-email-reference-v1";
+    for (let length = 1; length < marker.length; length += 1) {
+      const messageId = `assistant-boundary-${length}`;
+      useAppStore.setState({
+        messages: [{ ...assistant, id: messageId, content: "" }],
+        streamingBySession: { "session-a": messageId },
+        pendingOperations: { "operation-a": messageId },
+      });
+      applyRealtimeEvent(event("message.delta", { delta: `Respuesta visible.\n\n${marker.slice(0, length)}` }));
+      expect(useAppStore.getState().messages[0].content, `marker boundary ${length}`).toBe("Respuesta visible.");
+    }
+
+    useAppStore.setState({
+      messages: [{ ...assistant, content: "" }],
+      streamingBySession: { "session-a": assistant.id },
+      pendingOperations: { "operation-a": assistant.id },
+    });
+    useAppStore.getState().updateMessage(assistant.id, { content: "" });
+    applyRealtimeEvent(event("message.delta", { delta: "Respuesta visible." }));
+    applyRealtimeEvent(event("message.delta", { delta: "\n\n<!-- hermes-control-email-ref" }));
+    expect(useAppStore.getState().messages[0].content).toBe("Respuesta visible.");
+
+    applyRealtimeEvent(event("message.delta", {
+      delta: "erence-v1 {\"provider\":\"gmail\",\"subject\":\"Privado\"} -->",
+    }));
+    expect(useAppStore.getState().messages[0].content).toBe("Respuesta visible.");
+    expect(JSON.stringify(useAppStore.getState().messages[0])).not.toContain("hermes-control-email-reference");
+  });
+
+  it("filters mixed-case, whitespace-split markers with tiny bounded state", () => {
+    useAppStore.getState().updateMessage(assistant.id, { content: "" });
+    applyRealtimeEvent(event("message.delta", { delta: "Respuesta visible.\n\n<!" }));
+    applyRealtimeEvent(event("message.delta", { delta: "--   HeRmEs-CoNtRoL-EmAiL-ReFeReNcE-v1" }));
+    applyRealtimeEvent(event("message.delta", { delta: ` ${"payload-privado ".repeat(20_000)}` }));
+
+    expect(useAppStore.getState().messages[0].content).toBe("Respuesta visible.");
+    expect(streamingContentFilterStatsForTests()).toEqual({
+      entries: 1,
+      tombstones: 0,
+      quarantinedSessions: 0,
+      globalQuarantine: false,
+      retainedCharacters: 0,
+      largestPendingCharacters: 0,
+    });
+
+    applyRealtimeEvent(event("message.delta", { delta: "-->Texto público posterior." }));
+    expect(useAppStore.getState().messages[0].content).toBe("Respuesta visible.Texto público posterior.");
+    expect(streamingContentFilterStatsForTests().entries).toBe(0);
+
+    for (let index = 0; index < 40; index += 1) {
+      const messageId = `assistant-filter-bound-${index}`;
+      useAppStore.setState({
+        messages: [{ ...assistant, id: messageId, content: "" }],
+        streamingBySession: { [`session-${index}`]: messageId },
+        pendingOperations: { [`operation-${index}`]: messageId },
+      });
+      applyRealtimeEvent({
+        type: "message.delta",
+        correlationId: `operation-${index}`,
+        controlSessionId: `session-${index}`,
+        data: { delta: "\n\n<" },
+      });
+    }
+    const bounded = streamingContentFilterStatsForTests();
+    expect(bounded.entries).toBe(32);
+    expect(bounded.tombstones).toBe(8);
+    expect(bounded.largestPendingCharacters).toBeLessThanOrEqual(65);
+    expect(bounded.retainedCharacters).toBeLessThanOrEqual(32 * 65);
+
+    const evictedMessageId = "assistant-filter-bound-0";
+    useAppStore.setState({
+      messages: [{ ...assistant, id: evictedMessageId, sessionId: "session-0", content: "" }],
+      streamingBySession: { "session-0": evictedMessageId },
+      pendingOperations: { "operation-0": evictedMessageId },
+    });
+    applyRealtimeEvent({
+      type: "message.delta",
+      correlationId: "operation-0",
+      controlSessionId: "session-0",
+      data: { delta: "PRIVATE TAIL -->texto que también queda en cuarentena" },
+    });
+    expect(useAppStore.getState().messages[0].content).toBe("");
+    applyRealtimeEvent({
+      type: "message.completed",
+      correlationId: "operation-0",
+      controlSessionId: "session-0",
+    });
+    expect(streamingContentFilterStatsForTests().tombstones).toBe(7);
+
+    const currentMessageId = "assistant-filter-bound-39";
+    useAppStore.setState({
+      messages: [{ ...assistant, id: currentMessageId, sessionId: "session-39" }],
+      streamingBySession: { "session-39": currentMessageId },
+      pendingOperations: { "operation-39": currentMessageId },
+    });
+    applyRealtimeEvent({
+      type: "message.completed",
+      correlationId: "operation-39",
+      controlSessionId: "session-39",
+    });
+    expect(streamingContentFilterStatsForTests().entries).toBe(31);
+    expect(useAppStore.getState().messages.find((message) => message.id === currentMessageId)?.streaming).toBe(false);
+
+    clearStreamingContentFilterState();
+    expect(streamingContentFilterStatsForTests()).toMatchObject({
+      entries: 0,
+      tombstones: 0,
+      quarantinedSessions: 0,
+      globalQuarantine: false,
+    });
   });
 
   it.each(["message.error", "run.interrupted", "interrupted"])("treats %s as a terminal stream event", (type) => {

@@ -31,6 +31,7 @@ with host access.
 | Replay gap/restart | Missing or reordered UI state | `(epoch, seq)` dedupe, truncation detection, history rehydrate |
 | Secret in logs/errors | Credential disclosure | structured allowlist logs, recursive redaction, safe upstream error mapping |
 | Untrusted Markdown/tool output | XSS or data exfiltration | sanitize HTML/URLs, CSP, no arbitrary iframes, safe download proxy |
+| Hostile or fabricated email reference | Phishing, cross-session disclosure or remote tracking | owner/session-bound HMAC id, encrypted AAD-bound cache with live-history fallback, strict provider/URL allowlist, plain-text preview, no remote images and no claim that agent metadata is verified |
 | WebSocket abuse | memory/CPU exhaustion | one-use tickets, origin/auth checks, frame/rate/subscription limits and bounded queues |
 | Vault/database theft | gateway credential disclosure | AES-256-GCM, random nonce, AAD, external master key, filesystem mode 0600 |
 | Malicious gateway response | parser/resource exhaustion | response size/depth limits, strict envelopes with forward-compatible unknown fields |
@@ -53,6 +54,17 @@ with host access.
 - A route mismatch fails before an upstream call.
 - Redirects and resolved IP changes are revalidated by SSRF policy.
 - Raw `reasoning.*`, secret prompts and host paths are absent from browser events.
+- Email reference transport instructions, account/mailbox identifiers, UIDs,
+  RFC Message-IDs, source URLs and body text are absent from ordinary history
+  projections. Preview/open endpoints resolve the opaque id only from that
+  authenticated session's AAD-bound cache or, on a miss, its Hermes history;
+  they return `no-store` and never render remote email HTML.
+- Offline email previews are AES-GCM Vault envelopes bound with AAD to the
+  owner, session and opaque reference. Their fixed seven-day TTL is purged at
+  startup and hourly; an accessed expired entry is also deleted. Normal reads
+  never extend an entry, although a later live-history refresh can validate the
+  source again and create a new fixed-TTL envelope. Encrypted
+  copies in backups remain subject to the backup retention policy.
 - Logout invalidates tickets, clears offline cache and expires the server session.
 - Stop, background, navigation, logout and error close every microphone track,
   audio processor and transcription WebSocket. Reconnect always mints a fresh

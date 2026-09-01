@@ -141,6 +141,30 @@ export type MessageAttachment = {
   size: number;
 };
 
+/**
+ * A bounded mail-reference marker projected by Agent Control from agent
+ * output. The marker is not proof that a sender or message is authentic.
+ * Provider identifiers and credentials intentionally never reach the browser;
+ * preview and open actions stay behind same-origin Control API routes.
+ */
+export type EmailReference = {
+  schemaVersion: 1;
+  id: string;
+  provider: "gmail" | "outlook" | "imap";
+  senderName?: string;
+  senderAddress?: string;
+  subject: string;
+  receivedAt?: string;
+  snippet?: string;
+  previewUrl: string;
+  openUrl?: string;
+  openMode?: "direct" | "search";
+};
+
+export type EmailReferencePreview = EmailReference & {
+  bodyText?: string;
+};
+
 export type DictationFeature = {
   available: boolean;
   provider: "elevenlabs";
@@ -178,6 +202,7 @@ export type ChatMessage = {
   activity?: AgentActivityItem[];
   media?: MessageMedia[];
   attachments?: MessageAttachment[];
+  emailReferences?: EmailReference[];
   streaming?: boolean;
 };
 

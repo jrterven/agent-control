@@ -59,6 +59,19 @@
   unavailable through the `8642` API fallback. A message accepts at most five
   supported files, 8 MB each and 12 MB combined. Offline snapshots and drafts
   exclude attachment bytes.
+- Email cards currently use a bounded, versioned reference emitted in the
+  assistant transcript. Agent Control validates and sanitizes it, but Hermes
+  0.20.6 does not preserve authoritative mail-tool results in session history,
+  so card metadata is not independently verified against the mailbox. The
+  preview is plain text only. Himalaya/IMAP provides no stable provider web
+  link: Gmail can fall back to a best-effort RFC Message-ID search, while an
+  Outlook direct link requires a validated Microsoft Graph `webLink`.
+- Validated email preview bodies are capped at 12,000 characters and cached
+  encrypted for a fixed seven days (at most 512 references per conversation).
+  A history refresh seeds and displays the most recent 512 references; older
+  references remain ordinary answer text without an actionable card. Database
+  backups can retain the encrypted envelope until the backup's own retention
+  period expires.
 - BYOK dictation currently uses ElevenLabs Scribe and needs public Internet
   access from both the Control backend (HTTPS token mint) and the browser
   (`wss://api.elevenlabs.io`). It may be unavailable while the tailnet-hosted

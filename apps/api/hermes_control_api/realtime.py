@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from hermes_client import NormalizedEvent
+from hermes_client import NormalizedEvent, email_reference_candidates
 from sqlalchemy import select
 
 from .gateway_health import aggregate_profile_health
+from .email_reference_cache import cache_references
 from .models import (
     Automation,
     AutomationRun,
@@ -17,6 +18,7 @@ from .models import (
     utc_now,
 )
 from .notifications import ChatCompletionNotification, completion_for_session
+from .security import SecretVault
 
 
 _SUCCESS = {"message.complete", "message.completed", "message.done", "run.completed"}
@@ -56,6 +58,7 @@ def persist_normalized_event(
     event: NormalizedEvent,
     *,
     gateway_health_ttl_seconds: int = 60,
+    vault: SecretVault | None = None,
 ) -> ChatCompletionNotification | None:
     """Persist terminal/cursor state before browser fanout.
 
@@ -170,6 +173,21 @@ def persist_normalized_event(
                 session.last_sequence = max(session.last_sequence, event.sequence)
         if event.replay_epoch:
             session.replay_epoch = event.replay_epoch
+        if vault is not None:
+            private_references = email_reference_candidates(
+                event.private_data.get("emailReferences")
+            )
+            if private_references:
+                # This sink runs even with zero subscribers. Cache before
+                # fanout so a completed background task remains previewable
+                # after its gateway sleeps.
+                cache_references(
+                    db,
+                    vault,
+                    session,
+                    private_references,
+                    candidate_limit=8,
+                )
         terminal = terminal_status(event.type, event.data)
         completion: ChatCompletionNotification | None = None
         if terminal:

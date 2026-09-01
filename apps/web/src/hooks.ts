@@ -26,6 +26,7 @@ import type {
   ChatMessage,
   ClarificationQuestion,
   ClarificationRequest,
+  EmailReference,
   Profile,
   RealtimeEvent,
   SessionUsage,
@@ -37,6 +38,16 @@ const unmatchedSessionEvents = new Map<string, RealtimeEvent[]>();
 const rehydrationGenerations = new Map<string, number>();
 const activeSessionRecoveries = new Map<string, Promise<void>>();
 const interactionRevisions = new Map<string, number>();
+type StreamingMarkerState = {
+  sessionId: string;
+  mode: "outside" | "candidate" | "marker";
+  pending: string;
+  leadingWhitespace: string;
+};
+const streamingMarkerStates = new Map<string, StreamingMarkerState>();
+const streamingMarkerTombstones = new Map<string, string>();
+const streamingMarkerQuarantinedSessions = new Set<string>();
+let streamingMarkerGlobalQuarantine = false;
 let nextRehydrationGeneration = 0;
 const CONTROL_BOOT_READ_TIMEOUT_MS = 8_000;
 const CONTROL_BOOT_RETRY_INITIAL_MS = 1_000;
@@ -266,6 +277,242 @@ function nextAgentActivity(current: ChatMessage | undefined, item: AgentActivity
   return [...existing, item].slice(-MAX_AGENT_ACTIVITY_ITEMS);
 }
 
+const MAX_EMAIL_REFERENCES = 8;
+const HTML_COMMENT_START = "<!--";
+const EMAIL_REFERENCE_MARKER_NAME = "hermes-control-email-reference-v1";
+const EMAIL_REFERENCE_MARKER_END = "-->";
+const MAX_STREAMING_MARKER_STATES = 32;
+const MAX_STREAMING_MARKER_TOMBSTONES = 256;
+const MAX_STREAMING_MARKER_QUARANTINED_SESSIONS = 64;
+const MAX_MARKER_LEADING_WHITESPACE = 64;
+
+function boundedOptionalText(value: unknown, maximum: number) {
+  if (typeof value !== "string") return undefined;
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact ? compact.slice(0, maximum) : undefined;
+}
+
+function exactControlEmailUrl(value: unknown, sessionId: string, referenceId: string, suffix = "") {
+  if (typeof value !== "string") return undefined;
+  const expectedPath = `/api/v1/sessions/${encodeURIComponent(sessionId)}/email-references/${encodeURIComponent(referenceId)}${suffix}`;
+  try {
+    const parsed = new URL(value, window.location.origin);
+    if (
+      parsed.origin !== window.location.origin
+      || parsed.pathname !== expectedPath
+      || parsed.search
+      || parsed.hash
+    ) return undefined;
+    return expectedPath;
+  } catch {
+    return undefined;
+  }
+}
+
+function emailReferencesFromValue(sessionId: string, value: unknown): EmailReference[] {
+  if (!Array.isArray(value)) return [];
+  const references = value.slice(0, MAX_EMAIL_REFERENCES).flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const row = candidate as Record<string, unknown>;
+    if (
+      row.schemaVersion !== 1
+      || (row.provider !== "gmail" && row.provider !== "outlook" && row.provider !== "imap")
+    ) return [];
+    const provider: EmailReference["provider"] = row.provider;
+    const id = boundedOptionalText(row.id, 160);
+    const subject = boundedOptionalText(row.subject, 500);
+    if (!id || !subject || !/^[0-9a-f]{32}$/.test(id)) return [];
+    const previewUrl = exactControlEmailUrl(row.previewUrl, sessionId, id);
+    if (!previewUrl) return [];
+    const openUrl = exactControlEmailUrl(row.openUrl, sessionId, id, "/open");
+    const openMode: EmailReference["openMode"] = row.openMode === "direct" || row.openMode === "search"
+      ? row.openMode
+      : undefined;
+    return [{
+      schemaVersion: 1 as const,
+      id,
+      provider,
+      subject,
+      previewUrl,
+      ...(boundedOptionalText(row.senderName, 200) ? { senderName: boundedOptionalText(row.senderName, 200) } : {}),
+      ...(boundedOptionalText(row.senderAddress, 320) ? { senderAddress: boundedOptionalText(row.senderAddress, 320) } : {}),
+      ...(boundedOptionalText(row.receivedAt, 80) ? { receivedAt: boundedOptionalText(row.receivedAt, 80) } : {}),
+      ...(boundedOptionalText(row.snippet, 1_000) ? { snippet: boundedOptionalText(row.snippet, 1_000) } : {}),
+      ...(openUrl ? { openUrl } : {}),
+      ...(openUrl && openMode ? { openMode } : {}),
+    }];
+  });
+  return [...new Map(references.map((reference) => [reference.id, reference])).values()];
+}
+
+function longestTokenPrefixSuffix(value: string, token: string) {
+  const maximum = Math.min(token.length - 1, value.length);
+  for (let length = maximum; length >= 1; length -= 1) {
+    if (value.endsWith(token.slice(0, length))) return length;
+  }
+  return 0;
+}
+
+function rememberStreamingMarkerState(messageId: string, state?: StreamingMarkerState) {
+  streamingMarkerStates.delete(messageId);
+  if (state) streamingMarkerStates.set(messageId, state);
+  while (streamingMarkerStates.size > MAX_STREAMING_MARKER_STATES) {
+    const oldest = streamingMarkerStates.keys().next().value;
+    if (typeof oldest !== "string") break;
+    const evicted = streamingMarkerStates.get(oldest);
+    streamingMarkerStates.delete(oldest);
+    if (!evicted) continue;
+    streamingMarkerTombstones.delete(oldest);
+    streamingMarkerTombstones.set(oldest, evicted.sessionId);
+    while (streamingMarkerTombstones.size > MAX_STREAMING_MARKER_TOMBSTONES) {
+      const oldestTombstone = streamingMarkerTombstones.keys().next().value;
+      if (typeof oldestTombstone !== "string") break;
+      const quarantinedSession = streamingMarkerTombstones.get(oldestTombstone);
+      streamingMarkerTombstones.delete(oldestTombstone);
+      if (quarantinedSession) streamingMarkerQuarantinedSessions.add(quarantinedSession);
+      if (streamingMarkerQuarantinedSessions.size > MAX_STREAMING_MARKER_QUARANTINED_SESSIONS) {
+        streamingMarkerGlobalQuarantine = true;
+        streamingMarkerQuarantinedSessions.clear();
+        streamingMarkerTombstones.clear();
+      }
+    }
+  }
+}
+
+function clearStreamingMarkerStatesForSession(sessionId: string) {
+  streamingMarkerStates.forEach((state, messageId) => {
+    if (state.sessionId === sessionId) streamingMarkerStates.delete(messageId);
+  });
+  streamingMarkerTombstones.forEach((tombstoneSessionId, messageId) => {
+    if (tombstoneSessionId === sessionId) streamingMarkerTombstones.delete(messageId);
+  });
+  streamingMarkerQuarantinedSessions.delete(sessionId);
+}
+
+export function clearStreamingContentFilterState() {
+  streamingMarkerStates.clear();
+  streamingMarkerTombstones.clear();
+  streamingMarkerQuarantinedSessions.clear();
+  streamingMarkerGlobalQuarantine = false;
+}
+
+export function streamingContentFilterStatsForTests() {
+  const pendingLengths = [...streamingMarkerStates.values()]
+    .map((state) => state.pending.length + state.leadingWhitespace.length);
+  return {
+    entries: streamingMarkerStates.size,
+    tombstones: streamingMarkerTombstones.size,
+    quarantinedSessions: streamingMarkerQuarantinedSessions.size,
+    globalQuarantine: streamingMarkerGlobalQuarantine,
+    retainedCharacters: pendingLengths.reduce((total, length) => total + length, 0),
+    largestPendingCharacters: Math.max(0, ...pendingLengths),
+  };
+}
+
+/**
+ * Transport markers may cross arbitrary realtime chunk boundaries. Retain only
+ * the possible opening/closing-token suffix (never the response or marker
+ * payload), and discard marker bytes incrementally. Hermes/Control remains the
+ * security boundary; this filter prevents a distracting browser-side flash.
+ */
+function visibleStreamingDelta(messageId: string, sessionId: string, delta: string) {
+  if (
+    streamingMarkerGlobalQuarantine
+    || streamingMarkerTombstones.has(messageId)
+    || streamingMarkerQuarantinedSessions.has(sessionId)
+  ) return "";
+  const remembered = streamingMarkerStates.get(messageId);
+  let mode = remembered?.mode ?? "outside";
+  let pending = remembered?.pending ?? "";
+  let leadingWhitespace = remembered?.leadingWhitespace ?? "";
+  let remaining = delta;
+  let visible = "";
+
+  while (remaining) {
+    const source = `${pending}${remaining}`;
+    pending = "";
+    remaining = "";
+
+    if (mode === "marker") {
+      const markerEnd = source.indexOf(EMAIL_REFERENCE_MARKER_END);
+      if (markerEnd >= 0) {
+        mode = "outside";
+        remaining = source.slice(markerEnd + EMAIL_REFERENCE_MARKER_END.length);
+        continue;
+      }
+      const suffixLength = longestTokenPrefixSuffix(source, EMAIL_REFERENCE_MARKER_END);
+      pending = suffixLength ? source.slice(-suffixLength) : "";
+      continue;
+    }
+
+    if (mode === "candidate") {
+      const firstNonWhitespace = source.search(/\S/);
+      if (firstNonWhitespace < 0) {
+        if (source.length > MAX_MARKER_LEADING_WHITESPACE) {
+          // An oversized comment prelude is not retained on constrained
+          // clients. Suppress it until the comment closes, then rehydrate.
+          leadingWhitespace = "";
+          mode = "marker";
+        } else {
+          pending = source;
+        }
+        continue;
+      }
+      const markerCandidate = source.slice(firstNonWhitespace);
+      const lowerCandidate = markerCandidate.toLowerCase();
+      if (EMAIL_REFERENCE_MARKER_NAME.startsWith(lowerCandidate)) {
+        pending = source;
+        continue;
+      }
+      if (lowerCandidate.startsWith(EMAIL_REFERENCE_MARKER_NAME)) {
+        leadingWhitespace = "";
+        mode = "marker";
+        remaining = markerCandidate.slice(EMAIL_REFERENCE_MARKER_NAME.length);
+        continue;
+      }
+      visible += `${leadingWhitespace}${HTML_COMMENT_START}`;
+      leadingWhitespace = "";
+      mode = "outside";
+      remaining = source;
+      continue;
+    }
+
+    const commentStart = source.indexOf(HTML_COMMENT_START);
+    if (commentStart >= 0) {
+      const beforeComment = `${leadingWhitespace}${source.slice(0, commentStart)}`;
+      const whitespace = beforeComment.match(/\s+$/)?.[0] ?? "";
+      leadingWhitespace = whitespace.slice(-MAX_MARKER_LEADING_WHITESPACE);
+      visible += beforeComment.slice(0, beforeComment.length - leadingWhitespace.length);
+      mode = "candidate";
+      remaining = source.slice(commentStart + HTML_COMMENT_START.length);
+      continue;
+    }
+
+    const suffixLength = longestTokenPrefixSuffix(source, HTML_COMMENT_START);
+    if (!suffixLength) {
+      visible += `${leadingWhitespace}${source}`;
+      leadingWhitespace = "";
+      continue;
+    }
+    const beforeSuffix = `${leadingWhitespace}${source.slice(0, -suffixLength)}`;
+    const whitespace = beforeSuffix.match(/\s+$/)?.[0] ?? "";
+    leadingWhitespace = whitespace.slice(-MAX_MARKER_LEADING_WHITESPACE);
+    visible += beforeSuffix.slice(0, beforeSuffix.length - leadingWhitespace.length);
+    pending = source.slice(-suffixLength);
+  }
+
+  rememberStreamingMarkerState(messageId, mode !== "outside" || pending || leadingWhitespace
+    ? { sessionId, mode, pending, leadingWhitespace }
+    : undefined);
+  return visible;
+}
+
+function mergeEmailReferences(current: EmailReference[] | undefined, incoming: EmailReference[]) {
+  const references = new Map((current ?? []).map((reference) => [reference.id, reference]));
+  incoming.forEach((reference) => references.set(reference.id, reference));
+  return [...references.values()].slice(-MAX_EMAIL_REFERENCES);
+}
+
 export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   const state = useAppStore.getState();
   const data = eventData(event);
@@ -345,6 +592,7 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   if (usageSessionId && hasUsageSnapshot) state.setSessionUsage(usageSessionId, usage);
   if (event.type === "session.usage") return Boolean(usageSessionId && hasUsageSnapshot);
   if (!messageId) {
+    if (terminalStreamEvent && routeSessionId) clearStreamingMarkerStatesForSession(routeSessionId);
     if (operationId) bufferUnmatchedEvent(operationId, event);
     else if (
       routeSessionId
@@ -370,14 +618,35 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
     // truthful "analyzing" state instead of exposing or fabricating text.
     return true;
   }
+  const currentMessage = state.messages.find((message) => message.id === messageId);
+  const realtimeEmailReferences = emailReferencesFromValue(
+    routeSessionId ?? currentMessage?.sessionId ?? "",
+    data.controlEmailReferences,
+  );
+  if (realtimeEmailReferences.length) {
+    state.updateMessage(messageId, {
+      emailReferences: mergeEmailReferences(currentMessage?.emailReferences, realtimeEmailReferences),
+    });
+  }
   if (event.type === "message.delta") {
     const current = state.messages.find((message) => message.id === messageId);
-    state.updateMessage(messageId, { content: `${current?.content ?? ""}${String(data.delta ?? data.text ?? data.content ?? "")}`, streaming: true });
+    const sessionId = routeSessionId ?? current?.sessionId ?? "";
+    const visibleDelta = visibleStreamingDelta(
+      messageId,
+      sessionId,
+      String(data.delta ?? data.text ?? data.content ?? ""),
+    );
+    state.updateMessage(messageId, { content: `${current?.content ?? ""}${visibleDelta}`, streaming: true });
     return true;
   }
   if (terminalStreamEvent) {
-    state.updateMessage(messageId, { streaming: false });
     const completedSessionId = routeSessionId ?? state.messages.find((message) => message.id === messageId)?.sessionId;
+    if (completedSessionId) clearStreamingMarkerStatesForSession(completedSessionId);
+    else {
+      streamingMarkerStates.delete(messageId);
+      streamingMarkerTombstones.delete(messageId);
+    }
+    state.updateMessage(messageId, { streaming: false });
     if (completedSessionId) state.setStreamingMessageId(completedSessionId, undefined);
     if (operationId) state.clearOperation(operationId);
     else {
@@ -442,6 +711,7 @@ type HistoryToolItem = {
   role: "tool";
   createdAt: string;
   tool: ToolRun;
+  emailReferences: EmailReference[];
 };
 
 type MappedHistoryItem = ChatMessage | HistoryToolItem;
@@ -531,13 +801,15 @@ function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index:
       role: "tool",
       createdAt,
       tool: toolFromHistory(item, id),
+      emailReferences: emailReferencesFromValue(sessionId, item.controlEmailReferences),
     };
   }
   if (role !== "user" && role !== "assistant" && role !== "system") return null;
   const media = mediaFromHistory(item);
   const attachments = attachmentsFromHistory(item);
+  const emailReferences = emailReferencesFromValue(sessionId, item.controlEmailReferences);
   const content = typeof item.content === "string" ? item.content : typeof item.text === "string" ? item.text : "";
-  if (!content && !media.length && !attachments.length) return null;
+  if (!content && !media.length && !attachments.length && !emailReferences.length) return null;
   return {
     id: String(item.id ?? `${sessionId}-history-${index}`),
     sessionId,
@@ -547,6 +819,7 @@ function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index:
     delivery: role === "user" ? "sent" : undefined,
     ...(media.length ? { media } : {}),
     ...(attachments.length ? { attachments } : {}),
+    ...(emailReferences.length ? { emailReferences } : {}),
   };
 }
 
@@ -556,9 +829,10 @@ function historyMessages(sessionId: string, items: Record<string, unknown>[]): C
     .filter((item): item is MappedHistoryItem => item !== null);
   const messages: ChatMessage[] = [];
   let pendingTools: ToolRun[] = [];
+  let pendingEmailReferences: EmailReference[] = [];
 
-  const attachPendingTools = () => {
-    if (!pendingTools.length) return;
+  const attachPendingEvidence = () => {
+    if (!pendingTools.length && !pendingEmailReferences.length) return;
     let assistantIndex = -1;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       if (messages[index].role === "user") break;
@@ -574,15 +848,23 @@ function historyMessages(sessionId: string, items: Record<string, unknown>[]): C
         role: "assistant",
         content: "",
         createdAt: "",
-        tools: pendingTools,
+        ...(pendingTools.length ? { tools: pendingTools } : {}),
+        ...(pendingEmailReferences.length ? { emailReferences: pendingEmailReferences } : {}),
       });
     } else {
       const assistant = messages[assistantIndex];
       const byId = new Map((assistant.tools ?? []).map((tool) => [tool.id, tool]));
       pendingTools.forEach((tool) => byId.set(tool.id, tool));
-      messages[assistantIndex] = { ...assistant, tools: [...byId.values()] };
+      messages[assistantIndex] = {
+        ...assistant,
+        ...(byId.size ? { tools: [...byId.values()] } : {}),
+        ...(pendingEmailReferences.length ? {
+          emailReferences: mergeEmailReferences(assistant.emailReferences, pendingEmailReferences),
+        } : {}),
+      };
     }
     pendingTools = [];
+    pendingEmailReferences = [];
   };
 
   mapped.forEach((item) => {
@@ -590,19 +872,27 @@ function historyMessages(sessionId: string, items: Record<string, unknown>[]): C
       const existing = pendingTools.findIndex((tool) => tool.id === item.tool.id);
       if (existing >= 0) pendingTools[existing] = item.tool;
       else pendingTools.push(item.tool);
+      pendingEmailReferences = mergeEmailReferences(pendingEmailReferences, item.emailReferences);
       return;
     }
-    if (item.role === "user") attachPendingTools();
-    if (item.role === "assistant" && pendingTools.length) {
+    if (item.role === "user") attachPendingEvidence();
+    if (item.role === "assistant" && (pendingTools.length || pendingEmailReferences.length)) {
       const byId = new Map((item.tools ?? []).map((tool) => [tool.id, tool]));
       pendingTools.forEach((tool) => byId.set(tool.id, tool));
-      messages.push({ ...item, tools: [...byId.values()] });
+      messages.push({
+        ...item,
+        ...(byId.size ? { tools: [...byId.values()] } : {}),
+        ...(pendingEmailReferences.length ? {
+          emailReferences: mergeEmailReferences(item.emailReferences, pendingEmailReferences),
+        } : {}),
+      });
       pendingTools = [];
+      pendingEmailReferences = [];
       return;
     }
     messages.push(item);
   });
-  attachPendingTools();
+  attachPendingEvidence();
   return messages;
 }
 
@@ -794,6 +1084,7 @@ export async function rehydrateSession(sessionId: string, recoveryAttempted = fa
           unmatchedEvents.delete(operationId);
         });
     }
+    clearStreamingMarkerStatesForSession(sessionId);
     unmatchedSessionEvents.delete(sessionId);
     appendTerminalHistoryNotice(sessionId, history.sessionStatus, history.items, messages);
     useAppStore.getState().setMessagesForSession(sessionId, messages);
@@ -812,6 +1103,10 @@ export async function rehydrateSession(sessionId: string, recoveryAttempted = fa
 export function useAuthBootstrap() {
   const authState = useAppStore((state) => state.authState);
   const setAuth = useAppStore((state) => state.setAuth);
+
+  useEffect(() => {
+    if (authState === "unauthenticated") clearStreamingContentFilterState();
+  }, [authState]);
 
   useEffect(() => {
     if (authState !== "checking") return;

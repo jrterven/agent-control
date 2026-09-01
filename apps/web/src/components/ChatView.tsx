@@ -16,6 +16,7 @@ import { useSpeechPlayback, type LiveSpeechStatus, type SpeechPlaybackStatus } f
 import { usePwaUpdateStore } from "../lib/pwaUpdate";
 import type { AgentActivityItem, ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageAttachment, MessageMedia, Profile } from "../types";
 import { ProfileAvatar } from "./ProfileAvatar";
+import { EmailReferences } from "./EmailReferences";
 
 const emptyApprovals: ApprovalRequest[] = [];
 const emptyClarifications: ClarificationRequest[] = [];
@@ -544,6 +545,7 @@ function Message({ message, profile, agentName, speech, automationInstruction = 
           ) : " "}
           {message.streaming ? <span className="stream-caret" aria-hidden="true" /> : null}
         </div>
+        {message.emailReferences?.length ? <EmailReferences references={message.emailReferences} sessionId={message.sessionId} agentName={agentName} /> : null}
         {message.media?.length ? (
           <div className="message-media">
             {message.media.map((media, index) => (
@@ -882,6 +884,7 @@ export function ChatView() {
       || message.streaming === true
       || Boolean(message.content.trim())
       || Boolean(message.media?.length)
+      || Boolean(message.emailReferences?.length)
       || Boolean(message.tools?.length)
       || Boolean(message.activity?.length)
     )

@@ -403,6 +403,21 @@ class SessionView(ApiModel):
     updated_at: datetime
 
 
+class EmailReferencePreviewView(ApiModel):
+    schema_version: Literal[1] = 1
+    id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    provider: Literal["gmail", "outlook", "imap"]
+    sender_name: str | None = None
+    sender_address: str | None = None
+    subject: str
+    received_at: str | None = None
+    snippet: str | None = None
+    preview_url: str
+    open_url: str | None = None
+    open_mode: Literal["direct", "search"] | None = None
+    body_text: str | None = None
+
+
 class PushNotificationConfigView(ApiModel):
     available: bool = True
     application_server_key: str

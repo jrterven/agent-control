@@ -18,7 +18,7 @@ import {
 } from "../lib/db";
 import { SettingsScreen } from "../screens/Screens";
 import { useAppStore } from "../store/appStore";
-import type { ChatMessage } from "../types";
+import type { ChatMessage, EmailReference } from "../types";
 
 function AuthProbe() {
   useAuthBootstrap();
@@ -166,6 +166,71 @@ describe("browser security state", () => {
       createdAt: message.createdAt,
       streaming: false,
     }]);
+  });
+
+  it("keeps only bounded public mail-card metadata in the encrypted offline transcript", async () => {
+    const previewUrl = "/api/v1/sessions/session-mail/email-references/0123456789abcdef0123456789abcdef";
+    const reference = {
+      schemaVersion: 1,
+      id: "0123456789abcdef0123456789abcdef",
+      provider: "gmail",
+      senderName: "Google Ads",
+      senderAddress: "noreply@ads.google.com",
+      subject: "Verifica tu cuenta",
+      receivedAt: "2026-08-31T07:29:00Z",
+      snippet: "Acción requerida",
+      previewUrl,
+      openUrl: `${previewUrl}/open`,
+      openMode: "search",
+      bodyText: "EL CUERPO COMPLETO NO DEBE PERSISTIR",
+      providerMessageId: "private-upstream-id",
+    } satisfies EmailReference & { bodyText: string; providerMessageId: string };
+    const invalidReference = {
+      ...reference,
+      id: "fedcba9876543210fedcba9876543210",
+      subject: "Ruta externa",
+      previewUrl: "https://attacker.example/preview",
+    };
+    const imapPreviewUrl = "/api/v1/sessions/session-mail/email-references/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const imapReference: EmailReference = {
+      schemaVersion: 1,
+      id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      provider: "imap",
+      subject: "Correo de Hostinger",
+      previewUrl: imapPreviewUrl,
+    };
+    await saveEncryptedTranscript("session-mail", "workspace-1", [{
+      id: "message-mail",
+      sessionId: "session-mail",
+      role: "assistant",
+      content: "Correo relacionado",
+      createdAt: "10:32",
+      emailReferences: [reference, imapReference, invalidReference],
+    }]);
+
+    const [cached] = await loadEncryptedTranscript("session-mail", "workspace-1");
+    expect(cached.emailReferences).toEqual([{
+      schemaVersion: 1,
+      id: reference.id,
+      provider: "gmail",
+      senderName: "Google Ads",
+      senderAddress: "noreply@ads.google.com",
+      subject: "Verifica tu cuenta",
+      receivedAt: "2026-08-31T07:29:00Z",
+      snippet: "Acción requerida",
+      previewUrl,
+      openUrl: `${previewUrl}/open`,
+      openMode: "search",
+    }, {
+      schemaVersion: 1,
+      id: imapReference.id,
+      provider: "imap",
+      subject: "Correo de Hostinger",
+      previewUrl: imapPreviewUrl,
+    }]);
+    expect(JSON.stringify(cached)).not.toContain("EL CUERPO COMPLETO");
+    expect(JSON.stringify(cached)).not.toContain("private-upstream-id");
+    expect(JSON.stringify(cached)).not.toContain("attacker.example");
   });
 
   it("omits automation prompts and enforces one 10 MB budget across the offline cache", async () => {

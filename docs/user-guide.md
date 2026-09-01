@@ -126,6 +126,33 @@ Control URL; it never receives the provider host path. The backend validates
 the reference against the authorized conversation and streams it inline with
 safe headers.
 
+### Email cards and previews
+
+When an agent cites a concrete Gmail, Outlook or generic IMAP message that it read
+with a mail tool, Agent Control can show a compact card with the sender,
+subject, local date and a short preview. Opening the card fetches an
+authenticated, session-bound plain-text preview; email HTML, scripts, forms and
+remote images are never rendered. The technical reference carried through the
+Hermes transcript is removed from the visible answer and from speech playback.
+
+The provider button is shown only when Control can derive or validate a safe
+destination. Gmail references with an RFC Message-ID use a best-effort
+**Search in Gmail** action; Control ignores Gmail URLs supplied by the agent.
+Outlook opens only a strictly validated Microsoft Graph message `webLink`.
+Generic Himalaya/IMAP references remain preview-only because mailbox UIDs are
+local to one account/folder and are not safe web identifiers. The card is
+durable across history reloads, but its metadata is
+display evidence supplied by the agent, not cryptographic proof of the mailbox
+record. Credentials, local account names, mailbox UIDs and upstream identifiers
+do not reach the browser.
+
+For availability while a gateway sleeps, validated previews are cached with
+the installation Vault using AES-GCM and owner/session/reference AAD. The
+plain-text body is capped at 12,000 characters and each cache entry expires at
+a fixed seven days. Opening a cached preview does not extend that entry; a
+later live Hermes history refresh may validate the reference again and create
+a new seven-day cache entry.
+
 ## Dictation with your own ElevenLabs key
 
 Agent Control supports BYOK (bring your own key) dictation with ElevenLabs

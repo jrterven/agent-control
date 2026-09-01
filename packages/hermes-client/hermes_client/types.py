@@ -62,6 +62,9 @@ class NormalizedEvent:
     # of the public NormalizedEvent contract; Control uses it to reject a
     # runtime id that Hermes reuses after a reconnect or process restart.
     runtime_generation: str | None = None
+    # Server-only validated metadata. It is consumed by durable sinks and is
+    # deliberately excluded from ``to_dict``/EventHub browser payloads.
+    private_data: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def create(
@@ -78,6 +81,7 @@ class NormalizedEvent:
         correlation_id: str | None = None,
         event_id: str | None = None,
         runtime_generation: str | None = None,
+        private_data: dict[str, Any] | None = None,
     ) -> "NormalizedEvent":
         return cls(
             event_id=event_id or uuid4().hex,
@@ -92,6 +96,7 @@ class NormalizedEvent:
             correlation_id=correlation_id,
             data=data or {},
             runtime_generation=runtime_generation,
+            private_data=private_data or {},
         )
 
     def to_dict(self) -> dict[str, Any]:
