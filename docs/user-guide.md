@@ -404,6 +404,12 @@ on the activity button announces an available release; open that panel and use
 **Update now**. **More → Settings → App updates** also shows the installed
 version and provides **Check for updates**.
 
+On Android, Agent Control retries the activation message while the replacement
+service worker moves from installed to waiting. If activation is not confirmed
+within 12 seconds, the button becomes available again with **Try update again**
+instead of remaining indefinitely on **Updating…**. Closing and reopening the
+PWA remains a safe fallback and preserves the selected conversation.
+
 Agent Control never reloads in the middle of voice dictation, a streaming agent
 response or an unsent draft. In that case the action becomes **Update when
 finished** and activation waits for a safe moment. The selected gateway,

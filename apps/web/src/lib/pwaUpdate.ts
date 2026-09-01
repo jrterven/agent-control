@@ -38,6 +38,9 @@ const RETURN_CONTEXT_KEY = "agent-control:pwa-update-return";
 const RETURN_CONTEXT_TTL_MS = 5 * 60 * 1000;
 const CHECK_INTERVAL_MS = 60 * 60 * 1000;
 const VISIBILITY_CHECK_COOLDOWN_MS = 5 * 60 * 1000;
+const ACTIVATION_TIMEOUT_MS = 12 * 1000;
+const ACTIVATION_NUDGE_DELAYS_MS = [0, 250, 1_000, 3_000] as const;
+const ACTIVATION_RELOAD_FALLBACK_MS = 250;
 
 let registration: ServiceWorkerRegistration | undefined;
 let updateServiceWorker: ((reloadPage?: boolean) => Promise<void>) | undefined;
@@ -45,6 +48,12 @@ let initialized = false;
 let lastAutomaticCheck = 0;
 let checkInterval: number | undefined;
 let visibilityListener: (() => void) | undefined;
+let activationSequence = 0;
+let activeActivation = 0;
+let activationTimeout: number | undefined;
+let activationNudges: number[] = [];
+let controllerChangeListener: (() => void) | undefined;
+let reloadPage = () => window.location.reload();
 
 export function hasPwaUpdateBlockers(blockers = usePwaUpdateStore.getState().blockers) {
   return Object.values(blockers).some(Boolean);
@@ -92,7 +101,94 @@ export function restorePwaUpdateContext() {
 }
 
 function markAvailable() {
+  // Workbox can announce both `installed` and `waiting` for the same worker.
+  // The second notification must not undo an activation already in progress.
+  if (usePwaUpdateStore.getState().status === "applying") return;
   usePwaUpdateStore.setState({ status: "available", checkedAt: new Date().toISOString(), error: undefined });
+}
+
+function clearActivationWatch() {
+  if (activationTimeout !== undefined && typeof window !== "undefined") window.clearTimeout(activationTimeout);
+  activationNudges.forEach((timer) => window.clearTimeout(timer));
+  if (controllerChangeListener && typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+    navigator.serviceWorker.removeEventListener("controllerchange", controllerChangeListener);
+  }
+  activationTimeout = undefined;
+  activationNudges = [];
+  controllerChangeListener = undefined;
+}
+
+async function nudgeWaitingWorker(attempt: number) {
+  if (activeActivation !== attempt || usePwaUpdateStore.getState().status !== "applying") return;
+  let currentRegistration = registration;
+  if (!currentRegistration && typeof navigator.serviceWorker.getRegistration === "function") {
+    try {
+      currentRegistration = await navigator.serviceWorker.getRegistration();
+      if (currentRegistration) registration = currentRegistration;
+    } catch {
+      // The remaining nudges and timeout still provide a bounded recovery path.
+    }
+  }
+  if (activeActivation !== attempt) return;
+  const installing = currentRegistration?.installing;
+  const activatableWorker = currentRegistration?.waiting
+    ?? (installing?.state === "installed" ? installing : undefined);
+  try {
+    activatableWorker?.postMessage({ type: "SKIP_WAITING" });
+  } catch {
+    // Android can replace the worker between reading it and posting. Retry.
+  }
+}
+
+function beginActivationWatch() {
+  clearActivationWatch();
+  const attempt = ++activationSequence;
+  activeActivation = attempt;
+
+  if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+    controllerChangeListener = () => {
+      if (activeActivation !== attempt) return;
+      activeActivation = 0;
+      clearActivationWatch();
+      usePwaUpdateStore.setState({
+        status: "current",
+        deferred: false,
+        checkedAt: new Date().toISOString(),
+        error: undefined,
+      });
+      // vite-plugin-pwa normally reloads on the same event. This delayed reload
+      // is a fallback for Android WebView/PWA builds where that callback stalls.
+      window.setTimeout(reloadPage, ACTIVATION_RELOAD_FALLBACK_MS);
+    };
+    navigator.serviceWorker.addEventListener("controllerchange", controllerChangeListener);
+  }
+
+  activationNudges = ACTIVATION_NUDGE_DELAYS_MS.map((delay) => window.setTimeout(
+    () => void nudgeWaitingWorker(attempt),
+    delay,
+  ));
+  activationTimeout = window.setTimeout(() => {
+    if (activeActivation !== attempt || usePwaUpdateStore.getState().status !== "applying") return;
+    activeActivation = 0;
+    clearActivationWatch();
+    usePwaUpdateStore.setState({
+      status: "available",
+      deferred: false,
+      error: "update-activation-timeout",
+    });
+  }, ACTIVATION_TIMEOUT_MS);
+  return attempt;
+}
+
+function failActivation(attempt: number, error: unknown) {
+  if (activeActivation !== attempt) return;
+  activeActivation = 0;
+  clearActivationWatch();
+  usePwaUpdateStore.setState({
+    status: "available",
+    deferred: false,
+    error: error instanceof Error ? error.message : "update-apply-failed",
+  });
 }
 
 export async function checkForPwaUpdate(options: { silent?: boolean } = {}) {
@@ -132,15 +228,12 @@ export async function requestPwaUpdate(): Promise<"deferred" | "applying" | "una
   }
   captureReturnContext();
   usePwaUpdateStore.setState({ status: "applying", deferred: false, error: undefined });
+  const attempt = beginActivationWatch();
   try {
     await updateServiceWorker(true);
     return "applying";
   } catch (error) {
-    usePwaUpdateStore.setState({
-      status: "error",
-      deferred: false,
-      error: error instanceof Error ? error.message : "update-apply-failed",
-    });
+    failActivation(attempt, error);
     return "unavailable";
   }
 }
@@ -178,6 +271,8 @@ export function initializePwaUpdates() {
 }
 
 export function resetPwaUpdateStateForTests() {
+  activeActivation = 0;
+  clearActivationWatch();
   if (checkInterval !== undefined && typeof window !== "undefined") window.clearInterval(checkInterval);
   if (visibilityListener && typeof document !== "undefined") document.removeEventListener("visibilitychange", visibilityListener);
   registration = undefined;
@@ -186,6 +281,8 @@ export function resetPwaUpdateStateForTests() {
   lastAutomaticCheck = 0;
   checkInterval = undefined;
   visibilityListener = undefined;
+  activationSequence = 0;
+  reloadPage = () => window.location.reload();
   usePwaUpdateStore.setState({
     status: "idle",
     deferred: false,
@@ -193,4 +290,8 @@ export function resetPwaUpdateStateForTests() {
     error: undefined,
     blockers: { ...emptyBlockers },
   });
+}
+
+export function setPwaUpdateReloadForTests(handler: () => void) {
+  reloadPage = handler;
 }

@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sw = vi.hoisted(() => ({
   options: undefined as undefined | Record<string, (...args: unknown[]) => void>,
   registration: {
     waiting: null as ServiceWorker | null,
+    installing: null as ServiceWorker | null,
     update: vi.fn(async () => undefined),
   },
   updateServiceWorker: vi.fn(async () => undefined),
@@ -23,19 +24,38 @@ import {
   requestPwaUpdate,
   resetPwaUpdateStateForTests,
   restorePwaUpdateContext,
+  setPwaUpdateReloadForTests,
   usePwaUpdateStore,
 } from "../lib/pwaUpdate";
 import { useAppStore } from "../store/appStore";
 
 describe("PWA update coordination", () => {
+  let serviceWorkerEvents: EventTarget;
+
   beforeEach(() => {
+    vi.useFakeTimers();
     resetPwaUpdateStateForTests();
     sw.registration.waiting = null;
+    sw.registration.installing = null;
     sw.registration.update.mockClear();
     sw.updateServiceWorker.mockClear();
     sessionStorage.clear();
-    Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: {} });
+    serviceWorkerEvents = new EventTarget();
+    Object.defineProperty(navigator, "serviceWorker", {
+      configurable: true,
+      value: {
+        controller: {} as ServiceWorker,
+        addEventListener: serviceWorkerEvents.addEventListener.bind(serviceWorkerEvents),
+        removeEventListener: serviceWorkerEvents.removeEventListener.bind(serviceWorkerEvents),
+        getRegistration: vi.fn(async () => sw.registration),
+      },
+    });
     initializePwaUpdates();
+  });
+
+  afterEach(() => {
+    resetPwaUpdateStateForTests();
+    vi.useRealTimers();
   });
 
   it("queues activation while the user has unfinished work", async () => {
@@ -84,5 +104,53 @@ describe("PWA update coordination", () => {
     await expect(checkForPwaUpdate()).resolves.toBe(true);
 
     expect(usePwaUpdateStore.getState().status).toBe("available");
+  });
+
+  it("retries the activation message when Android exposes the waiting worker late", async () => {
+    const waitingWorker = { postMessage: vi.fn(), state: "installed" } as unknown as ServiceWorker;
+    sw.options?.onNeedRefresh?.();
+
+    await expect(requestPwaUpdate()).resolves.toBe("applying");
+    await vi.advanceTimersByTimeAsync(0);
+    sw.registration.waiting = waitingWorker;
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(waitingWorker.postMessage).toHaveBeenCalledWith({ type: "SKIP_WAITING" });
+    expect(usePwaUpdateStore.getState().status).toBe("applying");
+  });
+
+  it("does not let a duplicate Workbox notification cancel activation", async () => {
+    sw.options?.onNeedRefresh?.();
+
+    await expect(requestPwaUpdate()).resolves.toBe("applying");
+    sw.options?.onNeedRefresh?.();
+
+    expect(usePwaUpdateStore.getState().status).toBe("applying");
+  });
+
+  it("returns to a visible retry state instead of staying stuck", async () => {
+    sw.options?.onNeedRefresh?.();
+
+    await expect(requestPwaUpdate()).resolves.toBe("applying");
+    await vi.advanceTimersByTimeAsync(12_000);
+
+    expect(usePwaUpdateStore.getState()).toMatchObject({
+      status: "available",
+      deferred: false,
+      error: "update-activation-timeout",
+    });
+  });
+
+  it("reloads after the replacement worker takes control", async () => {
+    const reload = vi.fn();
+    setPwaUpdateReloadForTests(reload);
+    sw.options?.onNeedRefresh?.();
+    await requestPwaUpdate();
+
+    serviceWorkerEvents.dispatchEvent(new Event("controllerchange"));
+    expect(usePwaUpdateStore.getState().status).toBe("current");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(reload).toHaveBeenCalledOnce();
   });
 });

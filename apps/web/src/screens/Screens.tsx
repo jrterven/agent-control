@@ -1149,6 +1149,7 @@ export function SettingsScreen() {
   const resetPrivateState = useAppStore((state) => state.resetPrivateState);
   const updateStatus = usePwaUpdateStore((state) => state.status);
   const updateDeferred = usePwaUpdateStore((state) => state.deferred);
+  const updateError = usePwaUpdateStore((state) => state.error);
   const updateBlockers = usePwaUpdateStore((state) => state.blockers);
   const [loggingOut, setLoggingOut] = useState(false);
   const timeZoneOptions = useMemo(() => availableTimeZones(timeZone), [timeZone]);
@@ -1166,26 +1167,29 @@ export function SettingsScreen() {
     resetPrivateState();
   };
   const updateAvailable = updateStatus === "available";
+  const updateNeedsRetry = updateAvailable && Boolean(updateError);
   const updateBlocked = hasPwaUpdateBlockers(updateBlockers);
   const updateMessage = updateDeferred
     ? "updates.deferred"
-    : updateStatus === "checking"
-      ? "updates.checking"
-      : updateStatus === "current"
-        ? "updates.current"
-        : updateStatus === "available"
-          ? "updates.available"
-          : updateStatus === "applying"
-            ? "updates.applying"
-            : updateStatus === "error"
-              ? "updates.error"
-              : "updates.idle";
+    : updateNeedsRetry
+      ? "updates.applyError"
+      : updateStatus === "checking"
+        ? "updates.checking"
+        : updateStatus === "current"
+          ? "updates.current"
+          : updateStatus === "available"
+            ? "updates.available"
+            : updateStatus === "applying"
+              ? "updates.applying"
+              : updateStatus === "error"
+                ? "updates.error"
+                : "updates.idle";
   const updateButton = updateStatus === "checking"
     ? "updates.checking"
     : updateStatus === "applying"
       ? "updates.applying"
       : updateAvailable
-        ? updateBlocked ? "updates.updateWhenReady" : "updates.updateNow"
+        ? updateNeedsRetry ? "updates.retryUpdate" : updateBlocked ? "updates.updateWhenReady" : "updates.updateNow"
         : "updates.checkNow";
   const handleUpdate = () => updateAvailable ? requestPwaUpdate() : checkForPwaUpdate();
 

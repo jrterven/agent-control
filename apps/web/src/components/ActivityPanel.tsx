@@ -38,6 +38,7 @@ export function ActivityPanel() {
   const connection = useAppStore((state) => state.connection);
   const updateStatus = usePwaUpdateStore((state) => state.status);
   const updateDeferred = usePwaUpdateStore((state) => state.deferred);
+  const updateError = usePwaUpdateStore((state) => state.error);
   const updateBlockers = usePwaUpdateStore((state) => state.blockers);
   const removeSession = useAppStore((state) => state.removeSession);
   const hydrateBootstrap = useAppStore((state) => state.hydrateBootstrap);
@@ -45,6 +46,7 @@ export function ActivityPanel() {
   const workspace = workspaces.find((item) => item.id === workspaceId);
   const updateBlocked = hasPwaUpdateBlockers(updateBlockers);
   const showUpdate = updateStatus === "available" || updateStatus === "applying";
+  const updateNeedsRetry = updateStatus === "available" && Boolean(updateError);
   // No selected session must remain "sin sesión". Falling back to sessions[0]
   // can expose context from a different profile or workspace in this panel.
   const session = sessions.find((item) => item.id === sessionId);
@@ -182,14 +184,14 @@ export function ActivityPanel() {
           <span className="app-update-card__icon"><ArrowClockwise weight="bold" /></span>
           <div>
             <strong id="app-update-title">{t(updateDeferred ? "updates.waitingTitle" : "updates.availableTitle")}</strong>
-            <p>{t(updateDeferred ? "updates.waitingBody" : "updates.availableBody")}</p>
+            <p>{t(updateNeedsRetry ? "updates.applyError" : updateDeferred ? "updates.waitingBody" : "updates.availableBody")}</p>
             <Button
               size="sm"
               disabled={updateStatus === "applying" || updateDeferred}
               leadingIcon={<ArrowClockwise />}
               onClick={() => void requestPwaUpdate()}
             >
-              {t(updateStatus === "applying" ? "updates.applying" : updateBlocked ? "updates.updateWhenReady" : "updates.updateNow")}
+              {t(updateStatus === "applying" ? "updates.applying" : updateNeedsRetry ? "updates.retryUpdate" : updateBlocked ? "updates.updateWhenReady" : "updates.updateNow")}
             </Button>
           </div>
         </section> : null}
