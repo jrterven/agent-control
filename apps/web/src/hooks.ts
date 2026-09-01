@@ -18,6 +18,7 @@ import { useAppStore } from "./store/appStore";
 import i18n, { getCurrentLanguage } from "./i18n";
 import { subscribeToMediaQuery } from "./lib/mediaQuery";
 import { recordSessionCompletion } from "./lib/chatNotifications";
+import { detectedTimeZone, isValidTimeZone, TIME_ZONE_PREFERENCE_KEY } from "./lib/dateTime";
 import type {
   AgentActivityItem,
   ApprovalChoice,
@@ -1110,6 +1111,7 @@ export async function createChatForCurrentContext() {
 export function useThemePreference() {
   const theme = useAppStore((state) => state.theme);
   const setTheme = useAppStore((state) => state.setTheme);
+  const setTimeZone = useAppStore((state) => state.setTimeZone);
   const setOfflineCacheEnabled = useAppStore((state) => state.setOfflineCacheEnabled);
   const hydrated = useRef(false);
 
@@ -1121,7 +1123,10 @@ export function useThemePreference() {
     loadPreference("offline-cache")
       .then((value) => setOfflineCacheEnabled(value === "true"))
       .catch(() => setOfflineCacheEnabled(false));
-  }, [setOfflineCacheEnabled, setTheme]);
+    loadPreference(TIME_ZONE_PREFERENCE_KEY)
+      .then((value) => setTimeZone(isValidTimeZone(value) ? value : detectedTimeZone()))
+      .catch(() => setTimeZone(detectedTimeZone()));
+  }, [setOfflineCacheEnabled, setTheme, setTimeZone]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");

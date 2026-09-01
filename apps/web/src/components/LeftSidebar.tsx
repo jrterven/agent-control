@@ -4,6 +4,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { Badge, Button, IconButton, StatusDot, cx } from "@hermes-control/ui";
 import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
+import { formatConversationTimestamp, formatConversationTimestampLong } from "../lib/dateTime";
 import { createChatForCurrentContext } from "../hooks";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useAppStore } from "../store/appStore";
@@ -12,7 +13,7 @@ import { ProfileAvatar } from "./ProfileAvatar";
 import type { SessionSummary, Workspace } from "../types";
 
 export function LeftSidebar() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const open = useAppStore((state) => state.leftDrawerOpen);
   const close = useAppStore((state) => state.setLeftDrawerOpen);
@@ -30,6 +31,7 @@ export function LeftSidebar() {
   const profiles = useAppStore((state) => state.profiles);
   const workspaces = useAppStore((state) => state.workspaces);
   const sessions = useAppStore((state) => state.sessions);
+  const timeZone = useAppStore((state) => state.timeZone);
   const csrfToken = useAppStore((state) => state.csrfToken);
   const demoMode = useAppStore((state) => state.demoMode);
   const authState = useAppStore((state) => state.authState);
@@ -285,11 +287,13 @@ export function LeftSidebar() {
     const context = pinnedSection
       ? [profile?.displayName, workspace?.name ?? t("sidebar.noWorkspace")].filter(Boolean).join(" · ")
       : session.preview;
+    const language = i18n.resolvedLanguage ?? i18n.language;
+    const updatedAt = formatConversationTimestamp(session.updatedAt, language, timeZone);
     return (
       <div className={cx("session-list__row", session.id === selectedSessionId && "is-active")} key={session.id} role={pinnedSection ? "listitem" : undefined}>
         <button type="button" className="session-list__select" onClick={() => selectSession(session.id)}>
           <span className="session-list__body"><strong>{session.title}</strong><small>{context}</small></span>
-          <span className="session-list__meta">{pinnedSection ? <PushPinSimple size={12} weight="fill" aria-hidden="true" /> : null}{session.unread ? <i /> : null}{session.updatedAt}</span>
+          <span className="session-list__meta" title={formatConversationTimestampLong(session.updatedAt, language, timeZone)}>{pinnedSection ? <PushPinSimple size={12} weight="fill" aria-hidden="true" /> : null}{session.unread ? <i /> : null}{updatedAt}</span>
         </button>
         {!mutationsDisabled ? <IconButton
           className="session-list__more"

@@ -62,11 +62,20 @@ describe("sidebar session menu", () => {
       selectedProfileId: profile.id,
       selectedWorkspaceId: "",
       selectedSessionId: session.id,
+      timeZone: "America/Mexico_City",
       bootstrapLoaded: true,
     });
   });
 
   afterEach(() => vi.restoreAllMocks());
+
+  it("shows Hermes UTC history timestamps in the selected zone with minute precision", () => {
+    useAppStore.setState({ sessions: [{ ...session, updatedAt: "2026-09-01T01:14:23.872776" }] });
+    render(<LeftSidebar />);
+
+    expect(screen.getByText(/31\/08\/2026.*19:14/)).toBeInTheDocument();
+    expect(screen.queryByText(/2026-09-01T01:14:23/)).not.toBeInTheDocument();
+  });
 
   it("pins and unpins a chat in a separate list without duplicating it", async () => {
     const user = userEvent.setup();

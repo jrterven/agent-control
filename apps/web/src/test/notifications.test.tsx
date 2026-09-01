@@ -32,6 +32,7 @@ describe("notification menu", () => {
       selectedProfileId: "profile-1",
       selectedWorkspaceId: "workspace-1",
       selectedSessionId: "session-0",
+      timeZone: "America/Mexico_City",
       connection: "connected",
       notificationsOpen: false,
       profiles: [{

@@ -28,6 +28,7 @@ import i18n from "../i18n";
 import { useLanguagePreference } from "../hooks/useLanguagePreference";
 import { APP_VERSION, checkForPwaUpdate, hasPwaUpdateBlockers, requestPwaUpdate, usePwaUpdateStore } from "../lib/pwaUpdate";
 import { prepareProfileAvatar } from "../lib/profileAvatar";
+import { availableTimeZones, formatConversationTimestamp, TIME_ZONE_PREFERENCE_KEY } from "../lib/dateTime";
 
 export function PageHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
   return <header className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</header>;
@@ -1135,10 +1136,12 @@ export function SearchScreen() {
 }
 
 export function SettingsScreen() {
-  const { t } = useTranslation();
+  const { t, i18n: translation } = useTranslation();
   const { language, changeLanguage, languageOptions } = useLanguagePreference();
   const theme = useAppStore((state) => state.theme);
   const setTheme = useAppStore((state) => state.setTheme);
+  const timeZone = useAppStore((state) => state.timeZone);
+  const setTimeZone = useAppStore((state) => state.setTimeZone);
   const cacheEnabled = useAppStore((state) => state.offlineCacheEnabled);
   const setCacheEnabled = useAppStore((state) => state.setOfflineCacheEnabled);
   const csrfToken = useAppStore((state) => state.csrfToken);
@@ -1148,7 +1151,9 @@ export function SettingsScreen() {
   const updateDeferred = usePwaUpdateStore((state) => state.deferred);
   const updateBlockers = usePwaUpdateStore((state) => state.blockers);
   const [loggingOut, setLoggingOut] = useState(false);
+  const timeZoneOptions = useMemo(() => availableTimeZones(timeZone), [timeZone]);
   const setThemePreference = (next: ThemePreference) => { setTheme(next); void savePreference("theme", next); };
+  const changeTimeZone = (next: string) => { setTimeZone(next); void savePreference(TIME_ZONE_PREFERENCE_KEY, next); };
   const changeCache = (enabled: boolean) => {
     setCacheEnabled(enabled);
     void savePreference("offline-cache", String(enabled));
@@ -1190,6 +1195,14 @@ export function SettingsScreen() {
       <Panel className="settings-section">
         <header><Translate /><div><strong>{t("settingsPage.language")}</strong><p>{t("settingsPage.languageDescription")}</p></div></header>
         <label className="hc-field"><span>{t("settingsPage.languageLabel")}</span><select value={language} onChange={(event) => void changeLanguage(event.target.value as typeof language)}>{languageOptions.map((option) => <option key={option.code} value={option.code}>{option.nativeName}</option>)}</select></label>
+      </Panel>
+      <Panel className="settings-section">
+        <header><Clock /><div><strong>{t("settingsPage.timeZone")}</strong><p>{t("settingsPage.timeZoneDescription")}</p></div></header>
+        <label className="hc-field">
+          <span>{t("settingsPage.timeZoneLabel")}</span>
+          <select aria-label={t("settingsPage.timeZoneLabel")} value={timeZone} onChange={(event) => changeTimeZone(event.target.value)}>{timeZoneOptions.map((option) => <option key={option} value={option}>{option.replaceAll("_", " ")}</option>)}</select>
+          <small className="hc-field__hint">{t("settingsPage.timeZoneExample", { example: formatConversationTimestamp(new Date().toISOString(), translation.resolvedLanguage ?? translation.language, timeZone) })}</small>
+        </label>
       </Panel>
       <Panel className="settings-section">
         <header><SlidersHorizontal /><div><strong>{t("settingsPage.appearance")}</strong><p>{t("settingsPage.appearanceDescription")}</p></div></header>

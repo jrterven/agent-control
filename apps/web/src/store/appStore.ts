@@ -14,6 +14,7 @@ import type {
   ThemePreference,
   Workspace,
 } from "../types";
+import { detectedTimeZone } from "../lib/dateTime";
 
 type AuthState = "checking" | "authenticated" | "offline" | "unauthenticated";
 
@@ -34,6 +35,7 @@ type AppState = {
   selectedSessionId: string;
   connection: ConnectionState;
   theme: ThemePreference;
+  timeZone: string;
   advancedMode: boolean;
   offlineCacheEnabled: boolean;
   bootstrapLoaded: boolean;
@@ -62,6 +64,7 @@ type AppState = {
   selectSession: (id: string) => void;
   setConnection: (state: ConnectionState) => void;
   setTheme: (theme: ThemePreference) => void;
+  setTimeZone: (timeZone: string) => void;
   setAdvancedMode: (enabled: boolean) => void;
   setOfflineCacheEnabled: (enabled: boolean) => void;
   hydrateBootstrap: (data: BootstrapData) => void;
@@ -166,6 +169,7 @@ export const useAppStore = create<AppState>((set) => ({
   commandOpen: false,
   gatewayMenuOpen: false,
   theme: "dark",
+  timeZone: detectedTimeZone(),
   advancedMode: false,
   offlineCacheEnabled: false,
   ...emptyPrivateState,
@@ -175,6 +179,7 @@ export const useAppStore = create<AppState>((set) => ({
         ...emptyPrivateState,
         authState,
         theme: state.theme,
+        timeZone: state.timeZone,
         advancedMode: state.advancedMode,
         offlineCacheEnabled: state.offlineCacheEnabled,
         leftDrawerOpen: false,
@@ -230,6 +235,7 @@ export const useAppStore = create<AppState>((set) => ({
   }),
   setConnection: (connection) => set({ connection }),
   setTheme: (theme) => set({ theme }),
+  setTimeZone: (timeZone) => set({ timeZone }),
   setAdvancedMode: (advancedMode) => set({ advancedMode }),
   setOfflineCacheEnabled: (offlineCacheEnabled) => set({ offlineCacheEnabled }),
   hydrateBootstrap: (data) => set((state) => {
@@ -378,6 +384,7 @@ export const useAppStore = create<AppState>((set) => ({
     ...emptyPrivateState,
     authState: "unauthenticated",
     theme: state.theme,
+    timeZone: state.timeZone,
     advancedMode: state.advancedMode,
     offlineCacheEnabled: state.offlineCacheEnabled,
     leftDrawerOpen: false,

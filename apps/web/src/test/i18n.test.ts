@@ -13,17 +13,23 @@ import i18n, {
 } from "../i18n";
 import { db, loadPreference, savePreference } from "../lib/db";
 import { useLanguagePreference } from "../hooks/useLanguagePreference";
+import { useThemePreference } from "../hooks";
 import { SettingsScreen } from "../screens/Screens";
+import { TIME_ZONE_PREFERENCE_KEY } from "../lib/dateTime";
+import { useAppStore } from "../store/appStore";
 
 describe("language preferences", () => {
   beforeEach(async () => {
     await db.preferences.delete(LANGUAGE_PREFERENCE_KEY);
+    await db.preferences.delete(TIME_ZONE_PREFERENCE_KEY);
     await i18n.changeLanguage(DEFAULT_LANGUAGE);
     document.documentElement.lang = DEFAULT_LANGUAGE;
+    useAppStore.setState({ timeZone: "America/Mexico_City" });
   });
 
   afterEach(async () => {
     await db.preferences.delete(LANGUAGE_PREFERENCE_KEY);
+    await db.preferences.delete(TIME_ZONE_PREFERENCE_KEY);
     await i18n.changeLanguage(DEFAULT_LANGUAGE);
     document.documentElement.lang = DEFAULT_LANGUAGE;
   });
@@ -80,5 +86,24 @@ describe("language preferences", () => {
     expect(screen.getByRole("combobox", { name: "Langue de l’interface" })).toHaveValue("fr");
     expect(document.documentElement.lang).toBe("fr");
     expect(await loadPreference(LANGUAGE_PREFERENCE_KEY)).toBe("fr");
+  });
+
+  it("edits and persists the user time zone from Preferences", async () => {
+    const user = userEvent.setup();
+    render(createElement(SettingsScreen));
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Zona horaria del usuario" }), "America/New_York");
+
+    expect(useAppStore.getState().timeZone).toBe("America/New_York");
+    await waitFor(() => expect(loadPreference(TIME_ZONE_PREFERENCE_KEY)).resolves.toBe("America/New_York"));
+  });
+
+  it("restores the saved time zone when the app starts again", async () => {
+    await savePreference(TIME_ZONE_PREFERENCE_KEY, "America/New_York");
+    useAppStore.setState({ timeZone: "UTC" });
+
+    renderHook(() => useThemePreference());
+
+    await waitFor(() => expect(useAppStore.getState().timeZone).toBe("America/New_York"));
   });
 });

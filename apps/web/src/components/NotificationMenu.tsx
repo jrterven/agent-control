@@ -9,6 +9,7 @@ import {
   requestOpenSession,
 } from "../lib/chatNotifications";
 import { useAppStore } from "../store/appStore";
+import { formatConversationDay, zonedDayDistance, zonedDayKey } from "../lib/dateTime";
 import type { SessionSummary } from "../types";
 
 type RecentGroup = {
@@ -17,20 +18,12 @@ type RecentGroup = {
   sessions: SessionSummary[];
 };
 
-function dayKey(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "unknown" : `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-}
-
-function dayLabel(value: string, language: string, t: (key: string) => string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return t("notifications.recentChats");
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  if (dayKey(value) === dayKey(today.toISOString())) return t("notifications.today");
-  if (dayKey(value) === dayKey(yesterday.toISOString())) return t("notifications.yesterday");
-  return new Intl.DateTimeFormat(language, { weekday: "long", day: "numeric", month: "short" }).format(date);
+function dayLabel(value: string, language: string, timeZone: string, t: (key: string) => string) {
+  const distance = zonedDayDistance(value, timeZone);
+  if (distance === undefined) return t("notifications.recentChats");
+  if (distance === 0) return t("notifications.today");
+  if (distance === 1) return t("notifications.yesterday");
+  return formatConversationDay(value, language, timeZone);
 }
 
 export function NotificationMenu() {
@@ -38,6 +31,7 @@ export function NotificationMenu() {
   const open = useAppStore((state) => state.notificationsOpen);
   const setOpen = useAppStore((state) => state.setNotificationsOpen);
   const sessions = useAppStore((state) => state.sessions);
+  const timeZone = useAppStore((state) => state.timeZone);
   const workspaces = useAppStore((state) => state.workspaces);
   const csrfToken = useAppStore((state) => state.csrfToken);
   const selectedSessionId = useAppStore((state) => state.selectedSessionId);
@@ -55,17 +49,17 @@ export function NotificationMenu() {
       .slice(0, 10);
     const result: RecentGroup[] = [];
     for (const session of recent) {
-      const key = dayKey(session.updatedAt);
+      const key = zonedDayKey(session.updatedAt, timeZone);
       const existing = result.find((group) => group.key === key);
       if (existing) existing.sessions.push(session);
       else result.push({
         key,
-        label: dayLabel(session.updatedAt, i18n.resolvedLanguage ?? i18n.language, t),
+        label: dayLabel(session.updatedAt, i18n.resolvedLanguage ?? i18n.language, timeZone, t),
         sessions: [session],
       });
     }
     return result;
-  }, [i18n.language, i18n.resolvedLanguage, sessions, t]);
+  }, [i18n.language, i18n.resolvedLanguage, sessions, t, timeZone]);
 
   useEffect(() => {
     if (!open) return;
