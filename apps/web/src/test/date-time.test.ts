@@ -12,8 +12,7 @@ describe("conversation date and time", () => {
 
     expect(parseControlTimestamp(value)?.toISOString()).toBe("2026-09-01T01:14:23.872Z");
     const formatted = formatConversationTimestamp(value, "es-MX", "America/Mexico_City");
-    expect(formatted).toContain("31/08/2026");
-    expect(formatted).toContain("19:14");
+    expect(formatted).toBe("Lun 31/08/2026, 19:14");
     expect(formatted).not.toContain("23.872776");
     expect(formatted).not.toContain("T");
   });
@@ -25,6 +24,13 @@ describe("conversation date and time", () => {
     expect(formatConversationTimestamp(value, "es-MX", "America/Mexico_City")).toContain("31/08/2026");
     expect(zonedDayKey(value, "America/Mexico_City")).toBe("2026-08-31");
     expect(zonedDayDistance(value, "America/Mexico_City", new Date("2026-09-01T02:00:00Z"))).toBe(0);
+  });
+
+  it("localizes the weekday abbreviation", () => {
+    const value = "2026-09-01T01:14:23Z";
+
+    expect(formatConversationTimestamp(value, "en-US", "America/Mexico_City")).toBe("Mon 08/31/2026, 19:14");
+    expect(formatConversationTimestamp(value, "de-DE", "America/Mexico_City")).toBe("Mo 31.08.2026, 19:14");
   });
 
   it("leaves non-date status labels unchanged", () => {

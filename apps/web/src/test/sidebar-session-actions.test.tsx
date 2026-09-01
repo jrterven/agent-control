@@ -73,7 +73,7 @@ describe("sidebar session menu", () => {
     useAppStore.setState({ sessions: [{ ...session, updatedAt: "2026-09-01T01:14:23.872776" }] });
     render(<LeftSidebar />);
 
-    expect(screen.getByText(/31\/08\/2026.*19:14/)).toBeInTheDocument();
+    expect(screen.getByText("Lun 31/08/2026, 19:14")).toBeInTheDocument();
     expect(screen.queryByText(/2026-09-01T01:14:23/)).not.toBeInTheDocument();
   });
 

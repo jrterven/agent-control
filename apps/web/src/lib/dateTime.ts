@@ -88,7 +88,13 @@ export function formatConversationTimestamp(value: string, locale: string, timeZ
   const date = parseControlTimestamp(value);
   if (!date) return value;
   const safeTimeZone = isValidTimeZone(timeZone) ? timeZone : detectedTimeZone();
-  return cachedFormatter(locale, safeTimeZone, {
+  const weekday = cachedFormatter(locale, safeTimeZone, { weekday: "short" })
+    .format(date)
+    .replace(/[.,]$/, "");
+  const localizedWeekday = weekday
+    ? weekday[0].toLocaleUpperCase(locale) + weekday.slice(1)
+    : weekday;
+  const dateAndTime = cachedFormatter(locale, safeTimeZone, {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -96,6 +102,7 @@ export function formatConversationTimestamp(value: string, locale: string, timeZ
     minute: "2-digit",
     hourCycle: "h23",
   }).format(date);
+  return `${localizedWeekday} ${dateAndTime}`;
 }
 
 export function formatConversationTimestampLong(value: string, locale: string, timeZone: string) {
