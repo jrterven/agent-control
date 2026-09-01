@@ -61,11 +61,13 @@ with host access.
   they return `no-store` and never render remote email HTML. Installed PWAs may
   request the allowlisted provider target as authenticated JSON before an
   out-of-scope mobile navigation; the client revalidates the provider host and
-  retains the target only in memory for that navigation. Android Gmail handoff
-  is built only from the validated `mail.google.com/mail/#search/rfc822msgid:`
-  target, fixes the destination package to `com.google.android.gm`, encodes the
-  same HTTPS target as the browser fallback and never accepts an agent-provided
-  intent or custom scheme.
+  retains the target only in memory for that navigation. Gmail Android does not
+  publish a BROWSABLE deep link that preserves an RFC Message-ID search, so the
+  PWA never constructs an agent-provided or synthetic Android intent. It offers
+  the revalidated Gmail Web target and may expose the decoded `rfc822msgid:`
+  query in a selectable field. Copying that query requires an explicit user tap;
+  the PWA neither persists nor logs it, although the operating-system clipboard
+  may expose or synchronize it outside Agent Control.
 - Offline email previews are AES-GCM Vault envelopes bound with AAD to the
   owner, session and opaque reference. Their fixed seven-day TTL is purged at
   startup and hourly; an accessed expired entry is also deleted. Normal reads

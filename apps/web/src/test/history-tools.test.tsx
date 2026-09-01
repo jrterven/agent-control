@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../i18n";
@@ -33,7 +33,10 @@ describe("rehydrated Hermes tool history", () => {
     });
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Reflect.deleteProperty(window.navigator, "clipboard");
+  });
 
   it("preserves role=tool history for the activity panel without inline chat cards", async () => {
     vi.spyOn(api, "sessionHistory").mockResolvedValue({
@@ -241,17 +244,60 @@ describe("rehydrated Hermes tool history", () => {
     vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(
       "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/128.0 Mobile Safari/537.36",
     );
+    const clipboardWrite = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboardWrite },
+    });
 
     await user.click(searchLink);
     await waitFor(() => expect(resolveTarget).toHaveBeenCalledWith(
       "session-papers",
       "0123456789abcdef0123456789abcdef",
     ));
-    const gmailAppLink = await screen.findByRole("link", { name: "Abrir en la app de Gmail" });
-    const expectedIntent = `intent://mail.google.com/mail/#search/rfc822msgid%3Atest%40example.com#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${encodeURIComponent(targetUrl)};end`;
-    expect(gmailAppLink).toHaveAttribute("href", expectedIntent);
-    expect(gmailAppLink).toHaveAttribute("target", "_self");
-    expect(screen.getByRole("link", { name: "Abrir en navegador" })).toHaveAttribute("href", targetUrl);
+    const gmailWebLink = await screen.findByRole("link", { name: "Buscar correo en Gmail Web" });
+    expect(gmailWebLink).toHaveAttribute("href", targetUrl);
+    expect(gmailWebLink).toHaveAttribute("target", "_blank");
+    expect(dialog.querySelector('a[href^="intent:"]')).toBeNull();
+
+    const exactSearch = screen.getByRole("textbox", { name: "Búsqueda exacta para Gmail" });
+    expect(exactSearch).toHaveValue("rfc822msgid:test@example.com");
+    await user.click(screen.getByRole("button", { name: "Copiar búsqueda" }));
+    expect(clipboardWrite).toHaveBeenCalledWith("rfc822msgid:test@example.com");
+    expect(await screen.findByRole("status")).toHaveTextContent("Búsqueda copiada");
+
+    clipboardWrite.mockRejectedValueOnce(new Error("Clipboard denied"));
+    await user.click(screen.getByRole("button", { name: "Copiada" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Mantén pulsado el campo");
+
+    Reflect.deleteProperty(window.navigator, "clipboard");
+    await user.click(screen.getByRole("button", { name: "Copiar búsqueda" }));
+    expect(clipboardWrite).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Mantén pulsado el campo");
+
+    let resolvePendingCopy!: () => void;
+    Object.defineProperty(window.navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn(() => new Promise<void>((resolve) => { resolvePendingCopy = resolve; })),
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Copiar búsqueda" }));
+    expect(screen.getByRole("button", { name: "Copiando…" })).toBeDisabled();
+    await user.click(dialog.querySelector(".email-preview-sheet__close")!);
+    await user.click(searchLink);
+    await screen.findByRole("link", { name: "Buscar correo en Gmail Web" });
+    await act(async () => { resolvePendingCopy(); });
+    expect(screen.queryByText("Búsqueda copiada. Abre Gmail y pégala en Buscar correo.")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("dialog").querySelector(".email-preview-sheet__close")!);
+    resolveTarget.mockResolvedValueOnce({
+      targetUrl: "https://mail.google.com/mail/#search/rfc822msgid%3Abad%ZZexample.com",
+    });
+    await user.click(searchLink);
+    await screen.findByRole("link", { name: "Buscar correo en Gmail Web" });
+    expect(screen.queryByRole("textbox", { name: "Búsqueda exacta para Gmail" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copiar búsqueda" })).not.toBeInTheDocument();
   });
 
   it("drops mail cards whose preview route escapes the same-origin session contract", async () => {

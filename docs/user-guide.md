@@ -156,15 +156,18 @@ missing. Credentials, local account names, mailbox UIDs and upstream identifiers
 do not reach the browser.
 
 An installed mobile PWA first resolves **Open/Search in Gmail or Outlook** with
-its authenticated Agent Control session. On Android, Gmail cards then offer
-**Open in the Gmail app**, which sends the RFC Message-ID search directly to the
-installed Gmail package instead of going through Gmail Web's generic app banner.
-**Open in browser** remains available as an explicit fallback. Other installed
-PWA flows navigate to the strictly allowlisted provider URL. This avoids
-depending on the external mobile browser sharing the PWA cookie. The resolved
-target is returned with `no-store`, used only for that navigation and is not
-written to chat history or the offline cache. Ordinary browser tabs keep the
-same authenticated server-side redirect.
+its authenticated Agent Control session. Gmail Android does not expose a public,
+browser-callable deep link that preserves an RFC Message-ID search when Gmail Web
+hands off to the native app. Android cards therefore offer **Find email in Gmail
+Web**, which keeps the exact search, plus an explicit **Copy search** helper. To
+continue in the native app, copy the displayed `rfc822msgid:` query, open Gmail,
+choose the correct account and paste it into **Search in mail**. Copying happens
+only after a user tap; the selectable field remains available if clipboard
+permission is denied. Other installed PWA flows navigate to the strictly
+allowlisted provider URL. This avoids depending on the external mobile browser
+sharing the PWA cookie. The resolved target is returned with `no-store`, used
+only for that navigation and is not written to chat history or the offline
+cache. Ordinary browser tabs keep the same authenticated server-side redirect.
 
 For availability while a gateway sleeps, validated previews are cached with
 the installation Vault using AES-GCM and owner/session/reference AAD. The

@@ -1,4 +1,4 @@
-import { ArrowSquareOut, EnvelopeSimple, FileText, Info, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, CheckCircle, CopySimple, EnvelopeSimple, FileText, Info, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { type MouseEvent, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
@@ -9,6 +9,7 @@ import type { EmailReference } from "../types";
 
 type PreviewState = "idle" | "loading" | "ready" | "error";
 type OpenTargetState = "idle" | "loading" | "ready" | "error";
+type CopyState = "idle" | "copying" | "copied" | "error";
 
 function referenceSender(reference: EmailReference, providerLabel: string) {
   return reference.senderName || reference.senderAddress || providerLabel;
@@ -47,12 +48,18 @@ function safeResolvedTarget(reference: EmailReference, value: unknown) {
   }
 }
 
-function androidGmailIntent(target: string) {
+function gmailSearchQuery(target: string) {
   try {
     const parsed = new URL(target);
-    if (parsed.protocol !== "https:" || parsed.hostname !== "mail.google.com" || target.includes("#Intent;")) return "";
-    const intentTarget = parsed.href.replace(/^https:/, "intent:");
-    return `${intentTarget}#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${encodeURIComponent(parsed.href)};end`;
+    const prefix = "#search/";
+    if (
+      parsed.protocol !== "https:"
+      || parsed.hostname.toLowerCase() !== "mail.google.com"
+      || parsed.pathname !== "/mail/"
+      || !parsed.hash.toLowerCase().startsWith(prefix)
+    ) return "";
+    const query = decodeURIComponent(parsed.hash.slice(prefix.length));
+    return query.length <= 1_012 && /^rfc822msgid:[^\s<>@]+@[^\s<>@]+$/iu.test(query) ? query : "";
   } catch {
     return "";
   }
@@ -74,13 +81,17 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
   const [openError, setOpenError] = useState("");
   const [openTargetState, setOpenTargetState] = useState<OpenTargetState>("idle");
   const [resolvedOpenTarget, setResolvedOpenTarget] = useState("");
+  const [copyState, setCopyState] = useState<CopyState>("idle");
   const requestGenerationRef = useRef(0);
+  const copyAttemptRef = useRef(0);
   const headingId = useId();
   const descriptionId = useId();
   const trustId = useId();
+  const gmailSearchId = useId();
 
   const closePreview = () => {
     requestGenerationRef.current += 1;
+    copyAttemptRef.current += 1;
     setSelected(undefined);
     setPreviewState("idle");
     setBodyText("");
@@ -88,6 +99,7 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
     setOpenError("");
     setOpenTargetState("idle");
     setResolvedOpenTarget("");
+    setCopyState("idle");
   };
   const dialog = useOverlayDialog<HTMLDivElement>({
     open: Boolean(selected),
@@ -98,9 +110,11 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
   useEffect(() => () => { requestGenerationRef.current += 1; }, []);
 
   const resolveInstalledOpenTarget = async (reference: EmailReference, generation: number) => {
+    copyAttemptRef.current += 1;
     setOpenTargetState("loading");
     setResolvedOpenTarget("");
     setOpenError("");
+    setCopyState("idle");
     try {
       const resolved = await api.emailReferenceOpenTarget(sessionId, reference.id);
       const target = safeResolvedTarget(reference, resolved.targetUrl);
@@ -118,12 +132,14 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
   const openPreview = async (reference: EmailReference) => {
     const generation = requestGenerationRef.current + 1;
     requestGenerationRef.current = generation;
+    copyAttemptRef.current += 1;
     setSelected(reference);
     setBodyText("");
     setSummaryOnly(false);
     setOpenError("");
     setOpenTargetState("idle");
     setResolvedOpenTarget("");
+    setCopyState("idle");
     setPreviewState("loading");
     if (reference.openUrl && isInstalledPwa()) {
       void resolveInstalledOpenTarget(reference, generation);
@@ -147,17 +163,31 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
   const openFromInstalledPwa = (event: MouseEvent<HTMLAnchorElement>, reference: EmailReference) => {
     if (!isInstalledPwa()) return;
     event.preventDefault();
-    // Android only launches an external app from a direct user gesture. Open
-    // the safe preview while Control resolves the authenticated target, then
-    // render the prepared Intent as the user's next explicit tap.
+    // Resolve the authenticated provider target inside Control before a later
+    // explicit user action leaves the installed PWA.
     void openPreview(reference);
   };
 
   const installedPwa = isInstalledPwa();
   const androidGmail = Boolean(installedPwa && isAndroidDevice() && selected?.provider === "gmail");
-  const installedDestination = androidGmail
-    ? androidGmailIntent(resolvedOpenTarget)
-    : resolvedOpenTarget;
+  const gmailSearch = androidGmail ? gmailSearchQuery(resolvedOpenTarget) : "";
+
+  const copyGmailSearch = async () => {
+    const attempt = copyAttemptRef.current + 1;
+    const generation = requestGenerationRef.current;
+    const query = gmailSearch;
+    copyAttemptRef.current = attempt;
+    setCopyState("copying");
+    try {
+      if (!query || typeof navigator.clipboard?.writeText !== "function") throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(query);
+      if (copyAttemptRef.current !== attempt || requestGenerationRef.current !== generation) return;
+      setCopyState("copied");
+    } catch {
+      if (copyAttemptRef.current !== attempt || requestGenerationRef.current !== generation) return;
+      setCopyState("error");
+    }
+  };
 
   return <>
     <section className="email-references" aria-label={t("chat.emailReferences.listLabel")}>
@@ -245,20 +275,36 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
             referrerPolicy="no-referrer"
           ><EnvelopeSimple weight="fill" /> {t(`chat.emailReferences.${openActionKey(selected)}`, { provider: t(`chat.emailReferences.providers.${selected.provider}`) })}<ArrowSquareOut /></a> : null}
           {selected.openUrl && installedPwa ? <div className="email-preview-sheet__actions">
-            {openTargetState === "ready" && installedDestination ? <>
+            {openTargetState === "ready" && resolvedOpenTarget ? <>
               <a
-                href={installedDestination}
-                target="_self"
-                rel="noopener noreferrer"
-                referrerPolicy="no-referrer"
-              ><EnvelopeSimple weight="fill" /> {t(androidGmail ? "chat.emailReferences.openInGmailApp" : `chat.emailReferences.${openActionKey(selected)}`, { provider: t(`chat.emailReferences.providers.${selected.provider}`) })}<ArrowSquareOut /></a>
-              {androidGmail ? <a
-                className="email-preview-sheet__browser-action"
                 href={resolvedOpenTarget}
-                target="_self"
+                target={androidGmail ? "_blank" : "_self"}
                 rel="noopener noreferrer"
                 referrerPolicy="no-referrer"
-              >{t("chat.emailReferences.openInBrowser")}</a> : null}
+              ><EnvelopeSimple weight="fill" /> {t(androidGmail ? "gmailTransfer.searchWeb" : `chat.emailReferences.${openActionKey(selected)}`, { provider: t(`chat.emailReferences.providers.${selected.provider}`) })}<ArrowSquareOut /></a>
+              {androidGmail && gmailSearch ? <div className="email-preview-sheet__gmail-transfer">
+                <p>{t("gmailTransfer.instructions")}</p>
+                <label htmlFor={gmailSearchId}>{t("gmailTransfer.queryLabel")}</label>
+                <div className="email-preview-sheet__gmail-query">
+                  <input
+                    id={gmailSearchId}
+                    type="text"
+                    dir="ltr"
+                    readOnly
+                    value={gmailSearch}
+                    onFocus={(event) => event.currentTarget.select()}
+                    onClick={(event) => event.currentTarget.select()}
+                  />
+                  <button type="button" disabled={copyState === "copying"} onClick={() => void copyGmailSearch()}>
+                    {copyState === "copied" ? <CheckCircle weight="fill" aria-hidden="true" /> : <CopySimple aria-hidden="true" />}
+                    {t(copyState === "copying" ? "gmailTransfer.copying" : copyState === "copied" ? "gmailTransfer.copiedShort" : "gmailTransfer.copy")}
+                  </button>
+                </div>
+                {copyState !== "idle" ? <span
+                  className={`email-preview-sheet__copy-status is-${copyState}`}
+                  role={copyState === "error" ? "alert" : "status"}
+                >{t(copyState === "copied" ? "gmailTransfer.copied" : "gmailTransfer.copyError")}</span> : null}
+              </div> : null}
             </> : <button
               type="button"
               className="email-preview-sheet__prepare-action"

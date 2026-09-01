@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { adminResources } from "../locales/admin";
 import { baseTranslations } from "../locales/base";
 import { chatResources } from "../locales/chat";
+import { emailResources } from "../locales/email";
 import { navigationResources } from "../locales/navigation";
 import { runtimeResources } from "../locales/runtime";
 import { screenResources } from "../locales/screens";
@@ -22,7 +23,7 @@ function leaves(value: unknown, prefix = ""): string[] {
 
 describe("locale catalogs", () => {
   it("keeps identical, non-empty key sets in every supported language", () => {
-    const catalogs = [baseTranslations, navigationResources, chatResources, adminResources, dictationResources, integrationResources, speechResources, screenResources, runtimeResources, updateResources];
+    const catalogs = [baseTranslations, navigationResources, chatResources, emailResources, adminResources, dictationResources, integrationResources, speechResources, screenResources, runtimeResources, updateResources];
     for (const catalog of catalogs) {
       const reference = leaves(catalog.es).sort();
       for (const language of ["en", "fr", "de", "pt"] as const) {

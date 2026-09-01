@@ -65,7 +65,11 @@
   so card metadata is not independently verified against the mailbox. The
   preview is plain text only. Himalaya/IMAP provides no stable provider web
   link: Gmail can fall back to a best-effort RFC Message-ID search, while an
-  Outlook direct link requires a validated Microsoft Graph `webLink`.
+  Outlook direct link requires a validated Microsoft Graph `webLink`. Gmail's
+  Android app does not publish a browser-callable deep link for that search, so
+  an installed PWA can open the exact Message-ID search in Gmail Web or copy the
+  query for the user to paste into the native app; it cannot guarantee a one-tap
+  native handoff to the same message.
 - Validated email preview bodies are capped at 12,000 characters and cached
   encrypted for a fixed seven days (at most 512 references per conversation).
   A history refresh seeds and displays the most recent 512 references; older

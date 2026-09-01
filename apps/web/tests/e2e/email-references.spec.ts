@@ -113,7 +113,7 @@ test("usa un resumen compacto cuando el proveedor no entregó el cuerpo", async 
   expect(box!.height).toBeLessThanOrEqual(viewport.height * 0.75);
 });
 
-test("la PWA Android entrega el mensaje correcto directamente a la app de Gmail", async ({ page }, testInfo) => {
+test("la PWA Android conserva la búsqueda exacta con Gmail Web y copia manual", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-mobile", "Este flujo corresponde a la PWA móvil instalada");
   await page.addInitScript(() => {
     const browserMatchMedia = window.matchMedia.bind(window);
@@ -134,6 +134,15 @@ test("la PWA Android entrega el mensaje correcto directamente a la app de Gmail"
       configurable: true,
       get: () => "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/128.0 Mobile Safari/537.36",
     });
+    Object.defineProperty(window.navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText(value: string) {
+          (window as typeof window & { __copiedGmailSearch?: string }).__copiedGmailSearch = value;
+          return Promise.resolve();
+        },
+      },
+    });
   });
 
   await page.goto("/chats");
@@ -141,12 +150,29 @@ test("la PWA Android entrega el mensaje correcto directamente a la app de Gmail"
 
   const dialog = page.getByRole("dialog", { name: emailReferenceSubject });
   await expect(dialog).toBeVisible();
-  const gmailAppLink = dialog.getByRole("link", { name: "Abrir en la app de Gmail" });
-  const expectedIntent = `intent://mail.google.com/mail/#search/rfc822msgid%3Ae2e%40example.com#Intent;scheme=https;package=com.google.android.gm;S.browser_fallback_url=${encodeURIComponent(emailReferenceProviderTarget)};end`;
-  await expect(gmailAppLink).toHaveAttribute("href", expectedIntent);
-  await expect(gmailAppLink).toHaveAttribute("target", "_self");
-  await expect(dialog.getByRole("link", { name: "Abrir en navegador" })).toHaveAttribute(
-    "href",
-    emailReferenceProviderTarget,
+  const gmailWebLink = dialog.getByRole("link", { name: "Buscar correo en Gmail Web" });
+  await expect(gmailWebLink).toHaveAttribute("href", emailReferenceProviderTarget);
+  await expect(gmailWebLink).toHaveAttribute("target", "_blank");
+  await expect(dialog.locator('a[href^="intent:"]')).toHaveCount(0);
+
+  await expect(dialog.getByRole("textbox", { name: "Búsqueda exacta para Gmail" })).toHaveValue(
+    "rfc822msgid:e2e@example.com",
   );
+  await dialog.getByRole("button", { name: "Copiar búsqueda" }).click();
+  await expect(dialog.getByRole("status")).toContainText("Búsqueda copiada");
+  await expect.poll(() => page.evaluate(
+    () => (window as typeof window & { __copiedGmailSearch?: string }).__copiedGmailSearch,
+  )).toBe("rfc822msgid:e2e@example.com");
+
+  await page.setViewportSize({ width: 390, height: 560 });
+  const copyStatus = dialog.getByRole("status");
+  await copyStatus.scrollIntoViewIfNeeded();
+  const sheetBox = await dialog.locator(".email-preview-sheet").boundingBox();
+  const statusBox = await copyStatus.boundingBox();
+  expect(sheetBox).not.toBeNull();
+  expect(statusBox).not.toBeNull();
+  expect(sheetBox!.y).toBeGreaterThanOrEqual(0);
+  expect(sheetBox!.y + sheetBox!.height).toBeLessThanOrEqual(561);
+  expect(statusBox!.y).toBeGreaterThanOrEqual(sheetBox!.y);
+  expect(statusBox!.y + statusBox!.height).toBeLessThanOrEqual(sheetBox!.y + sheetBox!.height + 1);
 });

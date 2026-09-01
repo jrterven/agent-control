@@ -5,6 +5,7 @@ import { baseTranslations } from "./locales/base";
 import { adminResources } from "./locales/admin";
 import { chatResources } from "./locales/chat";
 import { dictationResources } from "./locales/dictation";
+import { emailResources } from "./locales/email";
 import { integrationResources } from "./locales/integrations";
 import { navigationResources } from "./locales/navigation";
 import { notificationResources } from "./locales/notifications";
@@ -74,6 +75,7 @@ const i18nInitialization = i18n.use(initReactI18next).init({
       asResource(navigationResources[language]),
       asResource(notificationResources[language]),
       asResource(chatResources[language]),
+      asResource(emailResources[language]),
       asResource(dictationResources[language]),
       asResource(integrationResources[language]),
       asResource(screenResources[language]),
