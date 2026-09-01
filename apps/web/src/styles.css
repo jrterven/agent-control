@@ -159,6 +159,7 @@ button { color: inherit; }
 .notification-menu__footer small[role="alert"] { color: var(--danger-text); }
 
 .left-sidebar { min-width: 0; height: 100dvh; z-index: 50; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg-deep); }
+.sidebar-brand, .gateway-select, .command-trigger, .sidebar-main-nav, .profile-strip, .sidebar-footer { flex-shrink: 0; }
 .sidebar-brand { height: 72px; display: flex; align-items: center; gap: 11px; padding: 0 18px; border-bottom: 1px solid var(--border); }
 .sidebar-brand > span:not(.brand-mark) { display: flex; align-items: baseline; gap: 5px; }
 .sidebar-brand strong { font-size: 16px; letter-spacing: -.02em; }
@@ -189,8 +190,9 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .profile-strip button { min-height: 44px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: 9px; padding: 0 8px; color: var(--muted); background: transparent; font-size: 11px; white-space: nowrap; cursor: pointer; }
 .profile-strip button > span { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 7px; color: var(--accent); background: var(--accent-soft); font-weight: 800; }
 .profile-strip button.is-active { color: var(--text); border-color: var(--border); background: var(--surface-2); }
+.sidebar-scroll { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; -webkit-overflow-scrolling: touch; }
 .sidebar-section { padding: 0 9px 10px; }
-.sidebar-section--sessions { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+.sidebar-section--sessions { min-height: 0; display: flex; flex-direction: column; }
 .sidebar-section__heading { min-height: 36px; display: flex; align-items: center; justify-content: space-between; padding: 0 7px; color: var(--muted); font-size: 10px; font-weight: 760; letter-spacing: .09em; text-transform: uppercase; }
 .sidebar-section__heading button { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; color: var(--muted); background: transparent; cursor: pointer; }
 .sidebar-section__heading button:hover { color: var(--text); background: var(--surface-2); }
@@ -200,7 +202,7 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .sidebar-section__heading-label { display: inline-flex; align-items: center; gap: 6px; }
 .sidebar-section__heading-label svg { color: var(--accent); }
 .workspace-list, .session-list { display: grid; gap: 3px; }
-.workspace-list { max-height: min(240px, 30dvh); overflow-y: auto; }
+.workspace-list { overflow: visible; }
 .workspace-list[hidden] { display: none; }
 .workspace-list__row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: center; gap: 2px; }
 .workspace-list .workspace-list__select { min-height: 44px; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; border-radius: 9px; padding: 0 8px; color: var(--muted-strong); background: transparent; text-align: left; cursor: pointer; }
@@ -211,10 +213,9 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .workspace-list .workspace-empty-action:disabled { opacity: .55; cursor: not-allowed; }
 .workspace-editor form > div:last-child { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .workspace-editor form > div:last-child > span { display: flex; gap: 8px; }
-.session-list { min-height: 0; overflow-y: auto; }
-.sidebar-section--sessions > .session-list { flex: 1; }
+.session-list { min-height: 0; overflow: visible; }
 .sidebar-section--pinned { min-height: 0; }
-.session-list--pinned { max-height: min(220px, 25dvh); }
+.session-list--pinned { max-height: none; }
 .session-list__row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: center; border-radius: 9px; color: var(--muted); }
 .session-list__row:hover, .session-list__row.is-active { color: var(--text); background: var(--surface-2); }
 .session-list .session-list__select { min-width: 0; min-height: 58px; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 9px; padding: 8px; color: inherit; background: transparent; text-align: left; cursor: pointer; }

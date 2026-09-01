@@ -121,6 +121,21 @@ describe("sidebar session menu", () => {
     expect(screen.getByRole("button", { name: /Papers/ })).toBeInTheDocument();
   });
 
+  it("scrolls workspaces, pinned chats, and conversations as one sidebar region", () => {
+    useAppStore.setState({ sessions: [{ ...session, pinnedAt: "2026-08-31T16:00:00Z" }] });
+    const { container } = render(<LeftSidebar />);
+
+    const scrollRegion = container.querySelector<HTMLElement>(".sidebar-scroll");
+    const footer = container.querySelector<HTMLElement>(".sidebar-footer");
+    const profileStrip = container.querySelector<HTMLElement>(".profile-strip");
+    expect(scrollRegion).not.toBeNull();
+    expect(within(scrollRegion as HTMLElement).getByText("Espacios de trabajo")).toBeInTheDocument();
+    expect(within(scrollRegion as HTMLElement).getByText("Fijados")).toBeInTheDocument();
+    expect(within(scrollRegion as HTMLElement).getByText("Conversaciones")).toBeInTheDocument();
+    expect(scrollRegion).not.toContainElement(footer);
+    expect(scrollRegion).not.toContainElement(profileStrip);
+  });
+
   it("shows pinned chats from another agent and workspace and restores their context", async () => {
     const user = userEvent.setup();
     const otherProfile: Profile = {

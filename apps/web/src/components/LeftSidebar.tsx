@@ -375,45 +375,47 @@ export function LeftSidebar() {
           ))}
         </nav>
 
-        <div className="sidebar-section">
-          <div className="sidebar-section__heading">
-            <button
-              type="button"
-              className={cx("sidebar-section__toggle", !workspacesExpanded && "is-collapsed")}
-              aria-expanded={workspacesExpanded}
-              aria-controls="sidebar-workspace-list"
-              aria-label={t(workspacesExpanded ? "sidebar.collapseWorkspaces" : "sidebar.expandWorkspaces")}
-              onClick={() => setWorkspacesExpanded((expanded) => !expanded)}
-            >
-              <CaretDown size={14} /><span>{t("sidebar.workspaces")}</span>
-            </button>
-            {authState === "authenticated" && !demoMode ? <IconButton label={t("sidebar.createWorkspace")} icon={<Plus size={16} />} onClick={() => openWorkspaceEditor()} /> : null}
+        <div className="sidebar-scroll">
+          <div className="sidebar-section">
+            <div className="sidebar-section__heading">
+              <button
+                type="button"
+                className={cx("sidebar-section__toggle", !workspacesExpanded && "is-collapsed")}
+                aria-expanded={workspacesExpanded}
+                aria-controls="sidebar-workspace-list"
+                aria-label={t(workspacesExpanded ? "sidebar.collapseWorkspaces" : "sidebar.expandWorkspaces")}
+                onClick={() => setWorkspacesExpanded((expanded) => !expanded)}
+              >
+                <CaretDown size={14} /><span>{t("sidebar.workspaces")}</span>
+              </button>
+              {authState === "authenticated" && !demoMode ? <IconButton label={t("sidebar.createWorkspace")} icon={<Plus size={16} />} onClick={() => openWorkspaceEditor()} /> : null}
+            </div>
+            <div className="workspace-list" id="sidebar-workspace-list" hidden={!workspacesExpanded}>
+              {workspaces.map((workspace) => (
+                <div className="workspace-list__row" key={workspace.id}>
+                  <button type="button" className={cx("workspace-list__select", workspace.id === selectedWorkspaceId && "is-active")} onClick={() => selectWorkspace(workspace.id)}>
+                    <span>{workspace.name}</span><Badge>{workspace.sessionCount}</Badge>
+                  </button>
+                  {workspace.id === selectedWorkspaceId && authState === "authenticated" && !demoMode ? <IconButton className="workspace-list__edit" label={t("sidebar.editWorkspace", { name: workspace.name })} icon={<PencilSimple size={15} />} onClick={() => openWorkspaceEditor(workspace)} /> : null}
+                </div>
+              ))}
+              {unassignedSessions.length ? <div className="workspace-list__row"><button type="button" className={cx("workspace-list__select", !selectedWorkspaceId && "is-active")} onClick={() => selectWorkspace("")}><span>{t("sidebar.noWorkspace")}</span><Badge>{unassignedSessions.length}</Badge></button></div> : null}
+              {!workspaces.length ? <button type="button" className="workspace-empty-action" disabled={authState !== "authenticated" || demoMode} onClick={() => openWorkspaceEditor()}><Plus size={17} /> {t("sidebar.createFirstWorkspace")}</button> : null}
+            </div>
           </div>
-          <div className="workspace-list" id="sidebar-workspace-list" hidden={!workspacesExpanded}>
-            {workspaces.map((workspace) => (
-              <div className="workspace-list__row" key={workspace.id}>
-                <button type="button" className={cx("workspace-list__select", workspace.id === selectedWorkspaceId && "is-active")} onClick={() => selectWorkspace(workspace.id)}>
-                  <span>{workspace.name}</span><Badge>{workspace.sessionCount}</Badge>
-                </button>
-                {workspace.id === selectedWorkspaceId && authState === "authenticated" && !demoMode ? <IconButton className="workspace-list__edit" label={t("sidebar.editWorkspace", { name: workspace.name })} icon={<PencilSimple size={15} />} onClick={() => openWorkspaceEditor(workspace)} /> : null}
-              </div>
-            ))}
-            {unassignedSessions.length ? <div className="workspace-list__row"><button type="button" className={cx("workspace-list__select", !selectedWorkspaceId && "is-active")} onClick={() => selectWorkspace("")}><span>{t("sidebar.noWorkspace")}</span><Badge>{unassignedSessions.length}</Badge></button></div> : null}
-            {!workspaces.length ? <button type="button" className="workspace-empty-action" disabled={authState !== "authenticated" || demoMode} onClick={() => openWorkspaceEditor()}><Plus size={17} /> {t("sidebar.createFirstWorkspace")}</button> : null}
-          </div>
-        </div>
 
-        {pinnedSessions.length ? <div className="sidebar-section sidebar-section--pinned">
-          <div className="sidebar-section__heading"><span className="sidebar-section__heading-label"><PushPinSimple size={14} weight="fill" />{t("sidebar.pinnedConversations")}</span></div>
-          <div className="session-list session-list--pinned" role="list" aria-label={t("sidebar.pinnedConversations")}>
-            {pinnedSessions.map((session) => renderSessionRow(session, true))}
-          </div>
-        </div> : null}
+          {pinnedSessions.length ? <div className="sidebar-section sidebar-section--pinned">
+            <div className="sidebar-section__heading"><span className="sidebar-section__heading-label"><PushPinSimple size={14} weight="fill" />{t("sidebar.pinnedConversations")}</span></div>
+            <div className="session-list session-list--pinned" role="list" aria-label={t("sidebar.pinnedConversations")}>
+              {pinnedSessions.map((session) => renderSessionRow(session, true))}
+            </div>
+          </div> : null}
 
-        <div className="sidebar-section sidebar-section--sessions">
-          <div className="sidebar-section__heading"><span>{t("sidebar.conversations")}</span></div>
-          <div className="session-list">
-            {visibleSessions.map((session) => renderSessionRow(session))}
+          <div className="sidebar-section sidebar-section--sessions">
+            <div className="sidebar-section__heading"><span>{t("sidebar.conversations")}</span></div>
+            <div className="session-list">
+              {visibleSessions.map((session) => renderSessionRow(session))}
+            </div>
           </div>
         </div>
 
