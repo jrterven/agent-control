@@ -58,7 +58,10 @@ with host access.
   RFC Message-IDs, source URLs and body text are absent from ordinary history
   projections. Preview/open endpoints resolve the opaque id only from that
   authenticated session's AAD-bound cache or, on a miss, its Hermes history;
-  they return `no-store` and never render remote email HTML.
+  they return `no-store` and never render remote email HTML. Installed PWAs may
+  request the allowlisted provider target as authenticated JSON before an
+  out-of-scope mobile navigation; the client revalidates the provider host and
+  retains the target only in memory for that navigation.
 - Offline email previews are AES-GCM Vault envelopes bound with AAD to the
   owner, session and opaque reference. Their fixed seven-day TTL is purged at
   startup and hourly; an accessed expired entry is also deleted. Normal reads

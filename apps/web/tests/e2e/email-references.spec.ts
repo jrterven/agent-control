@@ -2,6 +2,7 @@ import {
   expect,
   test,
   emailReferenceOpenPath,
+  emailReferenceProviderTarget,
   emailReferenceSubject,
   emailSummarySubject,
 } from "./fixtures";
@@ -21,7 +22,7 @@ test("abre una tarjeta de correo en una vista previa responsive y de texto plano
   await expect(card).toBeVisible();
   await expect(page.getByText("Google Ads", { exact: true })).toBeVisible();
   await expect(page.getByText("Completa la verificación antes del plazo indicado.")).toBeVisible();
-  const cardTrust = card.getByText("Citado por Newton · no verificado con el buzón");
+  const cardTrust = card.getByText("Referencia de Newton · confirma en tu buzón");
   await expect(cardTrust).toBeVisible();
   const cardBox = await card.boundingBox();
   const cardTrustBox = await cardTrust.boundingBox();
@@ -50,7 +51,7 @@ test("abre una tarjeta de correo en una vista previa responsive y de texto plano
   await expect(plainTextBody.locator("*")).toHaveCount(0);
   await expect(dialog.locator("img, script")).toHaveCount(0);
   await expect(dialog.getByText("Vista en texto plano; no carga imágenes ni contenido remoto.")).toBeVisible();
-  await expect(dialog.getByText("Citado por Newton · no verificado con el buzón")).toBeVisible();
+  await expect(dialog.getByText("Referencia de Newton · confirma en tu buzón")).toBeVisible();
   const dialogSearchAction = dialog.getByRole("link", { name: "Buscar en Gmail" });
   await expect(dialogSearchAction).toHaveAttribute("href", emailReferenceOpenPath);
 
@@ -110,4 +111,35 @@ test("usa un resumen compacto cuando el proveedor no entregó el cuerpo", async 
   const box = await dialog.locator(".email-preview-sheet").boundingBox();
   expect(box).not.toBeNull();
   expect(box!.height).toBeLessThanOrEqual(viewport.height * 0.75);
+});
+
+test("la PWA móvil resuelve el destino autenticado antes de salir a Gmail", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-mobile", "Este flujo corresponde a la PWA móvil instalada");
+  await page.addInitScript(() => {
+    const browserMatchMedia = window.matchMedia.bind(window);
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (query: string) => query === "(display-mode: standalone)" ? {
+        matches: true,
+        media: query,
+        onchange: null,
+        addListener() {},
+        removeListener() {},
+        addEventListener() {},
+        removeEventListener() {},
+        dispatchEvent() { return false; },
+      } : browserMatchMedia(query),
+    });
+  });
+  await page.context().route("https://mail.google.com/**", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: "<!doctype html><title>Gmail</title><p>Destino Gmail abierto</p>",
+  }));
+
+  await page.goto("/chats");
+  await page.getByRole("link", { name: `Buscar en Gmail: ${emailReferenceSubject}` }).click();
+
+  await expect(page.getByText("Destino Gmail abierto")).toBeVisible();
+  expect(page.url()).toBe(emailReferenceProviderTarget);
 });

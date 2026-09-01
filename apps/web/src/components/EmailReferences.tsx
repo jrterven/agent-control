@@ -1,5 +1,5 @@
 import { ArrowSquareOut, EnvelopeSimple, FileText, Info, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
-import { useEffect, useId, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
 import { formatConversationTimestamp } from "../lib/dateTime";
@@ -17,6 +17,27 @@ function openActionKey(reference: EmailReference) {
   return reference.openMode === "search" ? "searchIn" : "openIn";
 }
 
+function isInstalledPwa() {
+  const standaloneNavigator = navigator as Navigator & { standalone?: boolean };
+  return standaloneNavigator.standalone === true
+    || window.matchMedia?.("(display-mode: standalone)").matches === true;
+}
+
+function safeResolvedTarget(reference: EmailReference, value: unknown) {
+  if (typeof value !== "string" || value.length > 2_048) return "";
+  try {
+    const target = new URL(value);
+    if (target.protocol !== "https:" || target.username || target.password || (target.port && target.port !== "443")) return "";
+    const host = target.hostname.toLowerCase().replace(/\.$/, "");
+    if (reference.provider === "gmail" && host !== "mail.google.com") return "";
+    if (reference.provider === "outlook" && !["outlook.live.com", "outlook.office.com", "outlook.office365.com"].includes(host)) return "";
+    if (reference.provider === "imap") return "";
+    return target.href;
+  } catch {
+    return "";
+  }
+}
+
 function EmailProviderMark({ provider }: { provider: EmailReference["provider"] }) {
   return <span className={`email-provider-mark email-provider-mark--${provider}`} aria-hidden="true">
     {provider === "gmail" ? "G" : provider === "outlook" ? "O" : <EnvelopeSimple weight="bold" />}
@@ -30,6 +51,7 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
   const [previewState, setPreviewState] = useState<PreviewState>("idle");
   const [bodyText, setBodyText] = useState("");
   const [summaryOnly, setSummaryOnly] = useState(false);
+  const [openError, setOpenError] = useState("");
   const requestGenerationRef = useRef(0);
   const headingId = useId();
   const descriptionId = useId();
@@ -41,6 +63,7 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
     setPreviewState("idle");
     setBodyText("");
     setSummaryOnly(false);
+    setOpenError("");
   };
   const dialog = useOverlayDialog<HTMLDivElement>({
     open: Boolean(selected),
@@ -56,6 +79,7 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
     setSelected(reference);
     setBodyText("");
     setSummaryOnly(false);
+    setOpenError("");
     setPreviewState("loading");
     try {
       const preview = await api.emailReferencePreview(sessionId, reference.id);
@@ -70,6 +94,22 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
     } catch {
       if (requestGenerationRef.current !== generation) return;
       setPreviewState("error");
+    }
+  };
+
+  const openFromInstalledPwa = async (event: MouseEvent<HTMLAnchorElement>, reference: EmailReference) => {
+    if (!isInstalledPwa()) return;
+    event.preventDefault();
+    setOpenError("");
+    try {
+      const resolved = await api.emailReferenceOpenTarget(sessionId, reference.id);
+      const target = safeResolvedTarget(reference, resolved.targetUrl);
+      if (!target) throw new Error("Unsafe email target");
+      // Navigating the standalone context does not depend on the external
+      // browser sharing Agent Control's HttpOnly session cookie.
+      window.open(target, "_self");
+    } catch {
+      setOpenError(t("chat.emailReferences.openError"));
     }
   };
 
@@ -108,11 +148,13 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
             target="_blank"
             rel="noopener noreferrer"
             referrerPolicy="no-referrer"
+            onClick={(event) => void openFromInstalledPwa(event, reference)}
             aria-label={t(reference.openMode === "search" ? "chat.emailReferences.searchAria" : "chat.emailReferences.openAria", { provider: providerLabel, subject: reference.subject })}
             title={t(`chat.emailReferences.${openActionKey(reference)}`, { provider: providerLabel })}
           ><ArrowSquareOut weight="bold" /></a> : null}
         </div>;
       })}
+      {openError && !selected ? <p className="email-references__error" role="alert"><WarningCircle aria-hidden="true" /> {openError}</p> : null}
     </section>
 
     {selected ? <div
@@ -148,12 +190,14 @@ export function EmailReferences({ references, sessionId, agentName }: { referenc
           <div className="email-preview-sheet__notices">
             <span className="email-reference-trust"><Info weight="fill" aria-hidden="true" /> {t("chat.emailReferences.citedNotVerified", { agent: agentName })}</span>
             <span><FileText aria-hidden="true" /> {t(summaryOnly ? "chat.emailReferences.summaryPreview" : "chat.emailReferences.safePreview")}</span>
+            {openError ? <span className="email-preview-sheet__open-error" role="alert"><WarningCircle aria-hidden="true" /> {openError}</span> : null}
           </div>
           {selected.openUrl ? <a
             href={selected.openUrl}
             target="_blank"
             rel="noopener noreferrer"
             referrerPolicy="no-referrer"
+            onClick={(event) => void openFromInstalledPwa(event, selected)}
           ><EnvelopeSimple weight="fill" /> {t(`chat.emailReferences.${openActionKey(selected)}`, { provider: t(`chat.emailReferences.providers.${selected.provider}`) })}<ArrowSquareOut /></a> : null}
         </footer>
       </section>

@@ -209,7 +209,7 @@ describe("rehydrated Hermes tool history", () => {
     const card = await screen.findByRole("button", { name: "Ver correo: [Action required] Your account will be paused" });
     expect(card).toBeVisible();
     expect(screen.getByText("Google Ads")).toBeVisible();
-    expect(screen.getByText("Citado por Newton · no verificado con el buzón")).toBeVisible();
+    expect(screen.getByText("Referencia de Newton · confirma en tu buzón")).toBeVisible();
     const searchLink = screen.getByRole("link", { name: "Buscar en Gmail: [Action required] Your account will be paused" });
     expect(searchLink).toHaveAttribute("href", openUrl);
     expect(searchLink).toHaveAttribute("target", "_blank");
@@ -221,9 +221,31 @@ describe("rehydrated Hermes tool history", () => {
     const dialog = screen.getByRole("dialog", { name: "[Action required] Your account will be paused" });
     expect(dialog).toBeVisible();
     expect(dialog).toHaveTextContent("Vista en texto plano");
-    expect(dialog).toHaveTextContent("Citado por Newton · no verificado con el buzón");
+    expect(dialog).toHaveTextContent("Referencia de Newton · confirma en tu buzón");
     expect(dialog.querySelector("img")).toBeNull();
     expect(screen.getByRole("link", { name: "Buscar en Gmail" })).toHaveAttribute("href", openUrl);
+
+    await user.click(dialog.querySelector(".email-preview-sheet__close")!);
+    const targetUrl = "https://mail.google.com/mail/#search/rfc822msgid%3Atest%40example.com";
+    const resolveTarget = vi.spyOn(api, "emailReferenceOpenTarget").mockResolvedValue({ targetUrl });
+    vi.spyOn(window, "matchMedia").mockImplementation((query: string) => ({
+      matches: query === "(display-mode: standalone)",
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    const openWindow = vi.spyOn(window, "open").mockImplementation(() => null);
+
+    await user.click(searchLink);
+    await waitFor(() => expect(resolveTarget).toHaveBeenCalledWith(
+      "session-papers",
+      "0123456789abcdef0123456789abcdef",
+    ));
+    expect(openWindow).toHaveBeenCalledWith(targetUrl, "_self");
   });
 
   it("drops mail cards whose preview route escapes the same-origin session contract", async () => {

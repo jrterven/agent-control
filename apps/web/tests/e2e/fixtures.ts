@@ -84,6 +84,7 @@ export const emailReferenceId = "0123456789abcdef0123456789abcdef";
 export const emailReferencePreviewPath = `/api/v1/sessions/session-e2e/email-references/${emailReferenceId}`;
 export const emailReferenceOpenPath = `${emailReferencePreviewPath}/open`;
 export const emailReferenceSubject = "[Action required] Verifica tu cuenta";
+export const emailReferenceProviderTarget = "https://mail.google.com/mail/#search/rfc822msgid%3Ae2e%40example.com";
 export const emailSummaryReferenceId = "abcdef0123456789abcdef0123456789";
 export const emailSummaryPreviewPath = `/api/v1/sessions/session-e2e/email-references/${emailSummaryReferenceId}`;
 export const emailSummarySubject = "Solicitud de asesoría previa al tutoral";
@@ -190,7 +191,11 @@ export async function installMockApi(
     if (path === "/api/v1/sessions/session-e2e/messages") return json(route, history);
     if (path === emailReferencePreviewPath && method === "GET") return json(route, emailReferencePreview);
     if (path === emailSummaryPreviewPath && method === "GET") return json(route, emailSummaryPreview);
-    if (path === emailReferenceOpenPath && method === "GET") return route.fulfill({ status: 204 });
+    if (path === emailReferenceOpenPath && method === "GET") {
+      return request.headers()["accept"]?.includes("application/json")
+        ? json(route, { targetUrl: emailReferenceProviderTarget })
+        : route.fulfill({ status: 204 });
+    }
     if (path === "/api/v1/realtime/tickets" && method === "POST") {
       return json(route, { detail: "Realtime intentionally disabled in deterministic E2E" }, 503);
     }

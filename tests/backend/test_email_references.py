@@ -843,6 +843,20 @@ def test_history_email_preview_and_redirect_are_owned_and_provider_allowlisted(
         "rfc822msgid%3Aurgent.123%40example.com"
     )
 
+    resolved = client.get(
+        reference["openUrl"],
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert resolved.status_code == 200
+    assert resolved.json() == {"targetUrl": opened.headers["location"]}
+    assert resolved.headers["cache-control"] == "no-store"
+    assert "object-src 'none'" in resolved.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in resolved.headers["content-security-policy"]
+    assert resolved.headers["referrer-policy"] == "no-referrer"
+    assert resolved.headers["vary"] == "Accept"
+    assert resolved.headers["x-content-type-options"] == "nosniff"
+
     missing = client.get(
         f"/api/v1/sessions/{session['id']}/email-references/{'0' * 32}"
     )
@@ -866,6 +880,11 @@ def test_history_email_preview_and_redirect_are_owned_and_provider_allowlisted(
     assert login.status_code == 200
     assert client.get(reference["previewUrl"]).status_code == 404
     assert client.get(reference["openUrl"], follow_redirects=False).status_code == 404
+    assert client.get(
+        reference["openUrl"],
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    ).status_code == 404
 
 
 def test_history_projects_structured_tool_reference_without_parsing_tool_content(

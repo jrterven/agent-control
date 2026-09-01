@@ -147,10 +147,20 @@ Generic Himalaya/IMAP references remain preview-only because mailbox UIDs are
 local to one account/folder and are not safe web identifiers. When Himalaya
 reads a `gmail.com`/`googlemail.com` account, Control recognizes the underlying
 provider and can still derive the safe Gmail Message-ID search action. The card
-is durable across history reloads, but its metadata is
-display evidence supplied by the agent, not cryptographic proof of the mailbox
-record. Credentials, local account names, mailbox UIDs and upstream identifiers
+is durable across history reloads, but its metadata is display evidence supplied
+by the agent, not cryptographic proof of the mailbox record. The label
+**Reference from the agent · confirm in your mailbox** therefore asks you to
+compare important sender, subject and content details with the provider when you
+open the message; it does not mean that the message is known to be false or
+missing. Credentials, local account names, mailbox UIDs and upstream identifiers
 do not reach the browser.
+
+An installed mobile PWA first resolves **Open/Search in Gmail or Outlook** with
+its authenticated Agent Control session and then navigates directly to the
+strictly allowlisted provider URL. This avoids depending on the external mobile
+browser sharing the PWA cookie. The resolved target is returned with `no-store`,
+used only for that navigation and is not written to chat history or the offline
+cache. Ordinary browser tabs keep the same authenticated server-side redirect.
 
 For availability while a gateway sleeps, validated previews are cached with
 the installation Vault using AES-GCM and owner/session/reference AAD. The

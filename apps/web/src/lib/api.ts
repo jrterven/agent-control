@@ -432,6 +432,9 @@ export const api = {
   emailReferencePreview: (sessionId: string, referenceId: string) => request<EmailReferencePreview>(
     `/sessions/${encodeURIComponent(sessionId)}/email-references/${encodeURIComponent(referenceId)}`,
   ),
+  emailReferenceOpenTarget: (sessionId: string, referenceId: string) => request<{ targetUrl: string }>(
+    `/sessions/${encodeURIComponent(sessionId)}/email-references/${encodeURIComponent(referenceId)}/open`,
+  ),
   exportSession: (sessionId: string) => requestBlob(`/sessions/${encodeURIComponent(sessionId)}/export`),
   submitPrompt: (sessionId: string, content: string, idempotencyKey: string, csrfToken?: string, attachments: File[] = []) => {
     if (!attachments.length) {

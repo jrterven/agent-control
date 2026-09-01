@@ -1746,29 +1746,47 @@ async def session_email_reference(
     )
 
 
-@router.get("/sessions/{session_id}/email-references/{reference_id}/open")
+@router.get(
+    "/sessions/{session_id}/email-references/{reference_id}/open",
+    response_model=None,
+)
 async def open_session_email_reference(
     session_id: str,
     reference_id: str,
     request: Request,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
-) -> RedirectResponse:
-    """Redirect through an owned reference to one allowlisted mail provider."""
+) -> RedirectResponse | JSONResponse:
+    """Resolve or redirect an owned reference to an allowlisted mail provider.
+
+    Installed mobile PWAs may use a browser context whose cookie jar is
+    separate from the standalone app.  Their authenticated same-origin fetch
+    asks for JSON, then navigates straight to the validated provider target.
+    Ordinary browser links keep the server-side redirect and never expose the
+    target in durable chat history.
+    """
 
     service = SessionService(services(request))
     row = service.owned(db, user, session_id)
     asset = await service.email_reference(db, user, row, reference_id)
     if not asset.reference.source_url:
         raise NotFoundError("Email open target not found")
+    security_headers = {
+        "Cache-Control": "private, no-store",
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+        "Referrer-Policy": "no-referrer",
+        "Vary": "Accept",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if "application/json" in request.headers.get("accept", "").casefold():
+        return JSONResponse(
+            {"targetUrl": asset.reference.source_url},
+            headers=security_headers,
+        )
     return RedirectResponse(
         asset.reference.source_url,
         status_code=307,
-        headers={
-            "Cache-Control": "private, no-store",
-            "Referrer-Policy": "no-referrer",
-            "X-Content-Type-Options": "nosniff",
-        },
+        headers=security_headers,
     )
 
 
