@@ -68,6 +68,10 @@ During a conversation Agent Control can:
 - render verified approval and clarification requests as explicit controls;
 - reconnect after a tunnel, Tailscale or provider interruption without
   automatically resending an ambiguous prompt;
+- preserve a newly opened, still-empty chat across a Hermes restart; if the
+  complete provider inventory proves its temporary pre-first-message session
+  disappeared, Agent Control creates a fresh empty route before sending the
+  first prompt exactly once;
 - keep drafts on the device and optionally cache a bounded encrypted snapshot;
 - show context use, tools, subagents and recent activity in the pulse panel or
   mobile context sheet;

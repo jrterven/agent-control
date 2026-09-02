@@ -28,6 +28,7 @@ with host access.
 | Partial or concurrent profile move | Lost history, duplicate cron execution or work sent to the old computer | shared profile lifecycle lock, active-work preflight, paused cron inventory, streamed native export/import, destination verification, atomic local cutover and fail-closed rollback |
 | Deleted Hermes profile reappears | Supposedly removed agent resumes cron work | exact revision allowlist; Hermes 0.20.5 delete/transfer is disabled because its stale multiplex heartbeat can recreate the directory |
 | Duplicate accepted prompt | Duplicate external side effects | idempotency ledger plus no blind Hermes mutation retry; durable reconciliation |
+| Restart loses a new empty chat | First prompt is rejected or an unsafe retry duplicates work | replace only a Control-created, history-less route after complete inventory proves it missing; consume the empty-history exception immediately before dispatch |
 | Replay gap/restart | Missing or reordered UI state | `(epoch, seq)` dedupe, truncation detection, history rehydrate |
 | Secret in logs/errors | Credential disclosure | structured allowlist logs, recursive redaction, safe upstream error mapping |
 | Untrusted Markdown/tool output | XSS or data exfiltration | sanitize HTML/URLs, CSP, no arbitrary iframes, safe download proxy |

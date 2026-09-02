@@ -186,6 +186,12 @@ tuple. A resume may replace the runtime ID; no request may reuse the old one.
    durable transcript.
 7. If a disconnect happens after `prompt.submit` was accepted, reconcile the
    durable last user turn. Never resend the prompt automatically.
+8. Hermes may keep a newly created chat only in memory until its first prompt.
+   Before that first dispatch, Control validates the runtime. If resume fails
+   and a complete inventory proves the empty route disappeared, Control
+   replaces only that unpersisted route and then submits once. The one-time
+   empty-history allowance is consumed immediately before `prompt.submit`, not
+   while merely attempting to resume the runtime.
 
 Connection-state persistence is best-effort for the transport supervisor: a
 temporary SQLite failure is logged without values and retried while the

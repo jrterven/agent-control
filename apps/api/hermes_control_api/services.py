@@ -3209,6 +3209,105 @@ class SessionService:
             history = []
         return history
 
+    async def _replace_missing_initial_session(
+        self,
+        db: Session,
+        actor: User,
+        row: SessionLink,
+        operation: IdempotencyOperation,
+        connection: ProviderConnection,
+    ) -> None:
+        """Recreate a lazy, still-empty Hermes session lost across a restart.
+
+        Hermes does not persist an RPC-created session until prompt one.  A
+        complete session inventory can therefore prove that a history-less,
+        Control-created route disappeared before it ever accepted work.  Only
+        that narrow state is replaceable: established sessions and incomplete
+        inventories continue to fail closed.
+        """
+
+        provider = await self.services.provider_pool.get(connection)
+        try:
+            routed, resumed = await self.services.session_router.ensure_runtime(
+                self._route(row), connection
+            )
+        except (JsonRpcError, KeyError):
+            # The official dashboard reports an unknown lazy session as a
+            # JSON-RPC error; the REST compatibility path uses KeyError.  A
+            # complete inventory check below is still required before any
+            # replacement, so unrelated resume errors cannot erase a route.
+            pass
+        else:
+            self._assign_runtime(
+                db,
+                row,
+                routed.runtime_session_id,
+                provider.runtime_generation,
+            )
+            if resumed is not None:
+                row.title = resumed.title or row.title
+                row.status = resumed.status
+            # Keep the refreshed runtime durable while leaving the one-time
+            # empty-history marker untouched until prompt dispatch begins.
+            db.commit()
+            db.refresh(row)
+            db.refresh(operation)
+            return
+
+        await require_capability(
+            db,
+            self.services,
+            gateway_id=row.gateway_id,
+            profile_name=row.profile_name,
+            method="session.list",
+        )
+        await require_capability(
+            db,
+            self.services,
+            gateway_id=row.gateway_id,
+            profile_name=row.profile_name,
+            method="session.create",
+        )
+        inventory = await provider.list_sessions()
+        if not provider.session_inventory_complete or any(
+            session.stored_session_id == row.stored_session_id
+            for session in inventory
+        ):
+            return
+
+        replacement = await provider.create_session(title=row.title)
+        row.stored_session_id = replacement.stored_session_id
+        row.runtime_session_id = replacement.runtime_session_id
+        row.title = replacement.title or row.title
+        row.status = replacement.status
+        self._assign_runtime(
+            db,
+            row,
+            replacement.runtime_session_id,
+            provider.runtime_generation,
+        )
+        self.services.session_router.mark_runtime(
+            self._route(row), generation=provider.runtime_generation
+        )
+        operation.response_json = {
+            **dict(operation.response_json or {}),
+            "_initialSessionRecreated": True,
+        }
+        audit(
+            db,
+            actor=actor,
+            action="session.recreate_unpersisted",
+            target_type="session",
+            target_id=row.id,
+            details={"reason": "missing_before_first_prompt"},
+        )
+        # Persist the replacement while retaining initial_history_pending.  A
+        # crash here is safe: no prompt dispatch has begun and a later attempt
+        # may establish a fresh empty boundary again.
+        db.commit()
+        db.refresh(row)
+        db.refresh(operation)
+
     def _media_asset(
         self,
         row: SessionLink,
@@ -3708,6 +3807,14 @@ class SessionService:
                     raise
                 baseline_history = []
                 initial_empty_boundary = True
+            if initial_empty_boundary:
+                await self._replace_missing_initial_session(
+                    db,
+                    actor,
+                    row,
+                    operation,
+                    connection,
+                )
             operation.response_json = {
                 **dict(operation.response_json or {}),
                 "_historyCount": len(baseline_history),
@@ -3724,11 +3831,6 @@ class SessionService:
                 prompt,
                 baseline_history,
             )
-            # Consume the exception before dispatch and persist that fact with
-            # the boundary. A later 404 can never inherit this authorization,
-            # including after a crash or an ambiguous first mutation.
-            row.initial_history_pending = False
-            db.commit()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -3759,6 +3861,13 @@ class SessionService:
                     **dict(operation.response_json or {}),
                     "_promptHash": self._prompt_digest(submitted_prompt),
                 }
+                # Consume the one-time empty-history exception immediately
+                # before prompt.submit. Failures while validating/resuming the
+                # runtime happen before this callback and may safely leave the
+                # blank chat recoverable; once dispatch can begin, a later 404
+                # must never authorize an automatic replay.
+                if row.initial_history_pending:
+                    row.initial_history_pending = False
                 db.commit()
 
             routed, receipt = await self.services.session_router.submit_prompt(

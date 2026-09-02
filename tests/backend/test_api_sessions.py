@@ -10,6 +10,7 @@ from hermes_control_api.api.routes import bind_owned_realtime_event
 from hermes_client import (
     HermesSession,
     InMemoryHermesProvider,
+    JsonRpcError,
     NormalizedEvent,
     PromptReceipt,
     SessionHistoryNotFound,
@@ -239,6 +240,142 @@ def test_first_prompt_accepts_only_control_created_lazy_history_boundary(
         and item["content"] == "Persist this official first prompt"
         for item in persisted_history.json()["items"]
     )
+
+
+def test_first_prompt_recreates_lazy_session_lost_during_gateway_restart(
+    authenticated, app, monkeypatch
+):
+    client, csrf = authenticated
+    original_resume = InMemoryHermesProvider.resume_session
+    original_submit = InMemoryHermesProvider.submit_prompt
+
+    async def missing_until_first_prompt(provider, stored_session_id):
+        if stored_session_id not in provider._messages:
+            raise SessionHistoryNotFound(stored_session_id)
+        return list(provider._messages[stored_session_id])
+
+    async def reject_missing_resume(provider, stored_session_id):
+        if stored_session_id not in provider._sessions:
+            raise JsonRpcError(4040, "session not found")
+        return await original_resume(provider, stored_session_id)
+
+    async def persist_then_submit(
+        provider,
+        route,
+        prompt,
+        *,
+        operation_id,
+        expected_runtime_generation=None,
+    ):
+        provider._messages.setdefault(route.stored_session_id, [])
+        return await original_submit(
+            provider,
+            route,
+            prompt,
+            operation_id=operation_id,
+            expected_runtime_generation=expected_runtime_generation,
+        )
+
+    monkeypatch.setattr(
+        InMemoryHermesProvider, "history_readonly", missing_until_first_prompt
+    )
+    monkeypatch.setattr(
+        InMemoryHermesProvider, "resume_session", reject_missing_resume
+    )
+    monkeypatch.setattr(InMemoryHermesProvider, "submit_prompt", persist_then_submit)
+
+    session = create_session(client, csrf, "control-dev", "restart-lazy-create")
+    original_stored_id = session["storedSessionId"]
+
+    async def lose_ephemeral_runtime():
+        with app.state.session_factory() as db:
+            row = db.get(SessionLink, session["id"])
+            from hermes_control_api.services import GatewayService
+
+            connection = await GatewayService(app.state.services).connection(
+                db, row.gateway_id, row.profile_name
+            )
+        provider = await app.state.services.provider_pool.get(connection)
+        provider._sessions.pop(original_stored_id, None)
+        provider._messages.pop(original_stored_id, None)
+        app.state.services.session_router.purge_profile(
+            session["gatewayId"], "control-dev"
+        )
+
+    client.portal.call(lose_ephemeral_runtime)
+
+    operation_id = "first-prompt-after-gateway-restart"
+    submitted = client.post(
+        f"/api/v1/sessions/{session['id']}/prompts",
+        headers=mutation_headers(csrf, operation_id),
+        json={"content": "Send once after the restart"},
+    )
+    assert submitted.status_code == 202, submitted.text
+
+    with app.state.session_factory() as db:
+        row = db.get(SessionLink, session["id"])
+        operation = db.scalar(
+            select(IdempotencyOperation).where(
+                IdempotencyOperation.user_id == row.owner_id,
+                IdempotencyOperation.scope == f"session:{row.id}:prompt",
+                IdempotencyOperation.idempotency_key == operation_id,
+            )
+        )
+        assert row.stored_session_id != original_stored_id
+        assert row.initial_history_pending is False
+        assert operation is not None
+        assert operation.response_json["_initialSessionRecreated"] is True
+
+    history = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert history.status_code == 200, history.text
+    assert [
+        item["content"]
+        for item in history.json()["items"]
+        if item["role"] == "user"
+    ] == ["Send once after the restart"]
+
+
+def test_predispatch_resume_failure_keeps_lazy_session_recoverable(
+    authenticated, app, monkeypatch
+):
+    client, csrf = authenticated
+
+    async def missing_until_first_prompt(provider, stored_session_id):
+        raise SessionHistoryNotFound(stored_session_id)
+
+    async def reject_resume(provider, stored_session_id):
+        raise JsonRpcError(4090, "runtime temporarily unavailable")
+
+    monkeypatch.setattr(
+        InMemoryHermesProvider, "history_readonly", missing_until_first_prompt
+    )
+    monkeypatch.setattr(InMemoryHermesProvider, "resume_session", reject_resume)
+
+    session = create_session(client, csrf, "control-dev", "retryable-lazy-create")
+    app.state.services.session_router.purge_profile(
+        session["gatewayId"], "control-dev"
+    )
+
+    operation_id = "predispatch-resume-failure"
+    submitted = client.post(
+        f"/api/v1/sessions/{session['id']}/prompts",
+        headers=mutation_headers(csrf, operation_id),
+        json={"content": "Do not consume the empty boundary"},
+    )
+    assert submitted.status_code == 409
+
+    with app.state.session_factory() as db:
+        row = db.get(SessionLink, session["id"])
+        operation = db.scalar(
+            select(IdempotencyOperation).where(
+                IdempotencyOperation.user_id == row.owner_id,
+                IdempotencyOperation.scope == f"session:{row.id}:prompt",
+                IdempotencyOperation.idempotency_key == operation_id,
+            )
+        )
+        assert row.initial_history_pending is True
+        assert operation is not None
+        assert operation.status == "failed"
 
 
 def test_missing_history_for_existing_session_blocks_prompt_dispatch(
