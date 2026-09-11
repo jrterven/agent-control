@@ -50,6 +50,7 @@ APPLICATION_TABLES = {
     "tags",
     "users",
     "user_integrations",
+    "user_voice_preferences",
     "workspaces",
 }
 
@@ -109,6 +110,12 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     schema = inspect(engine)
     table_names = set(schema.get_table_names())
     assert table_names - {"alembic_version"} == APPLICATION_TABLES
+    voice_provider_checks = schema.get_check_constraints("user_voice_preferences")
+    assert any(
+        item["name"] == "ck_user_voice_preferences_provider"
+        and "openai_live" in item["sqltext"]
+        for item in voice_provider_checks
+    )
     assert {"tags", "session_tags", "attachment_references", "drafts"} <= table_names
     assert not any("message" in table_name for table_name in table_names)
 
@@ -257,7 +264,7 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0017_email_reference_cache"
+        ).scalar_one() == "0018_voice_provider"
     engine.dispose()
 
     downgrade = subprocess.run(

@@ -34,6 +34,7 @@ from .integrations import (
 from .middleware import BodySizeLimitMiddleware, IdempotencyMiddleware, SecurityBoundaryMiddleware
 from .models import Automation, Gateway
 from .notifications import PushNotificationService
+from .openai_live import LiveSessionLimiter, OpenAILiveClient
 from .providers import build_provider_pool
 from .realtime import persist_normalized_event
 from .security import SecretVault
@@ -374,6 +375,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.push_notification_service = push_notification_service
     app.state.elevenlabs_scribe_client = ElevenLabsScribeClient()
     app.state.elevenlabs_speech_client = ElevenLabsSpeechClient()
+    app.state.openai_live_client = OpenAILiveClient()
+    app.state.live_session_limiter = LiveSessionLimiter(limit=6, window_seconds=60)
     app.state.transcription_token_limiter = TranscriptionTokenLimiter(
         limit=settings.transcription_token_rate_limit,
         window_seconds=settings.transcription_token_rate_window_seconds,

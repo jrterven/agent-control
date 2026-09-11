@@ -1097,3 +1097,11 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   .is-spinning { animation: none; }
 }
+
+.live-voice { width: min(790px, 100%); margin: 0 auto 10px; padding: 10px 12px; border: 1px solid var(--border-accent); border-radius: 14px; background: var(--surface-1); font-size: 12px; }
+.live-voice__controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.live-voice__controls > strong { margin-right: auto; color: var(--accent); }
+.live-voice__notice { color: var(--muted-strong); font-size: 11px; line-height: 1.5; }
+.live-voice > p:empty { display: none; }
+.live-voice__captions { max-height: 115px; overflow: auto; overflow-wrap: anywhere; line-height: 1.5; border-top: 1px solid var(--border); }
+.live-voice__captions p { margin: 6px 0; }

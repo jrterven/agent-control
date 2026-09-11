@@ -184,7 +184,12 @@ export type ControlFeatures = {
   // Optional while an encrypted offline snapshot from a pre-TTS build is
   // being replaced by a fresh bootstrap response.
   speech?: SpeechFeature;
+  // Optional for bootstrap snapshots saved before real-time voice support.
+  voice?: { provider: VoiceProvider };
+  live?: { available: boolean; provider: "openai"; modelId: "gpt-live-1" };
 };
+
+export type VoiceProvider = "elevenlabs" | "openai_live";
 
 export type PushNotificationConfig = {
   available: boolean;

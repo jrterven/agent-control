@@ -12,6 +12,7 @@ import { api } from "../lib/api";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
+import { useOpenAILive } from "../hooks/useOpenAILive";
 import { useSpeechPlayback, type LiveSpeechStatus, type SpeechPlaybackStatus } from "../hooks/useSpeechPlayback";
 import { usePwaUpdateStore } from "../lib/pwaUpdate";
 import type { AgentActivityItem, ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageAttachment, MessageMedia, Profile } from "../types";
@@ -616,6 +617,10 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
   const csrfToken = useAppStore((state) => state.csrfToken);
   const authState = useAppStore((state) => state.authState);
   const dictationConfigured = useAppStore((state) => state.features?.dictation.available === true);
+  const liveMode = useAppStore((state) => state.features?.voice?.provider === "openai_live");
+  const liveConfigured = useAppStore((state) => state.features?.live?.available === true);
+  const profileId = useAppStore((state) => state.selectedProfileId);
+  const live = useOpenAILive({ enabled: liveMode && liveConfigured && authState === "authenticated" && !offline, sessionId, profileId, csrfToken });
   const draft = useSessionDraft(sessionId);
   const setUpdateBlocker = usePwaUpdateStore((state) => state.setBlocker);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -649,7 +654,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
     });
   };
   const dictation = useScribeDictation({
-    enabled: dictationConfigured && authState === "authenticated" && !offline && !streamingMessageId,
+    enabled: !liveMode && dictationConfigured && authState === "authenticated" && !offline && !streamingMessageId,
     sessionId,
     csrfToken,
     onCommitted: insertCommitted,
@@ -695,9 +700,9 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
   }, [authState, dictation.available]);
 
   useEffect(() => {
-    setUpdateBlocker("dictation", dictation.active);
+    setUpdateBlocker("dictation", dictation.active || live.active);
     return () => setUpdateBlocker("dictation", false);
-  }, [dictation.active, setUpdateBlocker]);
+  }, [dictation.active, live.active, setUpdateBlocker]);
 
   useEffect(() => {
     setUpdateBlocker("draft", Boolean(value.trim()) || attachments.length > 0);
@@ -772,7 +777,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
 
   const onSubmit = async () => {
     const next = value.trim();
-    if ((!next && !attachments.length) || streamingMessageId || offline || dictation.active) return;
+    if ((!next && !attachments.length) || streamingMessageId || offline || dictation.active || live.active) return;
     // submitPrompt marks the session as streaming synchronously before its
     // first await. Start it before clearing the draft so an update queued for
     // a safe moment cannot slip into the hand-off between typing and sending.
@@ -788,6 +793,19 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
 
   return (
     <div className="composer-wrap">
+      {liveMode ? <section className="live-voice" aria-label="GPT-Live-1">
+        <div className="live-voice__controls">
+          <strong>GPT-Live-1</strong>
+          <Button size="sm" variant={live.active ? "danger" : "secondary"} leadingIcon={live.active ? <Stop weight="fill" /> : <Microphone weight="fill" />} disabled={live.phase === "stopping" || (!live.active && (!live.available || Boolean(streamingMessageId) || Boolean(value.trim()) || attachments.length > 0))} onClick={() => { if (live.active) live.stop(); else void live.start(); }}>{t(live.active ? "liveVoice.stop" : "liveVoice.start")}</Button>
+          {live.playbackBlocked ? <Button size="sm" variant="secondary" leadingIcon={<Play />} onClick={() => void live.play()}>{t("liveVoice.playAudio")}</Button> : null}
+        </div>
+        <p className="live-voice__notice">{t("liveVoice.disclosure", { agent: agentName })}</p>
+        <p role={live.issue ? "alert" : "status"}>{live.issue ? t(`liveVoice.${live.issue}`) : live.waitingApproval ? t("liveVoice.waitingApproval") : live.working ? t("liveVoice.working", { agent: agentName }) : live.active ? t(`liveVoice.${live.phase}`) : !live.available ? t("liveVoice.unavailable") : null}</p>
+        {live.inputCaption || live.outputCaption ? <div className="live-voice__captions" aria-live="off" tabIndex={0}>
+          {live.inputCaption ? <p><strong>{t("liveVoice.inputCaption")}</strong> {live.inputCaption}</p> : null}
+          {live.outputCaption ? <p><strong>{t("liveVoice.outputCaption")}</strong> {live.outputCaption}</p> : null}
+        </div> : null}
+      </section> : null}
       {speechAvailable ? <label className="live-speech-toggle">
         <input type="checkbox" checked={liveSpeechEnabled} onChange={(event) => onLiveSpeechChange(event.target.checked)} />
         <span aria-hidden="true" />
@@ -804,7 +822,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           </span>)}
         </div> : null}
         <div className="composer-add">
-          <IconButton className="composer-add__button" label={t("chat.attachments.add")} selected={attachmentMenuOpen} disabled={offline || Boolean(streamingMessageId) || dictation.active} icon={<Plus size={22} />} onClick={() => setAttachmentMenuOpen((open) => !open)} />
+          <IconButton className="composer-add__button" label={t("chat.attachments.add")} selected={attachmentMenuOpen} disabled={offline || Boolean(streamingMessageId) || dictation.active || live.active} icon={<Plus size={22} />} onClick={() => setAttachmentMenuOpen((open) => !open)} />
           {attachmentMenuOpen ? <div className="composer-add__menu" role="menu" aria-label={t("chat.attachments.menu")}>
             <button type="button" role="menuitem" onClick={() => imageInputRef.current?.click()}><Image /><span><strong>{t("chat.attachments.image")}</strong><small>{t("chat.attachments.imageHint")}</small></span></button>
             <button type="button" role="menuitem" onClick={() => fileInputRef.current?.click()}><File /><span><strong>{t("chat.attachments.file")}</strong><small>{t("chat.attachments.fileHint")}</small></span></button>
@@ -816,7 +834,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           ref={textareaRef}
           rows={1}
           value={displayedValue}
-          readOnly={dictation.active}
+          readOnly={dictation.active || live.active}
           aria-label={t("chat.messagePlaceholder", { agent: agentName })}
           placeholder={t("chat.messagePlaceholder", { agent: agentName })}
           onChange={(event) => { setValue(event.target.value); draft.save(event.target.value); }}
@@ -833,7 +851,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           <span />
           {offline ? <Badge tone="warning">{t("chat.offlineDraft")}</Badge> : streamingMessageId ? (canInterrupt ? <Button variant="danger" size="sm" leadingIcon={<Stop weight="fill" />} onClick={() => void stopPrompt()}>{t("chat.stop")}</Button> : <Badge tone="info">{t("chat.running")}</Badge>) : <>
             {dictation.available ? <IconButton className="dictation-button" selected={dictation.active} label={t(dictation.active ? "dictation.stop" : "dictation.start")} icon={dictation.active ? <Stop size={20} weight="fill" /> : <Microphone size={21} weight="fill" />} onClick={() => { if (dictation.active) dictation.stop(); else beginDictation(); }} /> : null}
-            <IconButton className="send-button" label={t("chat.sendMessage")} disabled={(!value.trim() && !attachments.length) || dictation.active} icon={<PaperPlaneTilt size={22} weight="fill" />} onClick={() => void onSubmit()} />
+            <IconButton className="send-button" label={t("chat.sendMessage")} disabled={(!value.trim() && !attachments.length) || dictation.active || live.active} icon={<PaperPlaneTilt size={22} weight="fill" />} onClick={() => void onSubmit()} />
           </>}
         </div>
       </div>
@@ -891,10 +909,11 @@ export function ChatView() {
   )), [messages, sessionId]);
   const firstUserMessageId = useMemo(() => visibleMessages.find((message) => message.role === "user")?.id, [visibleMessages]);
   const globalSpeechAvailable = useAppStore((state) => state.features?.speech?.available === true);
+  const liveMode = useAppStore((state) => state.features?.voice?.provider === "openai_live");
   // Profiles from pre-voice cached bootstraps do not include ``speech``;
   // retain the global behavior until a fresh profile-aware bootstrap arrives.
   const speechAvailable = profile?.speech?.available ?? globalSpeechAvailable;
-  const canUseSpeech = speechAvailable && authState === "authenticated";
+  const canUseSpeech = !liveMode && speechAvailable && authState === "authenticated";
   const csrfToken = useAppStore((state) => state.csrfToken);
   const streamingMessage = visibleMessages.find((message) => message.id === streamingMessageId);
   const speech = useSpeechPlayback({

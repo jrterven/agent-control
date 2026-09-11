@@ -88,6 +88,22 @@ class UserIntegration(Base, Timestamped):
     )
 
 
+class UserVoicePreference(Base, Timestamped):
+    """A voice mode remains independent of either provider's credential."""
+
+    __tablename__ = "user_voice_preferences"
+    __table_args__ = (
+        CheckConstraint(
+            "provider IN ('elevenlabs', 'openai_live')",
+            name="ck_user_voice_preferences_provider",
+        ),
+    )
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)

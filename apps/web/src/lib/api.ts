@@ -1,4 +1,4 @@
-import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, EmailReferencePreview, Gateway, Profile, PushNotificationConfig, RealtimeEvent, SearchResult, SessionSummary, Workspace } from "../types";
+import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, EmailReferencePreview, Gateway, Profile, PushNotificationConfig, RealtimeEvent, SearchResult, SessionSummary, VoiceProvider, Workspace } from "../types";
 
 export type AdminResourceName = "models" | "config" | "soul" | "skills" | "toolsets" | "mcp" | "channels" | "usage" | "secrets";
 
@@ -57,6 +57,19 @@ export type ElevenLabsIntegrationView = {
 };
 
 export type ElevenLabsTtsModelId = "eleven_flash_v2_5" | "eleven_multilingual_v2";
+
+export type VoiceSettingsView = { provider: VoiceProvider };
+
+export type OpenAIIntegrationView = {
+  configured: boolean;
+  provider: "openai";
+  modelId: "gpt-live-1";
+};
+
+export type OpenAILiveSessionView = {
+  session: { id: string };
+  transport: { type: "webrtc"; sdp: string };
+};
 
 export type ElevenLabsVoice = {
   id: string;
@@ -469,6 +482,28 @@ export const api = {
   ),
   createRealtimeTicket: (csrfToken?: string) => request<{ ticket: string; expiresAt: string }>("/realtime/tickets", { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID(), ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) } }),
   elevenLabsIntegration: () => request<ElevenLabsIntegrationView>("/integrations/elevenlabs"),
+  voiceSettings: () => request<VoiceSettingsView>("/integrations/voice"),
+  saveVoiceProvider: (provider: VoiceProvider, csrfToken?: string) => request<VoiceSettingsView>("/integrations/voice", {
+    method: "PUT",
+    headers: mutationHeaders(csrfToken),
+    body: JSON.stringify({ provider }),
+  }),
+  openaiIntegration: () => request<OpenAIIntegrationView>("/integrations/openai"),
+  saveOpenAIKey: (apiKey: string, csrfToken?: string) => request<OpenAIIntegrationView>("/integrations/openai/key", {
+    method: "PUT",
+    headers: mutationHeaders(csrfToken),
+    body: JSON.stringify({ apiKey }),
+  }),
+  deleteOpenAIKey: (csrfToken?: string) => request<void>("/integrations/openai/key", {
+    method: "DELETE",
+    headers: mutationHeaders(csrfToken),
+  }),
+  createLiveSession: (payload: { sdp: string; profileId: string; sessionId?: string | null }, csrfToken?: string, signal?: AbortSignal) => request<OpenAILiveSessionView>("/realtime/live-session", {
+    method: "POST",
+    headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
+    body: JSON.stringify(payload),
+    signal,
+  }),
   saveElevenLabsKey: (apiKey: string, csrfToken?: string) => request<ElevenLabsIntegrationView>("/integrations/elevenlabs/key", {
     method: "PUT",
     headers: mutationHeaders(csrfToken),

@@ -122,6 +122,50 @@ describe("browser API boundary", () => {
     });
   });
 
+  it("saves OpenAI keys and voice preference through protected owner routes", async () => {
+    const integration = { configured: true, provider: "openai", modelId: "gpt-live-1" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ provider: "elevenlabs" })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(integration)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(integration)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ provider: "openai_live" })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.voiceSettings();
+    await api.openaiIntegration();
+    await api.saveOpenAIKey("sk_write_only", "csrf-memory");
+    await api.saveVoiceProvider("openai_live", "csrf-memory");
+    await api.deleteOpenAIKey("csrf-memory");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/integrations/voice");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/v1/integrations/openai");
+    for (const index of [2, 3, 4]) {
+      expect(fetchMock.mock.calls[index][1]).toEqual(expect.objectContaining({
+        credentials: "same-origin",
+        headers: expect.objectContaining({ "Idempotency-Key": expect.any(String), "X-CSRF-Token": "csrf-memory" }),
+      }));
+    }
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/v1/integrations/openai/key");
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1].body))).toEqual({ apiKey: "sk_write_only" });
+    expect(JSON.parse(String(fetchMock.mock.calls[3][1].body))).toEqual({ provider: "openai_live" });
+    expect(fetchMock.mock.calls[4][0]).toBe("/api/v1/integrations/openai/key");
+    expect(fetchMock.mock.calls[4][1].method).toBe("DELETE");
+  });
+
+  it("keeps live voice session negotiation connection-specific and abortable", async () => {
+    const session = { session: { id: "live-1" }, transport: { type: "webrtc", sdp: "answer" } };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(session)));
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+    expect(await api.createLiveSession({ sdp: "offer", profileId: "profile-a", sessionId: "session-a" }, "csrf-memory", signal)).toEqual(session);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/v1/realtime/live-session");
+    expect(JSON.parse(String(init.body))).toEqual({ sdp: "offer", profileId: "profile-a", sessionId: "session-a" });
+    expect(init.headers).toEqual(expect.objectContaining({ "X-CSRF-Token": "csrf-memory" }));
+    expect(init.headers).not.toEqual(expect.objectContaining({ "Idempotency-Key": expect.anything() }));
+    expect(init.signal).toBe(signal);
+  });
+
   it("uses profile-scoped voice routes and keeps legacy speech bodies compatible", async () => {
     const profileVoice = {
       profileId: "profile/newton",

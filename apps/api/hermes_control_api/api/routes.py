@@ -39,6 +39,7 @@ from ..integrations import (
     UserIntegrationService,
 )
 from ..realtime import terminal_status
+from ..openai_live import OPENAI_LIVE_MODEL_ID, OpenAIIntegrationService, voice_provider
 from ..models import AuditEvent, Automation, AutomationRun, AuthSession, Gateway, GatewayCredential, IdempotencyOperation, ProfileRef, PushSubscription, RealtimeTicket, SessionLink, User, Workspace
 from ..notifications import encrypted_subscription, endpoint_hash, push_endpoint_allowed
 from ..schemas import (
@@ -690,6 +691,12 @@ def bootstrap(
 
     return {
         "features": {
+            "voice": {"provider": voice_provider(db, user)},
+            "live": {
+                "available": OpenAIIntegrationService(app_services.vault).configured(db, user),
+                "provider": "openai",
+                "modelId": OPENAI_LIVE_MODEL_ID,
+            },
             "dictation": {
                 "available": integration_configuration["configured"],
                 "provider": ELEVENLABS_PROVIDER,

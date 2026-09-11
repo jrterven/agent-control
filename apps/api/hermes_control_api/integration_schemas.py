@@ -7,6 +7,48 @@ from pydantic import Field, SecretStr, field_validator
 
 from .schemas import ApiModel
 from .integrations import ELEVENLABS_TTS_MODEL_ID, ElevenLabsTtsModelId
+from .openai_live import VoiceProvider
+
+
+class VoiceSettingsView(ApiModel):
+    provider: VoiceProvider
+
+
+class OpenAIIntegrationView(ApiModel):
+    configured: bool
+    provider: Literal["openai"] = "openai"
+    model_id: Literal["gpt-live-1"] = "gpt-live-1"
+
+
+class OpenAIKeyMutation(ApiModel):
+    api_key: SecretStr
+
+
+class LiveSessionRequest(ApiModel):
+    sdp: str = Field(min_length=1, max_length=65_536)
+    profile_id: str = Field(min_length=1, max_length=36)
+    session_id: str | None = Field(default=None, min_length=1, max_length=36)
+
+    @field_validator("sdp")
+    @classmethod
+    def audio_offer(cls, value: str) -> str:
+        if not value.startswith("v=0\r\n") or "\nm=audio " not in value or "\x00" in value:
+            raise ValueError("A WebRTC audio offer is required")
+        return value
+
+
+class LiveSessionIdentity(ApiModel):
+    id: str
+
+
+class LiveSessionTransport(ApiModel):
+    type: Literal["webrtc"] = "webrtc"
+    sdp: str
+
+
+class LiveSessionView(ApiModel):
+    session: LiveSessionIdentity
+    transport: LiveSessionTransport
 
 
 class ElevenLabsIntegrationView(ApiModel):

@@ -24,6 +24,7 @@ import { ProfileAvatar } from "../components/ProfileAvatar";
 import { InteractionCards } from "../components/ChatView";
 import { AdminConfigScreen } from "../components/AdminConfigScreen";
 import { ElevenLabsIntegration } from "../components/ElevenLabsIntegration";
+import { VoiceSettings } from "../components/VoiceSettings";
 import i18n from "../i18n";
 import { useLanguagePreference } from "../hooks/useLanguagePreference";
 import { APP_VERSION, checkForPwaUpdate, hasPwaUpdateBlockers, requestPwaUpdate, usePwaUpdateStore } from "../lib/pwaUpdate";
@@ -1223,6 +1224,7 @@ export function SettingsScreen() {
           >{t(updateButton)}</Button>
         </div>
       </Panel>
+      <VoiceSettings />
       <ElevenLabsIntegration />
       <Panel className="settings-section"><header><Database /><div><strong>{t("settingsPage.offline")}</strong><p>{t("settingsPage.offlineDescription")}</p></div></header><Switch checked={cacheEnabled} onChange={changeCache} label={t("settingsPage.encryptedCache")} description={t("settingsPage.cacheLimits")} /><Button variant="ghost" onClick={() => void clearPrivateCache()}>{t("settingsPage.clearLocal")}</Button></Panel>
       <Panel className="settings-section"><header><UserCircle /><div><strong>{t("settingsPage.session")}</strong><p>{t("settingsPage.cookieAuth", { user: userName })}</p></div></header><Button variant="danger" disabled={loggingOut} onClick={() => void logout()}>{loggingOut ? t("settingsPage.loggingOut") : t("settingsPage.logout")}</Button></Panel>

@@ -1,10 +1,44 @@
 # Production deployment
 
-The canonical first deployment is native systemd on `gx10-58f9`. Commands below
-are an operator runbook; repository automation must not execute them implicitly.
+The canonical first-install layout is native systemd on `gx10-58f9`. Commands
+below are an operator runbook; repository automation must not execute them implicitly.
 Hermes Control is added in front of the existing Hermes installation. It does
 not install, upgrade, vendor or replace Hermes, and Hermes remains the source of
 truth for profiles, conversations, sessions and cron.
+
+### Existing production installation
+
+The installation verified on 2026-09-11 uses an earlier user-service layout on
+`gx10-58f9`, reachable through the configured `asus` SSH alias as `hermes`:
+
+| Item | Existing production value |
+|---|---|
+| Service | `systemctl --user ... hermes-control-preview.service` |
+| Immutable releases | `/home/hermes/.local/opt/hermes-control/releases/<revision>` |
+| Current symlink | `/home/hermes/.local/opt/hermes-control/current` |
+| Environment | `/home/hermes/.config/hermes-control-preview/control.env` |
+| Database | `/home/hermes/.local/share/hermes-control-preview/control.db` |
+| Backups | `/home/hermes/.local/share/hermes-control-preview/backups` |
+| Public PWA | `https://gpu-node-spark-02.taile9a3d1.ts.net` |
+
+Reconfirm these paths and the service unit before a release. Apply the
+[update and rollback procedure](update.md) to this existing layout; do not run
+the first-install scripts or create a second system service. The user service
+runs Alembic before startup and requires no sudo. It leaves the Hermes services
+running when Control is restarted.
+
+Before stopping Control, inspect current session and automation activity. A
+stored Control status can be stale: reconcile it against fresh read-only Hermes
+session inventories without resuming, prompting or interrupting sessions. If
+work is active or the result is uncertain, defer the restart. Source the
+existing environment without printing it or enabling shell tracing, run the
+current `deploy/bin/backup-sqlite.sh`, and verify its backup before migration.
+Stage the new release and its own virtualenv, validate its production settings,
+and test migrations against a copy of the backup before switching `current`.
+Keep the previous release and backup until health, readiness, schema and public
+PWA checks pass. Rollback must follow the migrated-schema compatibility rule
+in the update runbook. Verify backup scheduling separately; an existing backup
+directory does not prove that a timer is enabled.
 
 For an assisted full local installation, use `deploy/install-linux.sh` on a
 systemd host or `deploy/install-macos.sh` on a signed-in Mac. The Linux
@@ -38,6 +72,14 @@ backend HTTPS egress to `storage.googleapis.com`; redirects and all paths
 outside ElevenLabs' public preview bucket remain blocked. Each participating browser needs WSS egress to
 the official speech-to-text and text-to-speech paths for microphone capture and
 live answer playback. No new inbound listener or Serve route is permitted.
+
+GPT-Live adds backend HTTPS egress only to the fixed `https://api.openai.com`
+origin for the session handshake. Browser audio and Live events use negotiated
+WebRTC media and its data channel; the browser sends the SDP offer to Control's
+same-origin API. Do not add a public OpenAI proxy, inbound listener, wildcard
+CSP source or provider API key to the browser. See
+[ADR 0008](../adr/0008-owner-scoped-gpt-live-conversations.md) for the separate
+OpenAI credential and client-delegation boundary.
 
 The official provider handshake carries the single-use token in the WSS query.
 Do not enable browser/proxy telemetry that records complete WebSocket URLs, and
@@ -73,11 +115,15 @@ token in a Control URL, application log, audit event or persistent browser store
    loopback. `upstream=stale` means no recent Hermes observation; it must not be
    interpreted as proof that Hermes is online or offline.
 
-Do not put an ElevenLabs API key in `control.env`, a `VITE_*` variable, the
+Do not put an ElevenLabs or OpenAI API key in `control.env`, a `VITE_*` variable, the
 release bundle or a service unit. Each authenticated user configures their own
 key through the write-only integration setting; Control stores only its
 AES-GCM ciphertext in SQLite. Restrict the provider key to the required Scribe
 scope and an appropriate account quota before saving it.
+For GPT-Live, the owner's OpenAI project key must have access to `gpt-live-1`.
+Configure it through the separate write-only OpenAI setting and select the live
+mode explicitly. Voice billing is separate from the selected agent's usage;
+automated release tests use fake provider transports and must not spend quota.
 
 The unit runs the same idempotent Alembic upgrade before every start. It invokes
 Uvicorn with `--ws-max-size 4096`, one worker and `--no-proxy-headers`.
@@ -221,6 +267,17 @@ the production gateway's own `default` profile remains Newton.
   absent from the built bundle, browser storage, network responses, logs and
   audit payloads; a single-use token response is `no-store` and absent from the
   idempotency table.
+- The OpenAI read view also exposes only configuration presence and non-secret
+  preferences. The WebRTC creation response is `no-store`; neither the reusable
+  key nor SDP enters browser persistence, service-worker caches, audit payloads
+  or the idempotency ledger. Verify that selecting GPT-Live preserves the
+  ElevenLabs configuration and that selecting a mode does not open a session.
+- On a real device, start GPT-Live after its destination and usage notice,
+  verify two-way audio, captions, delegation into the selected Control
+  conversation and spoken task results, then verify microphone release on
+  stop, background, navigation and logout. Confirm that ending voice does not
+  silently interrupt an agent task. Provider access and acoustic behavior need
+  a real-account check beyond the mocked release tests.
 - The production artifact was built after a clean install that applied
   `patches/@elevenlabs+client+1.23.0.patch`; Scribe text messages over 65,536
   JavaScript UTF-16 code units, malformed messages and unknown events are handled
