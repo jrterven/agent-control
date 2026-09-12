@@ -42,6 +42,18 @@ describe("Live delegation to the selected agent", () => {
     expect(await result).toContain("rechazada");
   });
 
+  it("asks the selected agent about its actual memory and capabilities without replacing its identity", async () => {
+    const result = delegateLiveRequest("session-papers", "profile-newton", "User: ¿Qué recuerdas de mi proyecto y qué herramientas tienes?", new AbortController().signal, vi.fn());
+    await Promise.resolve();
+    const prompt = vi.mocked(submitPrompt).mock.calls[0][0];
+    expect(prompt).toContain("Keep your own identity, personality, configured instructions, memory, tools and permissions");
+    expect(prompt).toContain("¿Qué recuerdas de mi proyecto y qué herramientas tienes?");
+    useAppStore.getState().updateMessage("voice-answer", { content: "Soy Newton. Recuerdo tu proyecto de investigación y puedo buscar publicaciones.", streaming: false });
+    useAppStore.getState().setStreamingMessageId("session-papers", undefined);
+    expect(await result).toContain("Soy Newton");
+    expect(submitPrompt).toHaveBeenCalledOnce();
+  });
+
   it("does not retry ambiguous delivery", async () => {
     vi.mocked(submitPrompt).mockImplementation(async (content) => {
       useAppStore.setState({ messages: [{ id: "ambiguous", sessionId: "session-papers", role: "user", content, delivery: "ambiguous", createdAt: "now" }] });

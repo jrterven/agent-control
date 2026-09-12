@@ -109,6 +109,7 @@ def test_live_sessions_require_authenticated_csrf_and_valid_bounded_payload(auth
         {**payload, "sdp": OFFER + "a" * 65_536},
         {**payload, "sdp": "not SDP"},
         {**payload, "instructions": SECRET},
+        {**payload, "agentContext": {"agent_name": "Spoofed agent"}},
         {**payload, "apiKey": SECRET},
     ]:
         response = client.post("/api/v1/realtime/live-session", headers=headers(csrf), json=malformed)

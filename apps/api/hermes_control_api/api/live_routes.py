@@ -15,6 +15,7 @@ from ..integration_schemas import (
     VoiceSettingsView,
 )
 from ..integrations import IntegrationError
+from ..live_context import live_agent_context
 from ..models import AuthSession, Gateway, ProfileRef, SessionLink, User
 from ..openai_live import (
     OpenAIIntegrationService,
@@ -23,7 +24,9 @@ from ..openai_live import (
     set_voice_provider,
     voice_provider,
 )
-from ..services import NotFoundError, SessionService, audit, require_mutable_profile
+from ..services import (
+    NotFoundError, SessionService, audit, require_capability, require_mutable_profile,
+)
 
 
 router = APIRouter(prefix="/api/v1", tags=["live voice"])
@@ -182,6 +185,10 @@ async def create_live_session(
     try:
         request.app.state.live_session_limiter.consume(owner.id)
         api_key = _service(request).api_key(db, owner)
+        await require_capability(
+            db, request.app.state.services, gateway_id=profile.gateway_id,
+            profile_name=profile.profile_name, method="prompt.submit",
+        )
         history = []
         if conversation is not None:
             history = await SessionService(request.app.state.services).history(
@@ -190,6 +197,9 @@ async def create_live_session(
         result = await request.app.state.openai_live_client.create_session(
             api_key=api_key, sdp=payload.sdp, history=history,
             voice_id=openai_voice_id(db, owner),
+            agent_context=await live_agent_context(
+                db, request.app.state.services, owner, profile, conversation,
+            ),
         )
     except IntegrationError:
         _audit(db, request, owner, "integration.openai.live.create", failed=True)

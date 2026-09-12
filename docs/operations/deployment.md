@@ -291,6 +291,13 @@ the production gateway's own `default` profile remains Newton.
   stop, background, navigation and logout. Confirm that ending voice does not
   silently interrupt an agent task. Provider access and acoustic behavior need
   a real-account check beyond the mocked release tests.
+- Start separate Live sessions with Jarvis and Newton and ask their names and
+  capabilities. Verify the selected name, a grounded capability summary and no
+  cross-agent history. Ask about a project or remembered detail absent from the
+  recent history: it must delegate to the selected agent, preserve that agent's
+  personality and report its actual answer. An unavailable optional inventory
+  must still allow voice to start with its identity and a capability lookup via
+  delegation. Automated checks use fake transports and spend no provider quota.
 - The production artifact was built after a clean install that applied
   `patches/@elevenlabs+client+1.23.0.patch`; Scribe text messages over 65,536
   JavaScript UTF-16 code units, malformed messages and unknown events are handled

@@ -52,6 +52,25 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
   handles work. GPT-Live handles the spoken exchange; Control retains agent
   routing, authorization, approvals and task state. The Live model does not
   receive gateway credentials or direct Hermes protocol access.
+- Verify the selected route's `prompt.submit` capability before a billable
+  handshake. Seed each session with that profile's display name, description,
+  owned conversation title and recent chat history. The trusted Spanish voice
+  prompt adopts that name and delegates questions about missing memory,
+  personality, projects or capabilities to the same agent. The delegation
+  wrapper preserves the backend agent's own identity and configured behavior.
+- For administrators, add a bounded snapshot of enabled skills and configured,
+  enabled toolsets through the existing capability-gated read service. Exclude
+  explicitly unavailable toolsets. Preserve admin-only inventory access; other
+  users ask their agent through the normal chat. Optional inventory reads have
+  a two-second total deadline and fall back to unknown capabilities, never a
+  claim that the agent has no tools. The snapshot is partial and refreshed on
+  each voice connection; execution still checks the agent's actual permissions.
+- Place connection facts in a labelled user-role reference message, separate
+  from trusted instructions and after history, so old generic voice claims do
+  not define the current identity. Bound it to 2 KB and history to 5.5 KB, redact
+  the OpenAI key, and exclude raw SOUL, memory, configuration and credentials.
+  Names and descriptions are data, not instructions. Previews stay isolated
+  from this agent context, as they are from conversation history.
 - A `session.delegation.created` event carries a delegation ID and timestamp,
   not task text or structured tool arguments. Collect input and output
   transcript deltas separately, preserve their order and timing, and retain
@@ -90,6 +109,7 @@ live integration is unavailable.
 ## References
 
 - [GPT-Live overview](https://developers.openai.com/api/docs/guides/live)
+- [GPT-Live prompting](https://developers.openai.com/api/docs/guides/live-prompting)
 - [WebRTC setup](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live)
 - [Client delegation](https://developers.openai.com/api/docs/guides/live-delegation?delegation-mode=client)
 - [Session lifecycle and transcripts](https://developers.openai.com/api/docs/guides/live-conversations)
