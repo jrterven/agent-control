@@ -284,8 +284,9 @@ the production gateway's own `default` profile remains Newton.
   include chat history, or delegate work. Check explicit playback, cancellation,
   automatic timeout, navigation/background cleanup and blocked-audio recovery.
   Keep preview SDP out of replay storage, logs and service-worker caches.
-- On a real device, start GPT-Live after its destination and usage notice,
-  verify two-way audio, captions, delegation into the selected Control
+- On a real device, select GPT-Live in settings alongside its destination and
+  usage notice, then start it from the waveform button in the composer. Verify
+  two-way audio, delegation into the selected Control
   conversation and spoken task results, then verify microphone release on
   stop, background, navigation and logout. Confirm that ending voice does not
   silently interrupt an agent task. Provider access and acoustic behavior need

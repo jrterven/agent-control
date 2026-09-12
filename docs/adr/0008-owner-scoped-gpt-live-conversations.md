@@ -41,8 +41,12 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
   limiting. Its response is `no-store` and bypasses the idempotency body ledger.
 - Use WebRTC for browser media and a data channel for Live events. Capture starts
   only after a user gesture and browser microphone permission on HTTPS or
-  localhost. Display the OpenAI audio destination, account-dependent retention
-  and usage notice before capture. Set `store: false`; this does not promise
+  localhost. Keep the OpenAI audio destination, account-dependent retention
+  and usage notice in the voice settings where the user selects the provider.
+  The chat uses a single icon button: a microphone for ElevenLabs or a waveform
+  for GPT-Live, with an accessible provider/action label. Only active voice
+  status, errors and blocked-playback recovery add controls to the composer.
+  Set `store: false`; this does not promise
   zero provider retention.
 - Use `delegation: {type: "client"}` so the existing selected Control agent
   handles work. GPT-Live handles the spoken exchange; Control retains agent

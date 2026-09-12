@@ -1,4 +1,4 @@
-import { CaretDown, Check, Checks, File, Image, Lightning, Microphone, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle, Wrench, X } from "@phosphor-icons/react";
+import { CaretDown, Check, Checks, File, Image, Lightning, Microphone, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle, Waveform, Wrench, X } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { TFunction } from "i18next";
@@ -793,19 +793,6 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
 
   return (
     <div className="composer-wrap">
-      {liveMode ? <section className="live-voice" aria-label="GPT-Live-1">
-        <div className="live-voice__controls">
-          <strong>GPT-Live-1</strong>
-          <Button size="sm" variant={live.active ? "danger" : "secondary"} leadingIcon={live.active ? <Stop weight="fill" /> : <Microphone weight="fill" />} disabled={live.phase === "stopping" || (!live.active && (!live.available || Boolean(streamingMessageId) || Boolean(value.trim()) || attachments.length > 0))} onClick={() => { if (live.active) live.stop(); else void live.start(); }}>{t(live.active ? "liveVoice.stop" : "liveVoice.start")}</Button>
-          {live.playbackBlocked ? <Button size="sm" variant="secondary" leadingIcon={<Play />} onClick={() => void live.play()}>{t("liveVoice.playAudio")}</Button> : null}
-        </div>
-        <p className="live-voice__notice">{t("liveVoice.disclosure", { agent: agentName })}</p>
-        <p role={live.issue ? "alert" : "status"}>{live.issue ? t(`liveVoice.${live.issue}`) : live.waitingApproval ? t("liveVoice.waitingApproval") : live.working ? t("liveVoice.working", { agent: agentName }) : live.active ? t(`liveVoice.${live.phase}`) : !live.available ? t("liveVoice.unavailable") : null}</p>
-        {live.inputCaption || live.outputCaption ? <div className="live-voice__captions" aria-live="off" tabIndex={0}>
-          {live.inputCaption ? <p><strong>{t("liveVoice.inputCaption")}</strong> {live.inputCaption}</p> : null}
-          {live.outputCaption ? <p><strong>{t("liveVoice.outputCaption")}</strong> {live.outputCaption}</p> : null}
-        </div> : null}
-      </section> : null}
       {speechAvailable ? <label className="live-speech-toggle">
         <input type="checkbox" checked={liveSpeechEnabled} onChange={(event) => onLiveSpeechChange(event.target.checked)} />
         <span aria-hidden="true" />
@@ -847,10 +834,23 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           {dictation.partial ? <em className="dictation-state__announcement">{t("dictation.provisional", { text: dictation.partial })}</em> : null}
           {!dictation.issue ? <small>{t("dictation.disclosure")}</small> : null}
         </div> : null}
+        {liveMode && (live.active || live.issue || live.waitingApproval || live.working) ? <div className={`dictation-state live-voice-state${live.issue ? " dictation-state--error" : ""}`} role={live.issue ? "alert" : "status"} aria-live={live.issue ? "assertive" : "polite"}>
+          <span>{live.issue ? t(`liveVoice.${live.issue}`) : live.waitingApproval ? t("liveVoice.waitingApproval") : live.working ? t("liveVoice.working", { agent: agentName }) : live.phase === "connecting" ? t("dictation.connecting") : live.phase === "stopping" ? t("liveVoice.stopping") : t("liveVoice.listening")}</span>
+        </div> : null}
         <div className="composer__actions">
           <span />
+          {!offline && liveMode ? <IconButton
+            className="dictation-button"
+            data-voice-provider="openai_live"
+            selected={live.active}
+            label={t(live.active ? "liveVoice.stop" : "liveVoice.start")}
+            icon={live.active ? <Stop size={20} weight="fill" /> : <Waveform size={21} weight="bold" />}
+            disabled={live.phase === "stopping" || (!live.active && (!live.available || Boolean(streamingMessageId) || Boolean(value.trim()) || attachments.length > 0))}
+            onClick={() => { if (live.active) live.stop(); else void live.start(); }}
+          /> : null}
+          {!offline && liveMode && live.playbackBlocked ? <IconButton label={t("liveVoice.playAudio")} icon={<SpeakerHigh size={21} />} onClick={() => void live.play()} /> : null}
           {offline ? <Badge tone="warning">{t("chat.offlineDraft")}</Badge> : streamingMessageId ? (canInterrupt ? <Button variant="danger" size="sm" leadingIcon={<Stop weight="fill" />} onClick={() => void stopPrompt()}>{t("chat.stop")}</Button> : <Badge tone="info">{t("chat.running")}</Badge>) : <>
-            {dictation.available ? <IconButton className="dictation-button" selected={dictation.active} label={t(dictation.active ? "dictation.stop" : "dictation.start")} icon={dictation.active ? <Stop size={20} weight="fill" /> : <Microphone size={21} weight="fill" />} onClick={() => { if (dictation.active) dictation.stop(); else beginDictation(); }} /> : null}
+            {!liveMode && dictation.available ? <IconButton className="dictation-button" data-voice-provider="elevenlabs" selected={dictation.active} label={t(dictation.active ? "dictation.stop" : "dictation.start")} icon={dictation.active ? <Stop size={20} weight="fill" /> : <Microphone size={21} weight="fill" />} onClick={() => { if (dictation.active) dictation.stop(); else beginDictation(); }} /> : null}
             <IconButton className="send-button" label={t("chat.sendMessage")} disabled={(!value.trim() && !attachments.length) || dictation.active || live.active} icon={<PaperPlaneTilt size={22} weight="fill" />} onClick={() => void onSubmit()} />
           </>}
         </div>
