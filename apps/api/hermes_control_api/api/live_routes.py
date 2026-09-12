@@ -8,13 +8,21 @@ from ..auth import current_user, get_db, require_csrf, require_idempotency
 from ..integration_schemas import (
     LiveSessionRequest,
     LiveSessionView,
+    LiveVoicePreviewRequest,
     OpenAIIntegrationView,
     OpenAIKeyMutation,
+    OpenAIVoiceSettingsView,
     VoiceSettingsView,
 )
 from ..integrations import IntegrationError
 from ..models import AuthSession, Gateway, ProfileRef, SessionLink, User
-from ..openai_live import OpenAIIntegrationService, set_voice_provider, voice_provider
+from ..openai_live import (
+    OpenAIIntegrationService,
+    openai_voice_id,
+    set_openai_voice_id,
+    set_voice_provider,
+    voice_provider,
+)
 from ..services import NotFoundError, SessionService, audit, require_mutable_profile
 
 
@@ -81,6 +89,28 @@ def openai_presence(
     db: Session = Depends(get_db),
 ) -> OpenAIIntegrationView:
     return OpenAIIntegrationView(configured=_service(request).configured(db, owner))
+
+
+@router.get("/integrations/openai/voice", response_model=OpenAIVoiceSettingsView)
+def openai_voice_settings(
+    owner: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> OpenAIVoiceSettingsView:
+    return OpenAIVoiceSettingsView(voice_id=openai_voice_id(db, owner))
+
+
+@router.put("/integrations/openai/voice", response_model=OpenAIVoiceSettingsView)
+def update_openai_voice_settings(
+    payload: OpenAIVoiceSettingsView,
+    request: Request,
+    auth: AuthSession = Depends(require_csrf),
+    _: str = Depends(require_idempotency),
+    db: Session = Depends(get_db),
+) -> OpenAIVoiceSettingsView:
+    set_openai_voice_id(db, auth.user, payload.voice_id)
+    _audit(db, request, auth.user, "integration.openai.voice.set")
+    db.commit()
+    return OpenAIVoiceSettingsView(voice_id=openai_voice_id(db, auth.user))
 
 
 @router.put("/integrations/openai/key", response_model=OpenAIIntegrationView)
@@ -158,7 +188,8 @@ async def create_live_session(
                 db, owner, conversation
             )
         result = await request.app.state.openai_live_client.create_session(
-            api_key=api_key, sdp=payload.sdp, history=history
+            api_key=api_key, sdp=payload.sdp, history=history,
+            voice_id=openai_voice_id(db, owner),
         )
     except IntegrationError:
         _audit(db, request, owner, "integration.openai.live.create", failed=True)
@@ -167,5 +198,29 @@ async def create_live_session(
     # SDP, live session IDs, profile hints, audio, transcript and credentials
     # are excluded from both audit records and idempotency persistence.
     _audit(db, request, owner, "integration.openai.live.create")
+    db.commit()
+    return LiveSessionView.model_validate(result)
+
+
+@router.post("/realtime/live-voice-preview", response_model=LiveSessionView, status_code=201)
+async def create_live_voice_preview(
+    payload: LiveVoicePreviewRequest,
+    request: Request,
+    auth: AuthSession = Depends(require_csrf),
+    db: Session = Depends(get_db),
+) -> LiveSessionView:
+    owner = auth.user
+    try:
+        request.app.state.live_session_limiter.consume(owner.id)
+        api_key = _service(request).api_key(db, owner)
+        result = await request.app.state.openai_live_client.create_voice_preview(
+            api_key=api_key, sdp=payload.sdp,
+            voice_id=payload.voice_id, language=payload.language,
+        )
+    except IntegrationError:
+        _audit(db, request, owner, "integration.openai.voice.preview", failed=True)
+        db.commit()
+        raise
+    _audit(db, request, owner, "integration.openai.voice.preview")
     db.commit()
     return LiveSessionView.model_validate(result)

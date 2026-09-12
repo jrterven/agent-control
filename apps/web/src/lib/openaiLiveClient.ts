@@ -3,13 +3,18 @@
 export type LivePhase = "idle" | "connecting" | "listening" | "stopping" | "error";
 export type LiveIssue = "permissionDenied" | "auth" | "quota" | "network" | "generic" | "unconfirmed" | "contextFull";
 export type LiveFragment = { role: "user" | "assistant"; text: string; start: number; end: number; order: number };
+export type LiveInput = { stream: MediaStream; release: () => void };
 type LiveOptions = {
   negotiate: (sdp: string, signal: AbortSignal) => Promise<{ session: { id: string }; transport: { sdp: string } }>;
   onPhase: (phase: LivePhase) => void;
   onIssue: (issue: LiveIssue) => void;
-  onTranscript: (fragments: LiveFragment[]) => void;
+  onTranscript?: (fragments: LiveFragment[]) => void;
   onPlaybackBlocked: (blocked: boolean) => void;
-  onDelegation: (context: string, signal: AbortSignal, progress: (content: string) => void) => Promise<string>;
+  onDelegation?: (context: string, signal: AbortSignal, progress: (content: string) => void) => Promise<string>;
+  acquireInput?: (signal: AbortSignal) => Promise<LiveInput>;
+  initialCommentary?: string;
+  disableDelegation?: boolean;
+  startupTimeoutMs?: number;
 };
 
 export function liveSupported() {
@@ -41,10 +46,11 @@ export function boundedLiveCommentary(content: string) {
 export class OpenAILiveClient {
   private peer?: RTCPeerConnection;
   private channel?: RTCDataChannel;
-  private microphone?: MediaStream;
+  private input?: LiveInput;
   private audio = new Audio();
   private abort = new AbortController();
   private ready = false;
+  private started = false;
   private closing = false;
   private disposed = false;
   private timers = new Set<ReturnType<typeof setTimeout>>();
@@ -79,18 +85,25 @@ export class OpenAILiveClient {
   }
 
   async play() {
-    try { await this.audio.play(); this.options.onPlaybackBlocked(false); }
+    if (this.disposed) return;
+    try { await this.audio.play(); if (!this.disposed) this.options.onPlaybackBlocked(false); }
     catch { if (!this.disposed) this.options.onPlaybackBlocked(true); }
   }
 
   async start() {
+    if (this.started || this.disposed) return;
+    this.started = true;
     this.options.onPhase("connecting");
-    this.later(() => { if (!this.ready) this.fail("network"); }, 60_000);
+    this.later(() => { if (!this.ready) this.fail("network"); }, this.options.startupTimeoutMs ?? 60_000);
     try {
       // Acquire on the user gesture. A late permission grant is still cleaned up.
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      if (this.disposed) { stream.getTracks().forEach((track) => track.stop()); return; }
-      this.microphone = stream;
+      const input = this.options.acquireInput
+        ? await this.options.acquireInput(this.abort.signal)
+        : await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+          .then((stream): LiveInput => ({ stream, release: () => stream.getTracks().forEach((track) => track.stop()) }));
+      if (this.disposed) { input.release(); return; }
+      this.input = input;
+      const stream = input.stream;
       const peer = this.peer = new RTCPeerConnection();
       peer.addEventListener("track", (event) => {
         if (this.disposed) return;
@@ -149,9 +162,13 @@ export class OpenAILiveClient {
       this.seen.add(event.event_id);
     }
     if (event.type === "session.started") {
+      if (this.ready) return;
       this.ready = true;
       if (this.closing) this.send({ type: "session.close" });
-      else this.options.onPhase("listening");
+      else {
+        if (this.options.initialCommentary) this.send({ type: "session.commentary.append", event_id: crypto.randomUUID(), delegation_id: null, content: boundedLiveCommentary(this.options.initialCommentary) });
+        this.options.onPhase("listening");
+      }
     } else if (event.type === "session.closed") {
       const expected = this.closing || event.reason === "close_requested";
       this.dispose();
@@ -161,11 +178,13 @@ export class OpenAILiveClient {
       // Provider error payloads can contain private content; never log them.
       this.fail("generic");
     } else if (event.type === "session.input_transcript.delta" || event.type === "session.output_transcript.delta") {
+      if (!this.options.onTranscript && (this.options.disableDelegation || !this.options.onDelegation)) return;
       if (typeof event.delta !== "string" || typeof event.start_ms !== "number" || !Number.isFinite(event.start_ms) || typeof event.end_ms !== "number" || !Number.isFinite(event.end_ms)) return;
       if (this.fragments.reduce((sum, part) => sum + part.text.length, 0) + event.delta.length > 48_000) { this.fail("contextFull"); return; }
       this.fragments.push({ role: event.type === "session.input_transcript.delta" ? "user" : "assistant", text: event.delta, start: event.start_ms, end: event.end_ms, order: this.fragments.length });
-      this.options.onTranscript([...this.fragments]);
-    } else if (event.type === "session.delegation.created" && !this.closing) {
+      this.options.onTranscript?.([...this.fragments]);
+    } else if (event.type === "session.delegation.created" && !this.closing && !this.options.disableDelegation && this.options.onDelegation) {
+      const onDelegation = this.options.onDelegation;
       const delegation = event.delegation as { id?: unknown; target?: unknown } | undefined;
       if (delegation?.target !== "client" || typeof delegation.id !== "string" || this.delegated.has(delegation.id)) return;
       const id = delegation.id;
@@ -191,7 +210,7 @@ export class OpenAILiveClient {
           return;
         }
         this.consumedInputs = inputCount;
-        const result = await this.options.onDelegation(voiceContext(snapshot), this.abort.signal, (content) => {
+        const result = await onDelegation(voiceContext(snapshot), this.abort.signal, (content) => {
           if (!this.disposed && !this.closing) this.send({ type: "session.commentary.append", event_id: crypto.randomUUID(), delegation_id: id, content: boundedLiveCommentary(content) });
         });
         if (this.disposed || this.closing) return;
@@ -204,8 +223,9 @@ export class OpenAILiveClient {
     if (this.disposed || this.closing) return;
     this.closing = true;
     // End capture immediately; retain the transport to receive final usage.
-    this.microphone?.getTracks().forEach((track) => { track.enabled = false; track.stop(); });
-    this.microphone = undefined;
+    this.input?.stream.getTracks().forEach((track) => { track.enabled = false; });
+    this.input?.release();
+    this.input = undefined;
     this.audio.pause();
     this.options.onPhase("stopping");
     if (!this.ready) { this.dispose(); this.options.onPhase("idle"); return; }
@@ -220,7 +240,8 @@ export class OpenAILiveClient {
     this.abort.abort();
     this.timers.forEach(clearTimeout);
     this.timers.clear();
-    this.microphone?.getTracks().forEach((track) => track.stop());
+    this.input?.release();
+    this.input = undefined;
     this.channel?.close();
     this.peer?.close();
     this.audio.pause();

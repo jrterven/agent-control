@@ -154,8 +154,10 @@ describe("live voice in the chat", () => {
     render(<ChatView />);
     await user.click(screen.getByRole("button", { name: "Conversar con GPT-Live-1" }));
     const client = transport.Client.instances[0];
+    // A conversational client provides captions; silent previews omit them.
+    expect(client.options.onTranscript).toBeTypeOf("function");
     act(() => {
-      client.options.onTranscript([
+      client.options.onTranscript!([
         { role: "user", text: "Revisa el resultado", start: 1, end: 2, order: 1 },
         { role: "assistant", text: "Estoy revisando", start: 2, end: 3, order: 2 },
       ]);

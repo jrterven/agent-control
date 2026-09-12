@@ -23,6 +23,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from .database import Base
+from .openai_voices import OPENAI_LIVE_DEFAULT_VOICE_ID, OPENAI_LIVE_VOICE_CHECK
 
 
 def utc_now() -> datetime:
@@ -97,11 +98,21 @@ class UserVoicePreference(Base, Timestamped):
             "provider IN ('elevenlabs', 'openai_live')",
             name="ck_user_voice_preferences_provider",
         ),
+        CheckConstraint(
+            OPENAI_LIVE_VOICE_CHECK,
+            name="ck_user_voice_preferences_openai_voice",
+        ),
     )
     owner_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
     provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    openai_voice_id: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=OPENAI_LIVE_DEFAULT_VOICE_ID,
+        server_default=OPENAI_LIVE_DEFAULT_VOICE_ID,
+    )
 
 
 class AuthSession(Base):

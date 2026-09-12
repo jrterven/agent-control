@@ -133,6 +133,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 "/api/v1/realtime/transcription-token",
                 "/api/v1/realtime/speech-token",
                 "/api/v1/realtime/live-session",
+                "/api/v1/realtime/live-voice-preview",
                 "/api/v1/integrations/elevenlabs/speech",
             }
         ):

@@ -166,6 +166,30 @@ describe("browser API boundary", () => {
     expect(init.signal).toBe(signal);
   });
 
+  it("persists a Live voice independently and creates abortable non-replayable previews", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ voiceId: "marin" })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ voiceId: "coral" })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ session: { id: "preview" }, transport: { type: "webrtc", sdp: "answer" } })));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await api.openaiVoice()).toEqual({ voiceId: "marin" });
+    expect(await api.saveOpenAIVoice("coral", "csrf-memory")).toEqual({ voiceId: "coral" });
+    const signal = new AbortController().signal;
+    await api.createLiveVoicePreview({ sdp: "offer", voiceId: "coral", language: "pt" }, "csrf-memory", signal);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/integrations/openai/voice");
+    const [savePath, saveInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(savePath).toBe("/api/v1/integrations/openai/voice");
+    expect(saveInit.method).toBe("PUT");
+    expect(JSON.parse(String(saveInit.body))).toEqual({ voiceId: "coral" });
+    expect(saveInit.headers).toEqual(expect.objectContaining({ "X-CSRF-Token": "csrf-memory", "Idempotency-Key": expect.any(String) }));
+    const [previewPath, previewInit] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(previewPath).toBe("/api/v1/realtime/live-voice-preview");
+    expect(JSON.parse(String(previewInit.body))).toEqual({ sdp: "offer", voiceId: "coral", language: "pt" });
+    expect(previewInit.signal).toBe(signal);
+    expect(previewInit.headers).toEqual(expect.objectContaining({ "X-CSRF-Token": "csrf-memory" }));
+    expect(previewInit.headers).not.toEqual(expect.objectContaining({ "Idempotency-Key": expect.anything() }));
+  });
+
   it("uses profile-scoped voice routes and keeps legacy speech bodies compatible", async () => {
     const profileVoice = {
       profileId: "profile/newton",

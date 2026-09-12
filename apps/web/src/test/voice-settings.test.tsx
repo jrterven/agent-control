@@ -18,6 +18,7 @@ describe("voice provider settings", () => {
     });
     vi.spyOn(api, "voiceSettings").mockResolvedValue({ provider: "elevenlabs" });
     vi.spyOn(api, "openaiIntegration").mockResolvedValue(unconfigured);
+    vi.spyOn(api, "openaiVoice").mockResolvedValue({ voiceId: "marin" });
     vi.spyOn(api, "bootstrap").mockImplementation(async () => ({
       gateways: [], profiles: [], workspaces: [], sessions: [], automations: [], features: useAppStore.getState().features,
     }));
@@ -80,7 +81,7 @@ describe("voice provider settings", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo guardar la clave de OpenAI");
     expect(key).toHaveValue("");
     expect(document.body).not.toHaveTextContent("sk_rejected_private");
-    expect(within(screen.getByRole("combobox")).getByRole("option", { name: "GPT-Live-1 · OpenAI" })).toBeDisabled();
+    expect(within(screen.getByRole("combobox", { name: "Proveedor de voz" })).getByRole("option", { name: "GPT-Live-1 · OpenAI" })).toBeDisabled();
   });
 
   it("keeps the saved provider selected when changing it fails", async () => {
@@ -88,7 +89,7 @@ describe("voice provider settings", () => {
     vi.spyOn(api, "saveVoiceProvider").mockRejectedValue(new Error("provider rejected"));
     const user = userEvent.setup();
     render(<VoiceSettings />);
-    const provider = screen.getByRole("combobox");
+    const provider = screen.getByRole("combobox", { name: "Proveedor de voz" });
     await waitFor(() => expect(provider).toBeEnabled());
     await user.selectOptions(provider, "openai_live");
     expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo cambiar el modo de voz.");
@@ -111,7 +112,7 @@ describe("voice provider settings", () => {
     await user.click(within(confirmation).getByRole("button", { name: "Eliminar" }));
     expect(remove).toHaveBeenCalledWith("csrf-memory");
     expect(await screen.findByText("Clave de OpenAI eliminada. Se seleccionó el modo ElevenLabs.")).toBeVisible();
-    expect(screen.getByRole("combobox")).toHaveValue("elevenlabs");
+    expect(screen.getByRole("combobox", { name: "Proveedor de voz" })).toHaveValue("elevenlabs");
     expect(screen.getByLabelText("API key de OpenAI")).toHaveValue("");
     expect(useAppStore.getState().features?.live?.available).toBe(false);
     expect(useAppStore.getState().features?.voice?.provider).toBe("elevenlabs");
@@ -123,8 +124,17 @@ describe("voice provider settings", () => {
     render(<VoiceSettings />);
     expect(api.openaiIntegration).not.toHaveBeenCalled();
     expect(api.voiceSettings).not.toHaveBeenCalled();
-    expect(screen.getByRole("combobox")).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Proveedor de voz" })).toBeDisabled();
     expect(screen.getByLabelText("API key de OpenAI")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Guardar cifrada" })).toBeDisabled();
+  });
+
+  it("keeps API key settings usable when the separate saved voice request fails", async () => {
+    vi.mocked(api.openaiVoice).mockRejectedValue(new Error("voice request unavailable"));
+    render(<VoiceSettings />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo cargar la voz guardada.");
+    await waitFor(() => expect(screen.getByLabelText("API key de OpenAI")).toBeEnabled());
+    expect(screen.getByRole("combobox", { name: "Proveedor de voz" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Voz de GPT-Live-1" })).toBeDisabled();
   });
 });

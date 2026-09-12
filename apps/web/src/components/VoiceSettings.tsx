@@ -5,6 +5,7 @@ import { Badge, Button, Field, Panel } from "@hermes-control/ui";
 import { api, type OpenAIIntegrationView, type VoiceSettingsView } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 import type { VoiceProvider } from "../types";
+import { OpenAIVoicePicker } from "./OpenAIVoicePicker";
 
 type Action = "load" | "provider" | "save" | "delete" | "";
 
@@ -136,6 +137,7 @@ export function VoiceSettings() {
           {action === "load" ? t("integrations.loading") : integration?.configured ? t("integrations.configured") : t("integrations.notConfigured")}
         </Badge></div>
       </div>
+      <OpenAIVoicePicker configured={integration?.configured === true} />
       <Field
         label={integration?.configured ? t("voiceSettings.replaceKey") : t("voiceSettings.apiKey")}
         aria-label={integration?.configured ? t("voiceSettings.replaceKey") : t("voiceSettings.apiKey")}

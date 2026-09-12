@@ -11,7 +11,7 @@ from sqlalchemy import select
 from hermes_control_api.integrations import IntegrationError
 from hermes_control_api.models import (
     AuditEvent, IdempotencyOperation, ProfileRef, SessionLink, User,
-    UserIntegration,
+    UserIntegration, UserVoicePreference,
 )
 from hermes_control_api.openai_live import (
     LIVE_INSTRUCTIONS, OPENAI_LIVE_MAX_RESPONSE_BYTES, LiveSessionLimiter,
@@ -232,7 +232,7 @@ async def test_official_live_contract_fixed_origin_permissions_and_redacted_boun
     assert session["delegation"] == {"type": "client"}
     assert session["instructions"] == LIVE_INSTRUCTIONS
     assert session["store"] is False
-    assert "audio" not in session
+    assert session["audio"] == {"output": {"voice": "marin"}}
     assert session["client"]["data_channel"]["allowed_client_events"] == ["session.commentary.append", "session.close"]
     assert session["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Remember jueves"}]}, {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Confirmed [REDACTED]"}]}]
     bounded = live_history([{"role": "user", "content": "é" * 10_000} for _ in range(200)], api_key=SECRET)
@@ -255,6 +255,98 @@ async def test_provider_errors_are_sanitized_and_redirects_never_followed(status
     assert OFFER not in str(error.value)
     assert error.value.retryable is False
     assert len(calls) == 1
+
+
+def test_openai_voice_is_owner_scoped_and_survives_key_and_mode_changes(authenticated, app):
+    client, csrf = authenticated
+    voice_path = "/api/v1/integrations/openai/voice"
+    assert client.get(voice_path).json() == {"voiceId": "marin"}
+    with app.state.session_factory() as db:
+        assert db.scalar(select(UserVoicePreference)) is None
+    # A voice can be chosen before adding a credential or switching modes.
+    response = client.put(voice_path, headers=headers(csrf), json={"voiceId": "willow"})
+    assert response.status_code == 200
+    assert response.json() == {"voiceId": "willow"}
+    assert client.get("/api/v1/integrations/voice").json() == {"provider": "elevenlabs"}
+    assert client.get("/api/v1/integrations/openai").json()["configured"] is False
+    configure(client, csrf)
+    assert client.get(voice_path).json() == {"voiceId": "willow"}
+    replacement = "sk-proj-replacement_key_123456789"
+    assert client.put("/api/v1/integrations/openai/key", headers=headers(csrf), json={"apiKey": replacement}).status_code == 200
+    assert client.put("/api/v1/integrations/voice", headers=headers(csrf), json={"provider": "elevenlabs"}).json() == {"provider": "elevenlabs"}
+    assert client.delete("/api/v1/integrations/openai/key", headers=headers(csrf)).status_code == 204
+    assert client.get(voice_path).json() == {"voiceId": "willow"}
+    with app.state.session_factory() as db:
+        db.add(User(username="voice-reader", password_hash=hash_password("reader password long enough"), is_admin=False))
+        db.commit()
+    login = client.post("/api/v1/auth/login", json={"username": "voice-reader", "password": "reader password long enough"})
+    reader_csrf = login.json()["csrfToken"]
+    assert client.get(voice_path).json() == {"voiceId": "marin"}
+    assert client.put(voice_path, headers=headers(reader_csrf), json={"voiceId": "cedar"}).status_code == 200
+    with app.state.session_factory() as db:
+        preferences = {
+            name: preference.openai_voice_id
+            for name, preference in db.execute(
+                select(User.username, UserVoicePreference).join(
+                    UserVoicePreference, UserVoicePreference.owner_id == User.id
+                )
+            )
+        }
+    assert preferences == {"admin": "willow", "voice-reader": "cedar"}
+
+
+def test_openai_voice_mutation_is_authenticated_validated_and_idempotent(authenticated, app):
+    client, csrf = authenticated
+    voice_path = "/api/v1/integrations/openai/voice"
+    assert client.put(voice_path, json={"voiceId": "marin"}).status_code == 403
+    assert client.put(voice_path, headers={"X-CSRF-Token": csrf}, json={"voiceId": "marin"}).status_code == 400
+    for invalid in ["unknown", "Marin", "", "marin\n", {"id": "custom_voice"}, None, 42]:
+        response = client.put(voice_path, headers=headers(csrf), json={"voiceId": invalid})
+        assert response.status_code == 422
+    assert client.put(voice_path, headers=headers(csrf), json={"voiceId": "ash", "ownerId": "other"}).status_code == 422
+    replay_headers = headers(csrf)
+    for _ in range(2):
+        response = client.put(voice_path, headers=replay_headers, json={"voiceId": "vesper"})
+        assert response.status_code == 200
+        assert response.json() == {"voiceId": "vesper"}
+    with app.state.session_factory() as db:
+        assert len(db.scalars(select(AuditEvent).where(AuditEvent.action == "integration.openai.voice.set")).all()) == 1
+    client.cookies.clear()
+    assert client.get(voice_path).status_code == 401
+    assert client.put(voice_path, headers=headers(csrf), json={"voiceId": "marin"}).status_code == 401
+
+
+def test_live_route_uses_saved_voice_and_rejects_unsaved_override(authenticated, app):
+    client, csrf = authenticated
+    configure(client, csrf)
+    fake = FakeLiveClient()
+    app.state.openai_live_client = fake
+    payload = {"sdp": OFFER, "profileId": profile_id(app)}
+    assert client.post("/api/v1/realtime/live-session", headers=headers(csrf), json=payload).status_code == 201
+    assert fake.requests[-1]["voice_id"] == "marin"
+    assert client.put("/api/v1/integrations/openai/voice", headers=headers(csrf), json={"voiceId": "quartz"}).status_code == 200
+    assert client.post("/api/v1/realtime/live-session", headers=headers(csrf), json=payload).status_code == 201
+    assert fake.requests[-1]["voice_id"] == "quartz"
+    assert client.post("/api/v1/realtime/live-session", headers=headers(csrf), json={**payload, "voiceId": "willow"}).status_code == 422
+    assert len(fake.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_saved_voice_is_forwarded_only_as_startup_output_voice():
+    requests = []
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(201, json={"session": {"id": "live_test"}, "transport": {"type": "webrtc", "sdp": ANSWER}})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        live = OpenAILiveClient(client)
+        await live.create_session(api_key=SECRET, sdp=OFFER, voice_id="bossa")
+        with pytest.raises(IntegrationError) as error:
+            await live.create_session(api_key=SECRET, sdp=OFFER, voice_id="custom_invalid")
+    assert len(requests) == 1
+    assert requests[0]["session"]["audio"] == {"output": {"voice": "bossa"}}
+    assert requests[0]["session"]["model"] == "gpt-live-1"
+    assert requests[0]["transport"]["sdp"] == OFFER
+    assert error.value.code == "OPENAI_LIVE_VOICE_UNAVAILABLE"
 
 
 @pytest.mark.asyncio

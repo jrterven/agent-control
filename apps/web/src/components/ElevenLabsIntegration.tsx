@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Badge, Button, Field, Panel } from "@hermes-control/ui";
 import { api, type ElevenLabsIntegrationView, type ElevenLabsProfileVoiceView, type ElevenLabsTtsModelId, type ElevenLabsVoice } from "../lib/api";
 import { useAppStore } from "../store/appStore";
+import { claimVoicePreview, releaseVoicePreview } from "../lib/voicePreviewPlayback";
 
 type Action = "load" | "save" | "test" | "voice" | "delete" | "";
 type PreviewState = "idle" | "loading" | "playing" | "paused" | "error";
@@ -38,6 +39,7 @@ export function ElevenLabsIntegration() {
   const [profileVoiceError, setProfileVoiceError] = useState("");
   const [profileReload, setProfileReload] = useState(0);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewOwner = useRef({});
   const blocked = offline || demoMode || Boolean(action) || profileVoiceSaving;
   const profileBlocked = blocked || profileVoiceLoading;
   const profileOptions = useMemo(() => profiles
@@ -50,6 +52,7 @@ export function ElevenLabsIntegration() {
 
   const releasePreview = useCallback(() => {
     const audio = previewAudioRef.current;
+    releaseVoicePreview(previewOwner.current);
     if (!audio) return;
     audio.onplaying = null;
     audio.onwaiting = null;
@@ -235,6 +238,7 @@ export function ElevenLabsIntegration() {
       }
       if (previewState === "paused") {
         try {
+          claimVoicePreview(previewOwner.current, stopPreview);
           await current.play();
         } catch {
           setPreviewState("error");
@@ -262,6 +266,7 @@ export function ElevenLabsIntegration() {
       setError(t("integrations.previewError"));
     };
     try {
+      claimVoicePreview(previewOwner.current, stopPreview);
       await audio.play();
     } catch {
       releasePreview();

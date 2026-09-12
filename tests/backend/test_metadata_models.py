@@ -116,6 +116,11 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
         and "openai_live" in item["sqltext"]
         for item in voice_provider_checks
     )
+    assert any(
+        item["name"] == "ck_user_voice_preferences_openai_voice"
+        and "marin" in item["sqltext"] and "willow" in item["sqltext"]
+        for item in voice_provider_checks
+    )
     assert {"tags", "session_tags", "attachment_references", "drafts"} <= table_names
     assert not any("message" in table_name for table_name in table_names)
 
@@ -264,7 +269,7 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0018_voice_provider"
+        ).scalar_one() == "0019_openai_voice"
     engine.dispose()
 
     downgrade = subprocess.run(
@@ -294,6 +299,65 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     upgraded_again = inspect(upgraded_again_engine)
     assert set(upgraded_again.get_table_names()) - {"alembic_version"} == APPLICATION_TABLES
     upgraded_again_engine.dispose()
+
+
+def test_openai_voice_migration_preserves_existing_modes_and_credentials(tmp_path):
+    database_path = tmp_path / "voice-migration.db"
+    environment = os.environ.copy()
+    environment.update({
+        "HERMES_CONTROL_ENVIRONMENT": "test",
+        "HERMES_CONTROL_DATABASE_URL": f"sqlite:///{database_path}",
+        "PYTHONPATH": os.pathsep.join([
+            str(REPO / "apps" / "api"), str(REPO / "packages" / "hermes-client"),
+            environment.get("PYTHONPATH", ""),
+        ]),
+    })
+    command = [sys.executable, "-m", "alembic", "-c", str(REPO / "apps" / "api" / "alembic.ini")]
+    def migrate(direction, revision):
+        result = subprocess.run(
+            [*command, direction, revision], cwd=REPO / "apps" / "api",
+            env=environment, check=False, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+    migrate("upgrade", "0018_voice_provider")
+    engine = create_engine(f"sqlite:///{database_path}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO users (id, username, password_hash, is_admin, is_active, created_at, updated_at) "
+            "VALUES ('owner', 'migration-owner', 'unused', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO user_voice_preferences (owner_id, provider, created_at, updated_at) "
+            "VALUES ('owner', 'openai_live', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        )
+        for provider in ("openai", "elevenlabs"):
+            connection.exec_driver_sql(
+                "INSERT INTO user_integrations (id, owner_id, provider, api_key_ciphertext, created_at, updated_at) "
+                "VALUES (?, 'owner', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                (provider, provider, "v1.preserved." + provider),
+            )
+    migrate("upgrade", "head")
+    with engine.begin() as connection:
+        assert connection.exec_driver_sql(
+            "SELECT provider, openai_voice_id FROM user_voice_preferences WHERE owner_id='owner'"
+        ).one() == ("openai_live", "marin")
+        connection.exec_driver_sql("UPDATE user_voice_preferences SET openai_voice_id='willow'")
+    with engine.begin() as connection:
+        with pytest.raises(IntegrityError):
+            connection.exec_driver_sql("UPDATE user_voice_preferences SET openai_voice_id='unsupported'")
+    migrate("downgrade", "0018_voice_provider")
+    assert "openai_voice_id" not in {
+        item["name"] for item in inspect(engine).get_columns("user_voice_preferences")
+    }
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT provider FROM user_voice_preferences").scalar_one() == "openai_live"
+        assert connection.exec_driver_sql(
+            "SELECT provider, api_key_ciphertext FROM user_integrations ORDER BY provider"
+        ).all() == [("elevenlabs", "v1.preserved.elevenlabs"), ("openai", "v1.preserved.openai")]
+    migrate("upgrade", "head")
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT openai_voice_id FROM user_voice_preferences").scalar_one() == "marin"
+    engine.dispose()
 
 
 def _expect_integrity_error(db, row) -> None:

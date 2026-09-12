@@ -16,6 +16,18 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
 - Preserve ElevenLabs and add an explicit GPT-Live mode in voice settings. An
   existing ElevenLabs credential never becomes an OpenAI credential. Selecting
   a mode does not start microphone capture or spend provider quota.
+- Persist the owner's chosen built-in Live voice separately from the provider
+  and credential. Default existing accounts to `marin`, and send the validated
+  choice as `session.audio.output.voice` when starting each new conversation.
+  Switching providers or replacing/deleting a key retains the voice preference.
+  A running Live session keeps its original voice; settings explain that the
+  change applies to the next conversation.
+- Let users compare voices through explicit, brief GPT-Live preview sessions.
+  Explain that previews use the owner's OpenAI quota before the play action.
+  Feed generated silence instead of microphone audio, request one short phrase
+  in the interface language, and never dispatch a preview delegation to Hermes.
+  Bound playback and connection lifetime, and stop before playing another sample
+  or leaving the screen. Previewing does not save the voice or change providers.
 - Each owner supplies their own OpenAI project API key through an authenticated
   write-only setting. Store it encrypted with the Control vault and bind its
   ciphertext to the owner, provider and field. Read responses expose only

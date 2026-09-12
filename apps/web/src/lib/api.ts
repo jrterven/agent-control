@@ -1,4 +1,5 @@
 import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, EmailReferencePreview, Gateway, Profile, PushNotificationConfig, RealtimeEvent, SearchResult, SessionSummary, VoiceProvider, Workspace } from "../types";
+import type { OPENAI_LIVE_VOICES } from "./openaiLiveVoices";
 
 export type AdminResourceName = "models" | "config" | "soul" | "skills" | "toolsets" | "mcp" | "channels" | "usage" | "secrets";
 
@@ -65,6 +66,9 @@ export type OpenAIIntegrationView = {
   provider: "openai";
   modelId: "gpt-live-1";
 };
+
+export type OpenAILiveVoiceId = typeof OPENAI_LIVE_VOICES[number]["id"];
+export type OpenAIVoiceView = { voiceId: OpenAILiveVoiceId };
 
 export type OpenAILiveSessionView = {
   session: { id: string };
@@ -489,6 +493,12 @@ export const api = {
     body: JSON.stringify({ provider }),
   }),
   openaiIntegration: () => request<OpenAIIntegrationView>("/integrations/openai"),
+  openaiVoice: () => request<OpenAIVoiceView>("/integrations/openai/voice"),
+  saveOpenAIVoice: (voiceId: OpenAILiveVoiceId, csrfToken?: string) => request<OpenAIVoiceView>("/integrations/openai/voice", {
+    method: "PUT",
+    headers: mutationHeaders(csrfToken),
+    body: JSON.stringify({ voiceId }),
+  }),
   saveOpenAIKey: (apiKey: string, csrfToken?: string) => request<OpenAIIntegrationView>("/integrations/openai/key", {
     method: "PUT",
     headers: mutationHeaders(csrfToken),
@@ -499,6 +509,12 @@ export const api = {
     headers: mutationHeaders(csrfToken),
   }),
   createLiveSession: (payload: { sdp: string; profileId: string; sessionId?: string | null }, csrfToken?: string, signal?: AbortSignal) => request<OpenAILiveSessionView>("/realtime/live-session", {
+    method: "POST",
+    headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
+    body: JSON.stringify(payload),
+    signal,
+  }),
+  createLiveVoicePreview: (payload: { sdp: string; voiceId: OpenAILiveVoiceId; language: "es" | "en" | "fr" | "de" | "pt" }, csrfToken?: string, signal?: AbortSignal) => request<OpenAILiveSessionView>("/realtime/live-voice-preview", {
     method: "POST",
     headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
     body: JSON.stringify(payload),

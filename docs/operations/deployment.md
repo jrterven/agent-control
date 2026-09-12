@@ -124,6 +124,12 @@ For GPT-Live, the owner's OpenAI project key must have access to `gpt-live-1`.
 Configure it through the separate write-only OpenAI setting and select the live
 mode explicitly. Voice billing is separate from the selected agent's usage;
 automated release tests use fake provider transports and must not spend quota.
+The GPT-Live voice picker stores a separate owner preference (default `marin`)
+and applies it to the next conversation. Its explicit preview button creates a
+short real GPT-Live session using generated silence, without opening the
+microphone or submitting work to Hermes. The UI discloses OpenAI quota usage
+and the 15-second WebRTC initialization charge. Previews use the same fixed
+backend origin and WebRTC transport; no new CSP source is required.
 
 The unit runs the same idempotent Alembic upgrade before every start. It invokes
 Uvicorn with `--ws-max-size 4096`, one worker and `--no-proxy-headers`.
@@ -272,6 +278,12 @@ the production gateway's own `default` profile remains Newton.
   key nor SDP enters browser persistence, service-worker caches, audit payloads
   or the idempotency ledger. Verify that selecting GPT-Live preserves the
   ElevenLabs configuration and that selecting a mode does not open a session.
+- Verify that the saved Live voice survives provider/key changes, invalid voice
+  identifiers are rejected, and ordinary Live creation forwards the preference.
+  A preview must not save a voice, change the mode, acquire the microphone,
+  include chat history, or delegate work. Check explicit playback, cancellation,
+  automatic timeout, navigation/background cleanup and blocked-audio recovery.
+  Keep preview SDP out of replay storage, logs and service-worker caches.
 - On a real device, start GPT-Live after its destination and usage notice,
   verify two-way audio, captions, delegation into the selected Control
   conversation and spoken task results, then verify microphone release on
