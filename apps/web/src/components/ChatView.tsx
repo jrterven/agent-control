@@ -17,6 +17,7 @@ import { usePwaUpdateStore } from "../lib/pwaUpdate";
 import type { AgentActivityItem, ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageAttachment, MessageMedia, Profile } from "../types";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { EmailReferences } from "./EmailReferences";
+import { LiveTranscript } from "./LiveTranscript";
 
 const emptyApprovals: ApprovalRequest[] = [];
 const emptyClarifications: ClarificationRequest[] = [];
@@ -604,7 +605,7 @@ export function insertTranscriptAtSelection(value: string, transcript: string, s
   return { value: `${before}${insertion}${after}`, caret: before.length + insertion.length };
 }
 
-function Composer({ agentName, sessionId, canInterrupt, offline = false, speechAvailable, liveSpeechEnabled, liveSpeechStatus, onLiveSpeechChange, onCaptureChange }: { agentName: string; sessionId: string; canInterrupt: boolean; offline?: boolean; speechAvailable: boolean; liveSpeechEnabled: boolean; liveSpeechStatus: LiveSpeechStatus; onLiveSpeechChange: (enabled: boolean) => void; onCaptureChange: (active: boolean) => void }) {
+function Composer({ agentName, sessionId, canInterrupt, offline = false, speechAvailable, liveSpeechEnabled, liveSpeechStatus, onLiveSpeechChange, onCaptureChange, live }: { live: ReturnType<typeof useOpenAILive>; agentName: string; sessionId: string; canInterrupt: boolean; offline?: boolean; speechAvailable: boolean; liveSpeechEnabled: boolean; liveSpeechStatus: LiveSpeechStatus; onLiveSpeechChange: (enabled: boolean) => void; onCaptureChange: (active: boolean) => void }) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
@@ -615,8 +616,6 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
   const authState = useAppStore((state) => state.authState);
   const dictationConfigured = useAppStore((state) => state.features?.dictation.available === true);
   const liveConfigured = useAppStore((state) => state.features?.live?.available === true);
-  const profileId = useAppStore((state) => state.selectedProfileId);
-  const live = useOpenAILive({ enabled: liveConfigured && authState === "authenticated" && !offline, sessionId, profileId, csrfToken });
   const startingCaptureRef = useRef(false);
   const draft = useSessionDraft(sessionId);
   const setUpdateBlocker = usePwaUpdateStore((state) => state.setBlocker);
@@ -904,6 +903,14 @@ export function ChatView() {
   const offline = authState === "offline";
   const canMutate = demoMode || (authState === "authenticated" && profile?.mutable === true);
   const canPrompt = canMutate && Boolean(profile?.capabilities?.prompts);
+  const liveConfigured = useAppStore((state) => state.features?.live?.available === true);
+  const live = useOpenAILive({ enabled: liveConfigured && canPrompt && authState === "authenticated" && Boolean(session), sessionId, profileId, csrfToken });
+  const timeline = useMemo(() => [
+    // Hermes messages carry formatted clock labels, not sortable timestamps.
+    // Keep their canonical order and show voice calls together below them.
+    ...visibleMessages.map((message) => ({ kind: "message" as const, id: message.id, message })),
+    ...live.transcripts.calls.map((call) => ({ kind: "transcript" as const, id: call.id, call })),
+  ], [visibleMessages, live.transcripts.calls]);
   const canInterrupt = canMutate && Boolean(profile?.capabilities?.interrupt);
   const canMutateInteractions = authState === "authenticated" && profile?.mutable === true;
   const canApprove = canMutateInteractions
@@ -915,6 +922,7 @@ export function ChatView() {
   const waitingForResponse = approvals.length > 0 || clarifications.length > 0;
   const scrollRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
+  const [readingOlder, setReadingOlder] = useState(false);
   const previousSessionRef = useRef(sessionId);
   const [creatingSession, setCreatingSession] = useState(false);
   const canCreateSession = !session && (
@@ -940,12 +948,13 @@ export function ChatView() {
     if (previousSessionRef.current !== sessionId) {
       previousSessionRef.current = sessionId;
       followLatestRef.current = true;
+      setReadingOlder(false);
     }
     const viewport = scrollRef.current;
     if (viewport && followLatestRef.current) {
-      viewport.scrollTo({ top: viewport.scrollHeight, behavior: streamingMessageId ? "auto" : "smooth" });
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: streamingMessageId || live.active ? "auto" : "smooth" });
     }
-  }, [approvals, clarifications, messages, sessionId, streamingMessageId]);
+  }, [approvals, clarifications, messages, sessionId, streamingMessageId, live.transcripts.calls, live.active]);
 
   return (
     <section className="conversation" aria-labelledby="conversation-title">
@@ -956,11 +965,13 @@ export function ChatView() {
         onScroll={(event) => {
           const viewport = event.currentTarget;
           followLatestRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= conversationFollowThreshold;
+          setReadingOlder(!followLatestRef.current);
         }}
       >
         <div className="date-divider"><span>{t("chat.fixedDate")}</span></div>
         <div className="message-list">
-          {visibleMessages.length ? visibleMessages.map((message) => <Message key={message.id} message={message} profile={profile} agentName={profile?.displayName ?? t("chat.agent")} automationInstruction={session?.automationGenerated === true && message.id === firstUserMessageId} speech={{ available: canUseSpeech, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : <div className="empty-chat"><ProfileAvatar profile={profile} size="lg" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
+          {live.transcripts.hasMore || live.transcripts.historyError ? <div className="live-transcript__history"><Button size="sm" variant="ghost" disabled={live.transcripts.loading} onClick={() => { followLatestRef.current = false; live.transcripts.loadMore(); }}>{t(live.transcripts.historyError ? "liveVoice.transcriptLoadError" : "liveVoice.transcriptOlder")}</Button></div> : null}
+          {timeline.length ? timeline.map((item) => item.kind === "transcript" ? <LiveTranscript key={item.id} call={item.call} agentName={profile?.displayName ?? t("chat.agent")} retry={() => live.transcripts.retrySave(item.id)} /> : <Message key={item.id} message={item.message} profile={profile} agentName={profile?.displayName ?? t("chat.agent")} automationInstruction={session?.automationGenerated === true && item.id === firstUserMessageId} speech={{ available: canUseSpeech, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : <div className="empty-chat"><ProfileAvatar profile={profile} size="lg" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
           <InteractionCards approvals={approvals} clarifications={clarifications} offline={offline} canApprove={canApprove} canClarify={canClarify} />
           {streamingMessageId ? waitingForResponse
             ? <p className="typing-state typing-state--waiting" role="status"><WarningCircle /><span>{t("chat.waitingForResponse", { agent: profile?.displayName ?? "Hermes" })}</span></p>
@@ -968,7 +979,8 @@ export function ChatView() {
             : null}
         </div>
       </div>
-      {session && (canPrompt || offline) ? <Composer agentName={profile?.displayName ?? "Hermes"} sessionId={sessionId} canInterrupt={canInterrupt} offline={offline} speechAvailable={canUseSpeech} liveSpeechEnabled={speech.liveEnabled} liveSpeechStatus={speech.liveStatus} onLiveSpeechChange={speech.setLiveEnabled} onCaptureChange={setVoiceCaptureActive} /> : session ? <div className="composer-unavailable"><ShieldNotice /> {t(profile?.mutable ? "chat.promptUnavailable" : "chat.profileReadOnly")}</div> : profile && !profile.mutable ? <div className="composer-unavailable"><ShieldNotice /> {t("chat.chooseTestEnvironment")}</div> : null}
+      {readingOlder && live.transcripts.calls.length > 0 ? <Button className="live-transcript__latest" size="sm" variant="secondary" onClick={() => { followLatestRef.current = true; setReadingOlder(false); scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "auto" }); }}>{t("liveVoice.transcriptLatest")}</Button> : null}
+      {session && (canPrompt || offline) ? <Composer live={live} agentName={profile?.displayName ?? "Hermes"} sessionId={sessionId} canInterrupt={canInterrupt} offline={offline} speechAvailable={canUseSpeech} liveSpeechEnabled={speech.liveEnabled} liveSpeechStatus={speech.liveStatus} onLiveSpeechChange={speech.setLiveEnabled} onCaptureChange={setVoiceCaptureActive} /> : session ? <div className="composer-unavailable"><ShieldNotice /> {t(profile?.mutable ? "chat.promptUnavailable" : "chat.profileReadOnly")}</div> : profile && !profile.mutable ? <div className="composer-unavailable"><ShieldNotice /> {t("chat.chooseTestEnvironment")}</div> : null}
     </section>
   );
 }

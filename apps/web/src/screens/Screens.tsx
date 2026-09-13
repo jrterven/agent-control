@@ -1234,6 +1234,8 @@ export function SettingsScreen() {
           <li>{t("dictation.privacyRetention")}</li>
           <li>{t("dictation.privacyDraft")}</li>
         </ul>
+        <h3>GPT Live</h3>
+        <p>{t("liveVoice.transcriptPrivacy")}</p>
       </Panel>
       <Panel className="settings-section"><header><Database /><div><strong>{t("settingsPage.offline")}</strong><p>{t("settingsPage.offlineDescription")}</p></div></header><Switch checked={cacheEnabled} onChange={changeCache} label={t("settingsPage.encryptedCache")} description={t("settingsPage.cacheLimits")} /><Button variant="ghost" onClick={() => void clearPrivateCache()}>{t("settingsPage.clearLocal")}</Button></Panel>
       <Panel className="settings-section"><header><UserCircle /><div><strong>{t("settingsPage.session")}</strong><p>{t("settingsPage.cookieAuth", { user: userName })}</p></div></header><Button variant="danger" disabled={loggingOut} onClick={() => void logout()}>{loggingOut ? t("settingsPage.loggingOut") : t("settingsPage.logout")}</Button></Panel>

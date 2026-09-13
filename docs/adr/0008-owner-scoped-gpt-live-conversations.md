@@ -112,6 +112,27 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
   enough conversation context for corrections and short replies. Transcript
   fragments alone do not trigger agent work. Dispatch the delegated request
   through Control's normal authenticated conversation path.
+- Display input/output transcript deltas in the chat, labelled by speaker,
+  including overlapping speech and late fragments. Preserve the original text,
+  timestamps and arrival order; display groups use a revisable 1.2-second gap,
+  not a provider-confirmed turn boundary. Captions do not imply audio playback
+  completion and never trigger agent work. Reader scrolling suspends following
+  new text, with an explicit return-to-latest control.
+- Preserve voice history in the owner/session-bound `live_transcripts` table
+  (migration 0021), encrypted with the Control vault and a call-specific AAD.
+  Store text only. Authenticated reads paginate ten calls at a time; CSRF writes
+  accept bounded append-only batches with a client-generated call UUID and
+  fragment offset.
+  Older or duplicate batches cannot truncate or duplicate a transcript;
+  conflicting replacements are rejected. Conversation deletion cascades history.
+  Exclude transcript content from logs, audit and idempotency response storage.
+- Batch only new fragments in the background once per second, with a bounded request
+  timeout, retries and visible save failure/retry controls. Flush on stop and
+  navigation without making WebRTC media or delegation await storage. Receive
+  final deltas during graceful close. No additional transcription model or
+  provider connection is created. Interrupted connectivity can leave an unsaved
+  tail; do not claim guaranteed lossless transcription or zero delivery delay.
+  Describe storage and audio handling in Settings → Privacy.
 - Associate each result with its original opaque delegation ID. Send concise
   speakable results with `session.commentary.append`; keep each append within
   the provider limit. Long answers use a labelled excerpt and remain available

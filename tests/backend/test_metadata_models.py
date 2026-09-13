@@ -47,6 +47,7 @@ APPLICATION_TABLES = {
     "push_subscriptions",
     "realtime_tickets",
     "session_links",
+    "live_transcripts",
     "session_tags",
     "tags",
     "users",
@@ -279,7 +280,7 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0020_openai_profile_voices"
+        ).scalar_one() == "0021_live_transcripts"
     engine.dispose()
 
     downgrade = subprocess.run(

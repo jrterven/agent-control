@@ -64,6 +64,8 @@ describe("live voice in the chat", () => {
     transport.scribeStart.mockClear();
     transport.scribeStop.mockClear();
     transport.liveSupported.mockReturnValue(true);
+    vi.spyOn(api, "liveTranscripts").mockResolvedValue({ items: [], nextCursor: null });
+    vi.spyOn(api, "saveLiveTranscript").mockResolvedValue(undefined);
     vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
     useAppStore.setState({
       authState: "authenticated", csrfToken: "csrf-memory", demoMode: false,
@@ -79,6 +81,34 @@ describe("live voice in the chat", () => {
     cleanup();
     vi.restoreAllMocks();
     await db.drafts.clear();
+  });
+
+  it("shows both speakers immediately, keeps captions after stop, and restores them from history", async () => {
+    const user = userEvent.setup();
+    const view = render(<ChatView />);
+    await user.click(screen.getByRole("button", { name: "Conversar con GPT-Live-1" }));
+    const client = transport.Client.instances[0];
+    const fragments = [
+      { role: "user" as const, text: "¿Qué estás entendiendo?", start: 100, end: 600, order: 0 },
+      { role: "assistant" as const, text: "Que quieres ver nuestra conversación.", start: 400, end: 1000, order: 1 },
+    ];
+    act(() => client.options.onTranscript?.(fragments));
+    expect(screen.getByText(fragments[0].text)).toBeVisible();
+    expect(screen.getByText(fragments[1].text)).toBeVisible();
+    expect(screen.getByRole("region", { name: "Transcripción de voz" })).toHaveTextContent("Newton");
+    expect(screen.getByRole("textbox", { name: "Mensaje a Newton…" })).toHaveValue("");
+    expect(api.saveLiveTranscript).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Terminar conversación de voz" }));
+    await waitFor(() => expect(api.saveLiveTranscript).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(fragments[0].text)).toBeVisible();
+    const savedId = vi.mocked(api.saveLiveTranscript).mock.calls[0][1];
+    view.unmount();
+    vi.mocked(api.liveTranscripts).mockResolvedValue({ items: [{ id: savedId, createdAt: new Date().toISOString(), fragments }], nextCursor: null });
+    render(<ChatView />);
+    expect(await screen.findByText(fragments[0].text)).toBeVisible();
+    expect(transport.Client.instances).toHaveLength(1);
+    act(() => useAppStore.setState({ selectedSessionId: "session-other" }));
+    expect(screen.queryByText(fragments[0].text)).not.toBeInTheDocument();
   });
 
   it("shows both configured voice icons without an idle panel or automatic start", async () => {
@@ -278,8 +308,8 @@ describe("live voice in the chat", () => {
       ]);
       client.options.onPlaybackBlocked(true);
     });
-    expect(screen.queryByText("Revisa el resultado")).not.toBeInTheDocument();
-    expect(screen.queryByText("Estoy revisando")).not.toBeInTheDocument();
+    expect(screen.getByText("Revisa el resultado").closest(".message-scroll")).not.toBeNull();
+    expect(screen.getByText("Estoy revisando").closest(".composer")).toBeNull();
     expect(screen.getByRole("textbox", { name: "Mensaje a Newton…" })).toHaveValue("");
     expect(await loadDraft("session-papers")).toBe("");
     const playback = screen.getByRole("button", { name: "Activar audio" });

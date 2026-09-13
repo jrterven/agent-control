@@ -20,6 +20,10 @@ from .security import constant_time_hash_matches
 
 
 def _request_body_limit(path: str, default: int, attachment_limit: int) -> int:
+    if path.startswith("/api/v1/sessions/") and "/live-transcripts/" in path:
+        # Up to 20,000 timing fragments but only 48,000 UTF-16 text units.
+        # Preserve timing/arrival metadata without rejecting a long call's tail.
+        return 2_500_000
     if path.startswith("/api/v1/sessions/") and path.endswith(
         "/prompts-with-attachments"
     ):

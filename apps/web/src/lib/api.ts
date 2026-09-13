@@ -516,6 +516,13 @@ export const api = {
     method: "DELETE",
     headers: mutationHeaders(csrfToken),
   }),
+  liveTranscripts: (sessionId: string, before?: string, signal?: AbortSignal) => request<import("./liveTranscripts").LiveTranscriptPage>(`/sessions/${encodeURIComponent(sessionId)}/live-transcripts${before ? `?before=${encodeURIComponent(before)}` : ""}`, { signal }),
+  saveLiveTranscript: (sessionId: string, callId: string, fragments: import("./openaiLiveClient").LiveFragment[], csrfToken?: string, signal?: AbortSignal, offset = 0) => request<void>(`/sessions/${encodeURIComponent(sessionId)}/live-transcripts/${encodeURIComponent(callId)}`, {
+    method: "PUT",
+    headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
+    body: JSON.stringify({ fragments, offset }),
+    signal,
+  }),
   createLiveSession: (payload: { sdp: string; profileId: string; sessionId?: string | null }, csrfToken?: string, signal?: AbortSignal) => request<OpenAILiveSessionView>("/realtime/live-session", {
     method: "POST",
     headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,

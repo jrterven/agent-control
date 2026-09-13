@@ -1105,3 +1105,17 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 
 .privacy-settings > h3 { margin: 0 0 12px; font-size: 14px; }
 .privacy-settings > ul { display: grid; gap: 12px; margin: 0; padding-inline-start: 20px; color: var(--text-soft); line-height: 1.5; }
+
+/* Passive Live captions share the chat scroll area; the composer stays compact. */
+.live-transcript { min-width: 0; padding: 14px 0; border-block: 1px solid var(--border); }
+.live-transcript__header { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.live-transcript__header svg { width: 17px; height: 17px; color: var(--accent); }
+.live-transcript__header time { margin-left: auto; font-size: 11px; }
+.live-transcript__rows { display: flex; flex-direction: column; gap: 12px; }
+.live-transcript__row { max-width: 90%; padding: 10px 14px; border-radius: 14px; background: var(--surface-2); align-self: flex-start; min-width: 0; }
+.live-transcript__row--user { align-self: flex-end; background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.live-transcript__row small { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.live-transcript__row p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.live-transcript__save { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; font-size: 12px; }
+.live-transcript__history { display: flex; justify-content: center; }
+.live-transcript__latest { align-self: center; margin: 4px 0; }

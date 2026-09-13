@@ -65,6 +65,23 @@ both temporary archives.
 
 No Control startup, deploy or health check may execute `hermes update`.
 
+## GPT-Live transcript history
+
+Migration `0021_live_transcripts` adds encrypted, owner-scoped voice history.
+Preflight the migration on a verified copy of the production database and
+compare every pre-existing table with the backup; the new transcript table
+must start empty with the owner/session cascade constraint intact. Retain the
+pre-migration backup for rollback rather than downgrading the live database.
+
+Verify that native Live transcript events appear for both speakers while a
+background save is pending, that duplicate/late fragments do not repeat or
+truncate text, and that stop retains the final transcript. Reopen the chat to
+verify durable history. Test foreign-owner reads/writes, CSRF, pagination,
+failure/retry feedback, and independent microphone pause with fake media;
+transcript storage must never send a prompt or open another provider session.
+Keep captions outside the compact composer and keep Privacy information in
+settings. Acoustic latency is not established by simulated browser tests.
+
 ## Transcription integration change
 
 ElevenLabs Scribe is independent from the Hermes release stream. Before

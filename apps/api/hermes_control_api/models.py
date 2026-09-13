@@ -302,6 +302,26 @@ class SessionLink(Base, Timestamped):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class LiveTranscript(Base, Timestamped):
+    """Passive voice history, encrypted and bound to the conversation owner."""
+
+    __tablename__ = "live_transcripts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["session_link_id", "owner_id"], ["session_links.id", "session_links.owner_id"],
+            ondelete="CASCADE", name="fk_live_transcripts_session_owner",
+        ),
+        CheckConstraint("revision > 0", name="ck_live_transcripts_revision"),
+        CheckConstraint("payload_ciphertext LIKE 'v1.%'", name="ck_live_transcripts_encrypted"),
+        Index("ix_live_transcripts_session_created", "session_link_id", "created_at", "id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    session_link_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class EmailReferenceCache(Base, Timestamped):
     """Encrypted, short-lived projection of one session-owned mail citation."""
 

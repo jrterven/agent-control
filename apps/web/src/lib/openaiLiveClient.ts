@@ -234,7 +234,7 @@ export class OpenAILiveClient {
       this.fail("generic");
     } else if (event.type === "session.input_transcript.delta" || event.type === "session.output_transcript.delta") {
       if (!this.options.onTranscript && (this.options.disableDelegation || !this.options.onDelegation)) return;
-      if (typeof event.delta !== "string" || typeof event.start_ms !== "number" || !Number.isFinite(event.start_ms) || typeof event.end_ms !== "number" || !Number.isFinite(event.end_ms)) return;
+      if (typeof event.delta !== "string" || !event.delta || typeof event.start_ms !== "number" || !Number.isFinite(event.start_ms) || event.start_ms < 0 || typeof event.end_ms !== "number" || !Number.isFinite(event.end_ms) || event.end_ms < event.start_ms) return;
       if (this.fragments.reduce((sum, part) => sum + part.text.length, 0) + event.delta.length > 48_000) { this.fail("contextFull"); return; }
       this.fragments.push({ role: event.type === "session.input_transcript.delta" ? "user" : "assistant", text: event.delta, start: event.start_ms, end: event.end_ms, order: this.fragments.length });
       this.options.onTranscript?.([...this.fragments]);
