@@ -33,6 +33,11 @@ from .limits import (
     bounded_json_request,
 )
 from .normalization import EventNormalizer
+from .compatibility import (
+    AUDITED_REVISIONS as _AUDITED_REVISIONS,
+    PROFILE_MANAGEMENT_METHODS as _PROFILE_MANAGEMENT_METHODS_BY_REVISION,
+    CONTRACTS,
+)
 from .transport import (
     JsonRpcClient,
     JsonRpcDisconnected,
@@ -76,37 +81,6 @@ _MAX_PROFILE_ARCHIVE_BYTES = 100 * 1024 * 1024
 _MAX_PROFILE_MUTATION_RESPONSE_BYTES = 64 * 1024
 _MAX_REMOTE_PATH_LENGTH = 4_096
 _PROFILE_MUTATION_TIMEOUT = httpx.Timeout(180.0, connect=15.0)
-
-_PROFILE_MANAGEMENT_METHODS_BY_REVISION: dict[str, frozenset[str]] = {
-    # Hermes 0.20.5 has no deletion tombstone and its stale multiplex cron
-    # heartbeat can recreate a removed profile (#47368).  Creation remains
-    # usable, but do not expose any operation whose success or rollback needs
-    # a reliable profile delete on this revision.
-    "791e2ae3257e211d14ca77e654dfe10ee1976a1c": frozenset(
-        {"profiles.create"}
-    ),
-    # This exact upstream 0.20.6 revision contains both the deletion tombstone
-    # and the stale-scheduler home filter.  Its archive primitives are safe to
-    # expose independently, but cross-gateway transfer remains restricted to
-    # the fully audited deployed revision below.
-    "9978706e9303dbf990d90e744b131361449d73b9": frozenset(
-        {
-            "profiles.create",
-            "profiles.delete",
-            "profiles.export",
-            "profiles.import",
-        }
-    ),
-    "4209d371aa1bb8840ce8447555bdd863a1a96c38": frozenset(
-        {
-            "profiles.create",
-            "profiles.delete",
-            "profiles.export",
-            "profiles.import",
-            "profiles.transfer",
-        }
-    ),
-}
 
 _ACTIVE_RUNTIME_STATUSES = frozenset(
     {
@@ -223,67 +197,6 @@ def _multipart_profile_prefix(boundary: str, remote_path: str) -> bytes:
 def _multipart_profile_suffix(boundary: str) -> bytes:
     return f"\r\n--{boundary}--\r\n".encode("ascii")
 
-
-_AUDITED_REVISIONS: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
-    "791e2ae3257e211d14ca77e654dfe10ee1976a1c": (
-        "0.20.5",
-        frozenset(
-            {
-                "session.create",
-                "session.resume",
-                "session.status",
-                "session.history",
-                "prompt.submit",
-                "session.interrupt",
-                "approval.respond",
-                "clarify.respond",
-                "session.events.since",
-                "session.delete",
-            }
-        ),
-        frozenset({"cron.create", "cron.update", "cron.delete", "cron.trigger"}),
-    ),
-    "9978706e9303dbf990d90e744b131361449d73b9": (
-        "0.20.6",
-        frozenset(
-            {
-                "session.create",
-                "session.resume",
-                "session.status",
-                "session.history",
-                "prompt.submit",
-                "session.interrupt",
-                "approval.respond",
-                "clarify.respond",
-                "session.events.since",
-                "session.delete",
-            }
-        ),
-        frozenset({"cron.create", "cron.update", "cron.delete", "cron.trigger"}),
-    ),
-    # Mac gateway inspected on 2026-08-29. The original 0.20.6 revision above
-    # is an ancestor. Its contracted WS/session/API files are unchanged; the
-    # only protocol-adjacent differences are an additive prompt.btw method and
-    # an unrelated non-blocking TTS file-read fix in web_server.py.
-    "4209d371aa1bb8840ce8447555bdd863a1a96c38": (
-        "0.20.6",
-        frozenset(
-            {
-                "session.create",
-                "session.resume",
-                "session.status",
-                "session.history",
-                "prompt.submit",
-                "session.interrupt",
-                "approval.respond",
-                "clarify.respond",
-                "session.events.since",
-                "session.delete",
-            }
-        ),
-        frozenset({"cron.create", "cron.update", "cron.delete", "cron.trigger"}),
-    ),
-}
 
 # Every read probe is a side-effect-free GET. A write is advertised only when
 # its related read succeeded and the full Hermes revision is one we audited.
@@ -2109,6 +2022,7 @@ class HermesGatewayProvider:
                 self.http,
                 "DELETE",
                 f"/api/sessions/{quote(route.stored_session_id, safe='')}",
+                params={"profile": self.connection.profile_name},
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code < 500:
@@ -2197,7 +2111,9 @@ class HermesGatewayProvider:
                 **request_args,
             )
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code < 500:
+            # 424 means the job was saved but external registration failed.
+            # Treat it as partial delivery, never as permission to recreate it.
+            if exc.response.status_code < 500 and exc.response.status_code != 424:
                 raise
             raise RuntimeError("MUTATION_DELIVERY_UNKNOWN") from exc
         except (httpx.TransportError, httpx.TimeoutException, UpstreamPayloadError) as exc:
@@ -2214,7 +2130,10 @@ class HermesGatewayProvider:
             "prompt": automation.prompt,
             "deliver": "local",
         }
-        if automation.enabled:
+        contract = CONTRACTS.get((self.connection.trusted_source_sha or "").casefold())
+        if contract and contract.atomic_paused_cron:
+            requested["paused"] = not automation.enabled
+        if automation.enabled or (contract and contract.atomic_paused_cron):
             raw = await self._cron_mutation("POST", "/api/cron/jobs", json=requested)
             return self._automation(dict(raw), timezone_name=timezone_name)
 

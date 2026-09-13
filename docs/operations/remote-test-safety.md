@@ -48,7 +48,9 @@ entire native profile. A manual release check may use only newly created,
 random `hc-lifecycle-<run-id>` profiles whose exact IDs are recorded before the
 first mutation. Both gateways must report a revision explicitly approved for
 durable delete and transfer; currently that means
-`4209d371aa1bb8840ce8447555bdd863a1a96c38` on both sides. Never substitute an
+`4209d371aa1bb8840ce8447555bdd863a1a96c38` on both sides or
+`939e45c91d751fadd94dcd1b873ac3cb44846213` on both sides. Mixed-version pairs
+remain disabled. Never substitute an
 existing user profile. Verify destination state before source deletion, clean
 only the two recorded temporary names, wait beyond one scheduler heartbeat and
 confirm that neither profile reappears. If either gateway is Hermes 0.20.5,

@@ -13,6 +13,7 @@ from hermes_client import (
 )
 
 
+AUDITED_0212_SHA = "939e45c91d751fadd94dcd1b873ac3cb44846213"
 AUDITED_0206_SHA = "9978706e9303dbf990d90e744b131361449d73b9"
 AUDITED_MAC_0206_SHA = "4209d371aa1bb8840ce8447555bdd863a1a96c38"
 AUDITED_0205_SHA = "791e2ae3257e211d14ca77e654dfe10ee1976a1c"
@@ -190,6 +191,7 @@ async def test_reported_sha_that_contradicts_operator_anchor_disables_writes(
     ("version", "trusted_sha", "expected_profile_methods"),
     [
         ("0.20.5", AUDITED_0205_SHA, {"profiles.create"}),
+        ("0.21.2", AUDITED_0212_SHA, {"profiles.create", "profiles.delete", "profiles.export", "profiles.import", "profiles.transfer"}),
         (
             "0.20.6",
             AUDITED_0206_SHA,

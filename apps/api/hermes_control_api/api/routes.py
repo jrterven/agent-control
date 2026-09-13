@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from hermes_client.compatibility import profile_contract_supports
 from hermes_client import PromptAttachment
 
 from ..auth import (
@@ -890,18 +891,11 @@ def public_capability_flags(
     features = set(raw["features"])
     version = raw.get("version")
     trusted_revision = trusted_source_sha.casefold() if trusted_source_sha else None
-    lifecycle_delete_safe = (
-        version == "mock-1"
-        or trusted_revision
-        in {
-            "9978706e9303dbf990d90e744b131361449d73b9",
-            "4209d371aa1bb8840ce8447555bdd863a1a96c38",
-        }
+    lifecycle_delete_safe = version == "mock-1" or profile_contract_supports(
+        trusted_revision, version, "profiles.delete"
     )
-    lifecycle_transfer_safe = (
-        version == "mock-1"
-        or trusted_revision
-        == "4209d371aa1bb8840ce8447555bdd863a1a96c38"
+    lifecycle_transfer_safe = version == "mock-1" or profile_contract_supports(
+        trusted_revision, version, "profiles.transfer"
     )
     return {
         "realtime": "gateway.ping" in methods,

@@ -35,6 +35,12 @@ from hermes_client import (
     resolve_endpoint,
     validate_endpoint,
 )
+from hermes_client.history import project_history_message
+from hermes_client.compatibility import (
+    PROFILE_TRANSFER_REVISIONS as _AUDITED_PROFILE_TRANSFER_REVISIONS,
+    PROFILE_TRANSFER_PAIRS as _AUDITED_PROFILE_TRANSFER_PAIRS,
+    profile_contract_supports,
+)
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, InvalidRequestError
 from sqlalchemy.orm import Session
@@ -148,23 +154,6 @@ _ACTIVE_PROMPT_OPERATION_STATUSES = {
     "streaming",
     "delivery_unknown",
 }
-
-# Profile archives were inspected against these exact Hermes revisions.  The
-# transfer contract is deliberately an allowlist, not a semver range: archive
-# layout, SQLite state and import validation are implementation details.
-_AUDITED_PROFILE_TRANSFER_REVISIONS: dict[str, str] = {
-    "791e2ae3257e211d14ca77e654dfe10ee1976a1c": "0.20.5",
-    "9978706e9303dbf990d90e744b131361449d73b9": "0.20.6",
-    "4209d371aa1bb8840ce8447555bdd863a1a96c38": "0.20.6",
-}
-_AUDITED_PROFILE_TRANSFER_PAIRS = frozenset(
-    {
-        (
-            "4209d371aa1bb8840ce8447555bdd863a1a96c38",
-            "4209d371aa1bb8840ce8447555bdd863a1a96c38",
-        )
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -1844,17 +1833,12 @@ class ProfileService:
             )
             if (
                 self.services.settings.provider_mode != "mock"
-                and (
-                    source_sha is None
-                    or _AUDITED_PROFILE_TRANSFER_REVISIONS.get(
-                        source_sha.casefold()
-                    )
-                    != "0.20.6"
-                    or manager_capabilities.version != "0.20.6"
+                and not profile_contract_supports(
+                    source_sha, manager_capabilities.version, "profiles.delete"
                 )
             ):
                 raise ConflictError(
-                    "Agent deletion requires an audited Hermes 0.20.6 source; upgrade this gateway first"
+                    "Agent deletion requires an audited Hermes profile deletion contract"
                 )
             profile_provider, _ = await self._fresh_provider(
                 db,
@@ -3358,7 +3342,7 @@ class SessionService:
         )
         # The sanitizer's public collection bound is 500. Preserve the most
         # recent transcript window rather than exposing stale oldest rows.
-        bounded_history = history[-500:]
+        bounded_history = [project_history_message(item) for item in history[-500:]]
         sanitized = normalizer.sanitize_data(bounded_history)
         gateway = db.get(Gateway, row.gateway_id)
         if not isinstance(sanitized, list):
@@ -4089,6 +4073,7 @@ class SessionService:
 
     @staticmethod
     def _is_terminal_assistant_message(message: Any) -> bool:
+        message = project_history_message(message)
         if not isinstance(message, dict) or message.get("role") != "assistant":
             return False
         if message.get("tool_calls") or message.get("toolCalls"):

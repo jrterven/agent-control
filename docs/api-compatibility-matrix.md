@@ -1,14 +1,38 @@
 # Matriz de compatibilidad Hermes
 
-Verified on 2026-08-28 against the installed checkout and official upstream
-sources. This is a protocol allowlist, not a promise that every future Hermes
+Updated on 2026-09-13 against exact upstream sources and isolated native
+gateways. This is a protocol allowlist, not a promise that every future Hermes
 build exposes the same surface.
 
 | Target | Version / revision | Status |
 |---|---|---|
-| Remote installation | `0.20.5`, `791e2ae3257e211d14ca77e654dfe10ee1976a1c` | Primary production target; probe at startup |
+| Legacy installation | `0.20.5`, `791e2ae3257e211d14ca77e654dfe10ee1976a1c` | Backward compatibility; profile deletion disabled |
 | Official line | `0.20.6`, `9978706e9303dbf990d90e744b131361449d73b9` | Development compatibility target |
 | Mac Turing gateway | `0.20.6`, `4209d371aa1bb8840ce8447555bdd863a1a96c38` | Descendant audited on 2026-08-29; existing Control contract unchanged |
+| September release target | `0.21.2`, `939e45c91d751fadd94dcd1b873ac3cb44846213` | Native isolated chat/interrupt/history/cron and profile-transfer checks passed |
+
+Exact contracts now live in `hermes_client/compatibility.py`, shared by the
+provider, lifecycle service and public capability projection. Keep both old and
+new gateway contracts during rollout. Never accept a moving branch or semver
+range as an operator trust anchor.
+
+The 0.21.2 contract preserves the dashboard RPC/REST methods below. It adds
+atomic paused cron creation (`paused: true`); 0.20.6 retains the staged-future
+fallback. Named weekdays in the existing five-field UI schedules are accepted.
+REST session deletion always supplies the selected profile. Cron HTTP 424 is a
+partial write, so Control marks delivery unknown instead of allowing a blind
+repeat. Only public final assistant text is recovered from `codex_message_items`;
+raw Responses/reasoning sidecars are removed before history reaches the browser.
+
+The new replay byte limits preserve `truncated` semantics and our history
+recovery. `/api/memory` still does not select profile state in 0.21.2 and remains
+disabled. New session-control/plugin UI is not part of this compatibility change.
+
+Native 0.21.2 validation used two separate temporary Hermes homes with a local
+deterministic LLM transport. It preserved session history, SOUL and paused cron
+through export/import and verified deletion after 70 seconds. Supported transfer
+pairs are `4209d371… → 4209d371…` and `939e45c9… → 939e45c9…` only. Mixed-version
+transfers remain disabled because Hermes' state schema advances from 26 to 30.
 
 Primary references: [programmatic integration](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/programmatic-integration.md),
 [WebSocket transport](https://github.com/NousResearch/hermes-agent/blob/main/tui_gateway/ws.py),
@@ -83,14 +107,14 @@ Important response contracts:
   `9978706e9303dbf990d90e744b131361449d73b9` and
   `4209d371aa1bb8840ce8447555bdd863a1a96c38`. Cross-gateway transfer is
   narrower and currently accepts only the corrected `4209d371… → 4209d371…`
-  pair.
+  pair for 0.20.6; 0.21.2 also permits the exact `939e45c9… → 939e45c9…` pair.
 - `profiles.transfer` composes native export, bounded file download/upload and
   native import. The archive is streamed through Control, capped at 100 MiB
   and cleaned from both managed file roots. Control verifies profile presence,
   session inventory/history structure, SOUL and paused cron inventory before
   source deletion. Source and destination must both have a safe native delete
   contract because rollback can delete the imported copy. The current audited
-  real pair is `4209d371… → 4209d371…`; mock mode has a separate synthetic
+  real pairs are the two same-revision pairs listed above; mock mode has a separate synthetic
   contract. No retry follows an ambiguous mutation. On that upstream revision,
   importing a technical name that was previously deleted on the destination
   can remain hidden by Hermes' `.deleted-profiles` tombstone. Control treats

@@ -65,6 +65,27 @@ both temporary archives.
 
 No Control startup, deploy or health check may execute `hermes update`.
 
+For the separately authorized 0.21.2 rollout, pin tag `v2026.9.11` to commit
+`939e45c91d751fadd94dcd1b873ac3cb44846213`. Stage its own source directory and
+virtualenv, preserving the installed optional dependencies, then run `pip check`.
+The canonical Hermes path may point to the selected release; retain the former
+checkout and virtualenv together for rollback. Restart every Hermes process
+using the upgraded checkout, including `serve` and messaging gateways, only
+after a fresh idle check. Never leave a running process with replaced sources.
+
+Hermes state schema 26 becomes 30. Before activation, use SQLite's backup API
+to snapshot every profile's `state.db`, migrate copies with the staged Hermes
+runtime and compare session/message rows plus integrity. After draining and
+stopping Hermes, retain a private complete data backup separately from the old
+code. Include `shared-state.db` when present. Control's own backup script does
+not cover Hermes data. A rollback to 0.20.6 must restore its data backup unless
+backward schema compatibility has been independently demonstrated.
+
+Update the environment-managed `HERMES_CONTROL_HERMES_SOURCE_SHA` and each
+registered gateway's encrypted trust anchor only when its installed revision is
+verified. Refresh profile capabilities after Control reconnects. Keep mixed
+profile transfers disabled throughout the transition and keep memory disabled.
+
 ## GPT-Live transcript history
 
 Migration `0021_live_transcripts` adds encrypted, owner-scoped voice history.
