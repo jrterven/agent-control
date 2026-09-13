@@ -26,13 +26,12 @@ describe("voice provider settings", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("defaults to ElevenLabs and requires a saved OpenAI key before selecting live mode", async () => {
+  it("explains independent voice buttons without an exclusive provider selector", async () => {
     render(<VoiceSettings />);
-    const provider = screen.getByRole("combobox", { name: "Proveedor de voz" });
-    expect(provider).toHaveValue("elevenlabs");
-    await waitFor(() => expect(provider).toBeEnabled());
-    expect(within(provider).getByRole("option", { name: "GPT-Live-1 · OpenAI" })).toBeDisabled();
-    expect(screen.getByText("Guarda una API key de OpenAI para habilitar GPT-Live-1.")).toBeVisible();
+    await waitFor(() => expect(screen.getByLabelText("API key de OpenAI")).toBeEnabled());
+    expect(screen.queryByRole("combobox", { name: "Proveedor de voz" })).not.toBeInTheDocument();
+    expect(api.voiceSettings).not.toHaveBeenCalled();
+    expect(screen.getByText(/Solo aparecen los botones configurados/)).toBeVisible();
     expect(screen.getByText(/el micrófono y el contexto compartido se envían a OpenAI/)).toBeVisible();
   });
 
@@ -55,18 +54,9 @@ describe("voice provider settings", () => {
     expect(storageWrite).not.toHaveBeenCalled();
     await act(async () => resolveSave(configured));
 
-    const provider = screen.getByRole("combobox", { name: "Proveedor de voz" });
-    await waitFor(() => expect(provider).toBeEnabled());
-    await user.selectOptions(provider, "openai_live");
-    await waitFor(() => expect(setProvider).toHaveBeenCalledWith("openai_live", "csrf-memory"));
-    expect(provider).toHaveValue("openai_live");
-    expect(useAppStore.getState().features?.voice?.provider).toBe("openai_live");
+    expect(setProvider).not.toHaveBeenCalled();
+    expect(useAppStore.getState().features?.live?.available).toBe(true);
     expect(useAppStore.getState().features?.dictation.available).toBe(true);
-    expect(screen.getByText(/GPT-Live-1 puede responder y enviar solicitudes al agente seleccionado/)).toBeVisible();
-
-    await user.selectOptions(provider, "elevenlabs");
-    await waitFor(() => expect(setProvider).toHaveBeenCalledWith("elevenlabs", "csrf-memory"));
-    expect(useAppStore.getState().features?.voice?.provider).toBe("elevenlabs");
     expect(screen.getByLabelText("Reemplazar API key de OpenAI")).toHaveValue("");
   });
 
@@ -81,20 +71,15 @@ describe("voice provider settings", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo guardar la clave de OpenAI");
     expect(key).toHaveValue("");
     expect(document.body).not.toHaveTextContent("sk_rejected_private");
-    expect(within(screen.getByRole("combobox", { name: "Proveedor de voz" })).getByRole("option", { name: "GPT-Live-1 · OpenAI" })).toBeDisabled();
+    expect(useAppStore.getState().features?.live?.available).not.toBe(true);
   });
 
-  it("keeps the saved provider selected when changing it fails", async () => {
-    vi.mocked(api.openaiIntegration).mockResolvedValue(configured);
-    vi.spyOn(api, "saveVoiceProvider").mockRejectedValue(new Error("provider rejected"));
-    const user = userEvent.setup();
+  it("reports failed credential loading without requiring the legacy mode endpoint", async () => {
+    vi.mocked(api.openaiIntegration).mockRejectedValue(new Error("unavailable"));
     render(<VoiceSettings />);
-    const provider = screen.getByRole("combobox", { name: "Proveedor de voz" });
-    await waitFor(() => expect(provider).toBeEnabled());
-    await user.selectOptions(provider, "openai_live");
-    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo cambiar el modo de voz.");
-    expect(provider).toHaveValue("elevenlabs");
-    expect(useAppStore.getState().features?.voice?.provider).toBeUndefined();
+    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo cargar la configuración de voz.");
+    expect(screen.getByLabelText("API key de OpenAI")).toBeDisabled();
+    expect(api.voiceSettings).not.toHaveBeenCalled();
   });
 
   it("removes the key and immediately resets live features even when bootstrap refresh fails", async () => {
@@ -111,11 +96,9 @@ describe("voice provider settings", () => {
     const confirmation = screen.getByRole("group", { name: /Eliminar tu clave de OpenAI/ });
     await user.click(within(confirmation).getByRole("button", { name: "Eliminar" }));
     expect(remove).toHaveBeenCalledWith("csrf-memory");
-    expect(await screen.findByText("Clave de OpenAI eliminada. Se seleccionó el modo ElevenLabs.")).toBeVisible();
-    expect(screen.getByRole("combobox", { name: "Proveedor de voz" })).toHaveValue("elevenlabs");
+    expect(await screen.findByText("Clave de OpenAI eliminada. El botón de GPT Live ya no aparece.")).toBeVisible();
     expect(screen.getByLabelText("API key de OpenAI")).toHaveValue("");
     expect(useAppStore.getState().features?.live?.available).toBe(false);
-    expect(useAppStore.getState().features?.voice?.provider).toBe("elevenlabs");
     expect(useAppStore.getState().features?.dictation.available).toBe(true);
   });
 
@@ -124,7 +107,7 @@ describe("voice provider settings", () => {
     render(<VoiceSettings />);
     expect(api.openaiIntegration).not.toHaveBeenCalled();
     expect(api.voiceSettings).not.toHaveBeenCalled();
-    expect(screen.getByRole("combobox", { name: "Proveedor de voz" })).toBeDisabled();
+    expect(screen.queryByRole("combobox", { name: "Proveedor de voz" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("API key de OpenAI")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Guardar cifrada" })).toBeDisabled();
   });
@@ -134,7 +117,6 @@ describe("voice provider settings", () => {
     render(<VoiceSettings />);
     expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo cargar la voz guardada.");
     await waitFor(() => expect(screen.getByLabelText("API key de OpenAI")).toBeEnabled());
-    expect(screen.getByRole("combobox", { name: "Proveedor de voz" })).toBeEnabled();
     expect(screen.getByRole("combobox", { name: "Voz de GPT-Live-1" })).toBeDisabled();
   });
 });

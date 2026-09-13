@@ -233,12 +233,8 @@ async def create_live_session(
         settings.interactive_profiles,
         managed_by_control=profile.managed_by_control,
     )
-    if voice_provider(db, owner) != "openai_live":
-        raise IntegrationError(
-            status_code=409,
-            code="LIVE_VOICE_NOT_SELECTED",
-            message="Select GPT-Live-1 in voice settings before connecting",
-        )
+    # The legacy provider preference remains readable for older PWA shells.
+    # Each voice action now uses its own configured credential independently.
     try:
         request.app.state.live_session_limiter.consume(owner.id)
         api_key = _service(request).api_key(db, owner)

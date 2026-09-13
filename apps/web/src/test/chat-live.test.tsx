@@ -22,7 +22,7 @@ const transport = vi.hoisted(() => {
     dispose = vi.fn();
     play = vi.fn(async () => { this.options.onPlaybackBlocked(false); });
   }
-  return { Client, scribeStart: vi.fn(), scribeStop: vi.fn(), liveSupported: vi.fn(() => true) };
+  return { Client, scribeCommit: (_text: string) => {}, scribeStart: vi.fn(), scribeStop: vi.fn(), liveSupported: vi.fn(() => true) };
 });
 
 vi.mock("../lib/openaiLiveClient", async (importOriginal) => ({
@@ -31,12 +31,20 @@ vi.mock("../lib/openaiLiveClient", async (importOriginal) => ({
   liveSupported: transport.liveSupported,
 }));
 
-vi.mock("../hooks/useScribeDictation", () => ({
-  useScribeDictation: ({ enabled }: { enabled: boolean }) => ({
-    available: enabled, supported: true, phase: "idle", active: false, issue: null, partial: "",
-    start: transport.scribeStart, stop: transport.scribeStop,
-  }),
-}));
+vi.mock("../hooks/useScribeDictation", async () => {
+  const { useState, useEffect } = await import("react");
+  return { useScribeDictation: ({ enabled, sessionId, onCommitted }: { enabled: boolean; sessionId: string; onCommitted: (text: string) => void }) => {
+    const [phase, setPhase] = useState("idle");
+    useEffect(() => setPhase("idle"), [enabled, sessionId]);
+    transport.scribeCommit = onCommitted;
+    return {
+      available: enabled, supported: true, phase, active: ["listening", "paused"].includes(phase), issue: null, partial: "",
+      start: async () => { transport.scribeStart(); setPhase("listening"); },
+      stop: () => { transport.scribeStop(); setPhase("idle"); },
+      pause: () => setPhase("paused"), resume: () => setPhase("listening"),
+    };
+  } };
+});
 
 const features = {
   dictation: { available: true, provider: "elevenlabs", modelId: "scribe_v2_realtime" },
@@ -73,7 +81,7 @@ describe("live voice in the chat", () => {
     await db.drafts.clear();
   });
 
-  it("switches the composer voice icon by provider without an idle GPT-Live panel or automatic start", async () => {
+  it("shows both configured voice icons without an idle panel or automatic start", async () => {
     const user = userEvent.setup();
     const { container } = render(<ChatView />);
     const elevenLabsButton = screen.getByRole("button", { name: "Dictar por voz" });
@@ -88,8 +96,8 @@ describe("live voice in the chat", () => {
     expect(transport.scribeStart).not.toHaveBeenCalled();
 
     act(chooseLive);
-    expect(screen.queryByRole("button", { name: "Dictar por voz" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: "Escuchar respuestas en vivo" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dictar por voz" })).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "Escuchar respuestas en vivo" })).toBeVisible();
     expect(screen.queryByRole("region", { name: "GPT-Live-1" })).not.toBeInTheDocument();
     expect(screen.queryByText("GPT-Live-1", { exact: true })).not.toBeInTheDocument();
     expect(screen.queryByText(/El audio y el contexto se envían a OpenAI/)).not.toBeInTheDocument();
@@ -160,6 +168,63 @@ describe("live voice in the chat", () => {
     expect(usePwaUpdateStore.getState().blockers.dictation).toBe(false);
   });
 
+  it.each([[false, false], [true, false], [false, true], [true, true]])("shows only configured actions (ElevenLabs=%s, Live=%s)", (scribe, live) => {
+    useAppStore.setState({ features: { ...features, dictation: { ...features.dictation, available: scribe }, live: { ...features.live, available: live }, voice: { provider: "elevenlabs" } } });
+    render(<ChatView />);
+    expect(screen.queryByRole("button", { name: "Dictar por voz" }) !== null).toBe(scribe);
+    expect(screen.queryByRole("button", { name: "Conversar con GPT-Live-1" }) !== null).toBe(live);
+    expect(screen.getByRole("textbox", { name: "Mensaje a Newton…" })).not.toHaveAttribute("readonly");
+    expect(transport.scribeStart).not.toHaveBeenCalled();
+    expect(transport.Client.instances).toHaveLength(0);
+  });
+
+  it("keeps both actions visible but prevents overlapping capture, including while paused", async () => {
+    const user = userEvent.setup();
+    render(<ChatView />);
+    await user.click(screen.getByRole("button", { name: "Dictar por voz" }));
+    expect(screen.getByRole("button", { name: "Conversar con GPT-Live-1" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Aceptar y activar micrófono" }));
+    await user.click(screen.getByRole("button", { name: "Pausar dictado" }));
+    expect(screen.getByText("Dictado en pausa")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Conversar con GPT-Live-1" })).toBeDisabled();
+    expect(usePwaUpdateStore.getState().blockers.dictation).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Reanudar dictado" }));
+    act(() => transport.scribeCommit("Instrucción confirmada"));
+    await user.click(screen.getByRole("button", { name: "Detener dictado" }));
+    const input = screen.getByRole("textbox", { name: "Mensaje a Newton…" });
+    expect(input).toHaveValue("Instrucción confirmada");
+    expect(screen.getByRole("button", { name: "Conversar con GPT-Live-1" })).toBeDisabled();
+    await user.clear(input);
+    await user.click(screen.getByRole("button", { name: "Conversar con GPT-Live-1" }));
+    expect(screen.getByRole("button", { name: "Dictar por voz" })).toBeDisabled();
+    expect(screen.queryByRole("checkbox", { name: "Escuchar respuestas en vivo" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Pausar micrófono" }));
+    expect(screen.getByRole("button", { name: "Dictar por voz" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Terminar conversación de voz" }));
+    expect(screen.getByRole("button", { name: "Dictar por voz" })).toBeEnabled();
+    expect(transport.scribeStart).toHaveBeenCalledOnce();
+    expect(transport.Client.instances).toHaveLength(1);
+  });
+
+  it("cancels pending ElevenLabs playback when a Live conversation takes the microphone", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+    const stream = vi.spyOn(api, "streamSpeech").mockImplementation(() => new Promise(() => {}));
+    const user = userEvent.setup();
+    render(<ChatView />);
+    await user.click(screen.getAllByRole("button", { name: "Escuchar esta respuesta" })[0]);
+    const signal = stream.mock.calls[0][3]!;
+    expect(signal.aborted).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Conversar con GPT-Live-1" }));
+    expect(signal.aborted).toBe(true);
+    expect(screen.queryByRole("button", { name: "Escuchar esta respuesta" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Pausar micrófono" }));
+    expect(screen.queryByRole("button", { name: "Escuchar esta respuesta" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Terminar conversación de voz" }));
+    expect(screen.getAllByRole("button", { name: "Escuchar esta respuesta" }).length).toBeGreaterThan(0);
+    expect(stream).toHaveBeenCalledOnce();
+  });
+
   it("preserves a typed draft when switching providers and requires handling it before live start", async () => {
     const user = userEvent.setup();
     render(<ChatView />);
@@ -176,7 +241,7 @@ describe("live voice in the chat", () => {
     expect(screen.getByRole("button", { name: "Enviar mensaje" })).toBeEnabled();
   });
 
-  it.each(["session", "profile", "logout", "provider", "unmount"] as const)("releases a paused microphone transport on %s without restarting it", async (transition) => {
+  it.each(["session", "profile", "logout", "key", "unmount"] as const)("releases a paused microphone transport on %s without restarting it", async (transition) => {
     chooseLive();
     const user = userEvent.setup();
     const view = render(<ChatView />);
@@ -189,7 +254,7 @@ describe("live voice in the chat", () => {
       if (transition === "session") useAppStore.setState({ selectedSessionId: "session-architecture" });
       if (transition === "profile") useAppStore.setState({ selectedProfileId: "profile-jarvis", selectedSessionId: "session-evals" });
       if (transition === "logout") useAppStore.setState({ authState: "unauthenticated" });
-      if (transition === "provider") useAppStore.setState({ features: { ...features, voice: { provider: "elevenlabs" } } });
+      if (transition === "key") useAppStore.setState({ features: { ...features, live: { ...features.live, available: false } } });
       if (transition === "unmount") view.unmount();
     });
     await waitFor(() => expect(client.dispose).toHaveBeenCalledTimes(1));
@@ -234,9 +299,9 @@ describe("live voice in the chat", () => {
     if (reason === "streaming") useAppStore.setState({ streamingBySession: { "session-papers": "agent-response" } });
     const user = userEvent.setup();
     render(<ChatView />);
-    if (reason === "offline") {
+    if (reason === "offline" || reason === "unconfigured") {
       expect(screen.queryByRole("button", { name: "Conversar con GPT-Live-1" })).not.toBeInTheDocument();
-      expect(screen.getByText("Borrador offline")).toBeVisible();
+      if (reason === "offline") expect(screen.getByText("Borrador offline")).toBeVisible();
     } else {
       const start = screen.getByRole("button", { name: "Conversar con GPT-Live-1" });
       expect(start).toBeDisabled();
@@ -244,7 +309,7 @@ describe("live voice in the chat", () => {
     }
     expect(transport.Client.instances).toHaveLength(0);
     expect(transport.scribeStart).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Dictar por voz" })).not.toBeInTheDocument();
+    if (reason !== "offline") expect(screen.getByRole("button", { name: "Dictar por voz" })).toBeVisible();
   });
 
   it("blocks voice start while attachments are staged and enables it again after removal", async () => {

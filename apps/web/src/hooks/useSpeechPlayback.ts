@@ -368,6 +368,7 @@ export function useSpeechPlayback({
   useEffect(() => {
     if (!available || !liveEnabled) {
       stopLive();
+      if (!available) stopHistory();
       return;
     }
     if (streamingMessage) {

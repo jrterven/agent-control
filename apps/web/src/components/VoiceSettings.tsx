@@ -2,21 +2,18 @@ import { CheckCircle, Key, Microphone, Trash, WarningCircle } from "@phosphor-ic
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge, Button, Field, Panel } from "@hermes-control/ui";
-import { api, type OpenAIIntegrationView, type VoiceSettingsView } from "../lib/api";
+import { api, type OpenAIIntegrationView } from "../lib/api";
 import { useAppStore } from "../store/appStore";
-import type { VoiceProvider } from "../types";
 import { OpenAIVoicePicker } from "./OpenAIVoicePicker";
 
-type Action = "load" | "provider" | "save" | "delete" | "";
+type Action = "load" | "save" | "delete" | "";
 
 export function VoiceSettings() {
   const { t } = useTranslation();
   const csrfToken = useAppStore((state) => state.csrfToken);
   const offline = useAppStore((state) => state.authState === "offline");
   const demoMode = useAppStore((state) => state.demoMode);
-  const currentProvider = useAppStore((state) => state.features?.voice?.provider ?? "elevenlabs");
   const hydrateBootstrap = useAppStore((state) => state.hydrateBootstrap);
-  const [settings, setSettings] = useState<VoiceSettingsView | null>(null);
   const [integration, setIntegration] = useState<OpenAIIntegrationView | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [action, setAction] = useState<Action>("");
@@ -30,10 +27,9 @@ export function VoiceSettings() {
     let active = true;
     setAction("load");
     setError("");
-    void Promise.all([api.voiceSettings(), api.openaiIntegration()])
-      .then(([voice, openai]) => {
+    void api.openaiIntegration()
+      .then((openai) => {
         if (!active) return;
-        setSettings(voice);
         setIntegration(openai);
       })
       .catch(() => { if (active) setError(t("voiceSettings.loadError")); })
@@ -41,34 +37,16 @@ export function VoiceSettings() {
     return () => { active = false; };
   }, [demoMode, offline, t]);
 
-  const refreshFeatures = async (provider?: VoiceProvider, configured?: boolean) => {
+  const refreshFeatures = async (configured: boolean) => {
     // Apply confirmed mutations immediately so a failed bootstrap refresh cannot
     // leave the chat using a provider whose credential has just been removed.
     useAppStore.setState((state) => state.features ? {
       features: {
         ...state.features,
-        ...(provider ? { voice: { provider } } : {}),
-        ...(configured !== undefined ? { live: { available: configured, provider: "openai" as const, modelId: "gpt-live-1" as const } } : {}),
+        live: { available: configured, provider: "openai" as const, modelId: "gpt-live-1" as const },
       },
     } : {});
     await api.bootstrap().then(hydrateBootstrap).catch(() => undefined);
-  };
-
-  const changeProvider = async (provider: VoiceProvider) => {
-    if (blocked || !settings || provider === settings.provider || (provider === "openai_live" && !integration?.configured)) return;
-    setAction("provider");
-    setNotice("");
-    setError("");
-    try {
-      const saved = await api.saveVoiceProvider(provider, csrfToken);
-      setSettings(saved);
-      await refreshFeatures(saved.provider);
-      setNotice(t("voiceSettings.modeSaved"));
-    } catch {
-      setError(t("voiceSettings.modeError"));
-    } finally {
-      setAction("");
-    }
   };
 
   const saveKey = async () => {
@@ -81,7 +59,7 @@ export function VoiceSettings() {
     try {
       const saved = await api.saveOpenAIKey(submittedKey, csrfToken);
       setIntegration(saved);
-      await refreshFeatures(undefined, saved.configured);
+      await refreshFeatures(saved.configured);
       setNotice(t("voiceSettings.saved"));
     } catch {
       setError(t("voiceSettings.saveError"));
@@ -100,8 +78,7 @@ export function VoiceSettings() {
     try {
       await api.deleteOpenAIKey(csrfToken);
       setIntegration({ configured: false, provider: "openai", modelId: "gpt-live-1" });
-      setSettings({ provider: "elevenlabs" });
-      await refreshFeatures("elevenlabs", false);
+      await refreshFeatures(false);
       setNotice(t("voiceSettings.deleted"));
     } catch {
       setError(t("voiceSettings.deleteError"));
@@ -115,20 +92,6 @@ export function VoiceSettings() {
       <Microphone />
       <div><strong id="voice-settings-title">{t("voiceSettings.title")}</strong><p>{t("voiceSettings.description")}</p></div>
     </header>
-    <label className="integration-settings__model">
-      <span>{t("voiceSettings.mode")}</span>
-      <select
-        aria-label={t("voiceSettings.mode")}
-        value={settings?.provider ?? currentProvider}
-        disabled={blocked || !settings}
-        onChange={(event) => void changeProvider(event.target.value as VoiceProvider)}
-      >
-        <option value="elevenlabs">{t("voiceSettings.elevenLabs")}</option>
-        <option value="openai_live" disabled={!integration?.configured}>GPT-Live-1 · OpenAI</option>
-      </select>
-      <small>{t((settings?.provider ?? currentProvider) === "openai_live" ? "voiceSettings.liveHint" : "voiceSettings.elevenLabsHint")}</small>
-      {!integration?.configured ? <small>{t("voiceSettings.keyRequired")}</small> : null}
-    </label>
     <section className="integration-settings__voice" aria-labelledby="openai-integration-title">
       <div className="integration-settings__provider">
         <span><Key weight="duotone" /></span>

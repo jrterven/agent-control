@@ -14,6 +14,7 @@ const scribeMock = vi.hoisted(() => {
     }),
     close: vi.fn(),
     mute: vi.fn(),
+    unmute: vi.fn(),
     commit: vi.fn(),
   };
   const connect = vi.fn(() => connection);
@@ -26,6 +27,7 @@ const scribeMock = vi.hoisted(() => {
     connection.on.mockClear();
     connection.close.mockClear();
     connection.mute.mockClear();
+    connection.unmute.mockReset();
     connection.commit.mockClear();
   };
   return { connection, connect, emit, reset };
@@ -93,6 +95,62 @@ describe("Scribe realtime dictation", () => {
     act(() => scribeMock.emit("committed_transcript", { text: "mensaje definitivo" }));
     expect(committed).toHaveBeenCalledWith("mensaje definitivo");
     expect(result.current.partial).toBe("");
+  });
+
+  it("pauses and resumes the same microphone connection while preserving late confirmed text", async () => {
+    const committed = vi.fn();
+    const { result, unmount } = renderHook(() => useScribeDictation({ enabled: true, sessionId: "session-a", csrfToken: "csrf-memory", onCommitted: committed }));
+    await act(async () => { await result.current.start(); });
+    act(() => result.current.pause());
+    expect(scribeMock.connection.mute).not.toHaveBeenCalled();
+    act(() => scribeMock.emit("session_started"));
+    act(() => scribeMock.emit("partial_transcript", { text: "instrucción" }));
+    act(() => result.current.pause());
+    expect(scribeMock.connection.mute).toHaveBeenCalledOnce();
+    expect(scribeMock.connection.commit).toHaveBeenCalledOnce();
+    expect(result.current.phase).toBe("paused");
+    expect(result.current.active).toBe(true);
+    act(() => scribeMock.emit("partial_transcript", { text: "instrucción completa" }));
+    act(() => scribeMock.emit("committed_transcript", { text: "instrucción completa" }));
+    act(() => scribeMock.emit("session_started"));
+    expect(committed).toHaveBeenCalledExactlyOnceWith("instrucción completa");
+    expect(result.current.phase).toBe("paused");
+    act(() => result.current.resume());
+    expect(scribeMock.connection.unmute).toHaveBeenCalledOnce();
+    expect(result.current.phase).toBe("listening");
+    expect(api.createTranscriptionToken).toHaveBeenCalledOnce();
+    expect(scribeMock.connect).toHaveBeenCalledOnce();
+    act(() => result.current.pause());
+    unmount();
+    expect(scribeMock.connection.close).toHaveBeenCalled();
+  });
+
+  it("ends a paused dictation without letting late callbacks or resume reopen capture", async () => {
+    const committed = vi.fn();
+    const { result } = renderHook(() => useScribeDictation({ enabled: true, sessionId: "session-a", onCommitted: committed }));
+    await act(async () => { await result.current.start(); });
+    act(() => scribeMock.emit("session_started"));
+    act(() => result.current.pause());
+    act(() => result.current.stop());
+    act(() => result.current.resume());
+    act(() => scribeMock.emit("partial_transcript", { text: "última frase" }));
+    expect(result.current.phase).toBe("stopping");
+    expect(scribeMock.connection.unmute).not.toHaveBeenCalled();
+    act(() => scribeMock.emit("committed_transcript", { text: "última frase" }));
+    expect(committed).toHaveBeenCalledWith("última frase");
+    expect(result.current.phase).toBe("idle");
+    expect(scribeMock.connection.close).toHaveBeenCalled();
+  });
+
+  it("closes capture if a paused microphone cannot resume", async () => {
+    const { result } = renderHook(() => useScribeDictation({ enabled: true, sessionId: "session-a", onCommitted: vi.fn() }));
+    await act(async () => { await result.current.start(); });
+    act(() => scribeMock.emit("session_started"));
+    act(() => result.current.pause());
+    scribeMock.connection.unmute.mockImplementationOnce(() => { throw new Error("Microphone unavailable"); });
+    act(() => result.current.resume());
+    expect(result.current.phase).toBe("error");
+    expect(scribeMock.connection.close).toHaveBeenCalled();
   });
 
   it("commits before closing and reports an unconfirmed provisional segment on timeout", async () => {

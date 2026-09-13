@@ -13,9 +13,23 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
 
 ## Decision
 
-- Preserve ElevenLabs and add an explicit GPT-Live mode in voice settings. An
-  existing ElevenLabs credential never becomes an OpenAI credential. Selecting
-  a mode does not start microphone capture or spend provider quota.
+- Offer ElevenLabs dictation and GPT-Live conversation as independent configured
+  actions in the composer, with microphone and waveform icons respectively.
+  Hide each unconfigured action; without credentials the composer remains text
+  only. The legacy exclusive-provider preference/API stays compatible with old
+  PWA shells but no longer gates Live sessions or the current UI. A configured
+  action starts only on its own user gesture. Existing ElevenLabs credentials
+  never become OpenAI credentials.
+- Keep one microphone workflow active at a time, including connecting, paused
+  and finalizing states. Both buttons remain visible when configured; the other
+  is disabled until capture ends. Preserve drafts and attachments before Live
+  starts. Suspend ElevenLabs response playback during either microphone workflow
+  without changing the saved auto-read preference.
+- Let Scribe pause/resume its microphone using the pinned SDK's mute/unmute
+  controls. Paused speech is replaced by silence; the connection stays open.
+  Late confirmed text from before the pause may enter the draft, but late events
+  cannot resume capture or promote provisional text. Stop retains the bounded
+  commit handshake, and navigation, background and logout still release capture.
 - Persist the owner's chosen built-in Live voice separately from the provider
   and credential. Default existing accounts to `marin`, and send the validated
   choice as `session.audio.output.voice` when starting each new conversation.
@@ -55,8 +69,8 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
   only after a user gesture and browser microphone permission on HTTPS or
   localhost. Keep the OpenAI audio destination, account-dependent retention
   and usage notice in the voice settings where the user selects the provider.
-  The chat uses a single icon button: a microphone for ElevenLabs or a waveform
-  for GPT-Live, with an accessible provider/action label. Only active voice
+  The chat uses separate icon buttons for configured services, each with an
+  accessible provider/action label. Only active voice
   status, errors and blocked-playback recovery add controls to the composer.
   Set `store: false`; this does not promise
   zero provider retention.

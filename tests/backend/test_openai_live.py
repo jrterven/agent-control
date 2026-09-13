@@ -195,14 +195,16 @@ def test_live_session_seeds_only_owned_server_history(authenticated, app, monkey
     assert fake.requests[0]["history"] == [{"role": "user", "content": "Remember Thursday"}]
 
 
-def test_live_mode_and_rate_limit_are_enforced_before_upstream(authenticated, app):
+def test_live_requires_own_key_and_rate_limit_but_not_exclusive_mode(authenticated, app):
     client, csrf = authenticated
     payload = {"sdp": OFFER, "profileId": profile_id(app)}
     fake = FakeLiveClient()
     app.state.openai_live_client = fake
     response = client.post("/api/v1/realtime/live-session", headers=headers(csrf), json=payload)
     assert response.status_code == 409
-    configure(client, csrf)
+    assert fake.requests == []
+    assert client.put("/api/v1/integrations/openai/key", headers=headers(csrf), json={"apiKey": SECRET}).status_code == 200
+    assert client.get("/api/v1/integrations/voice").json()["provider"] == "elevenlabs"
     app.state.live_session_limiter = LiveSessionLimiter(limit=1, window_seconds=60)
     assert client.post("/api/v1/realtime/live-session", headers=headers(csrf), json=payload).status_code == 201
     limited = client.post("/api/v1/realtime/live-session", headers=headers(csrf), json=payload)

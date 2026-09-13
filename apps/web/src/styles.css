@@ -551,6 +551,7 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .composer.has-attachments .composer-add, .composer.has-attachments textarea, .composer.has-attachments .composer__actions { grid-row: 2; }
 .composer-attachment-error { width: min(790px, 100%); margin: 5px auto 0; color: var(--danger-text); font-size: 10px; }
 .dictation-button { color: var(--accent) !important; border-color: var(--border-accent) !important; background: var(--accent-soft) !important; }
+.dictation-button:disabled { opacity: .4; cursor: not-allowed; }
 .dictation-button.is-selected { color: var(--danger-contrast) !important; border-color: var(--danger) !important; background: var(--danger) !important; box-shadow: 0 0 0 3px var(--danger-ring), 0 5px 14px rgb(0 0 0 / .2); animation: dictation-pulse 1.4s ease-in-out infinite; }
 .dictation-state { grid-column: 1 / -1; grid-row: 2; min-width: 0; display: grid; align-items: center; gap: 3px; border-top: 1px solid var(--border); padding: 7px 5px 3px; color: var(--accent); font-size: 11px; }
 .composer.has-attachments .dictation-state { grid-row: 3; }

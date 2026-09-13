@@ -164,6 +164,19 @@ export function ElevenLabsIntegration() {
     hydrateBootstrap(bootstrap);
   };
 
+  const applyCredentialPresence = (configured: boolean) => {
+    // Reflect confirmed key changes even if the subsequent bootstrap fails.
+    // OpenAI availability and its independent voice preferences are preserved.
+    useAppStore.setState((state) => ({
+      features: {
+        ...state.features,
+        dictation: { available: configured, provider: "elevenlabs", modelId: "scribe_v2_realtime" },
+        ...(!configured && state.features?.speech ? { speech: { ...state.features.speech, available: false } } : {}),
+      },
+      ...(!configured ? { profiles: state.profiles.map((profile) => profile.speech ? { ...profile, speech: { ...profile.speech, available: false } } : profile) } : {}),
+    }));
+  };
+
   const save = async () => {
     const submittedKey = apiKey.trim();
     if (!submittedKey || blocked) return;
@@ -177,6 +190,7 @@ export function ElevenLabsIntegration() {
     try {
       const integration = await api.saveElevenLabsKey(submittedKey, csrfToken);
       setView(integration);
+      applyCredentialPresence(integration.configured);
       setNotice(t("integrations.saved"));
       setProfileReload((current) => current + 1);
       void refreshFeatures().catch(() => undefined);
@@ -334,6 +348,7 @@ export function ElevenLabsIntegration() {
     setConfirmDelete(false);
     try {
       await api.deleteElevenLabsKey(csrfToken);
+      applyCredentialPresence(false);
       setView({ configured: false, provider: "elevenlabs", modelId: "scribe_v2_realtime" });
       setNotice(t("integrations.deleted"));
       void refreshFeatures().catch(() => undefined);

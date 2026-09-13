@@ -121,8 +121,9 @@ key through the write-only integration setting; Control stores only its
 AES-GCM ciphertext in SQLite. Restrict the provider key to the required Scribe
 scope and an appropriate account quota before saving it.
 For GPT-Live, the owner's OpenAI project key must have access to `gpt-live-1`.
-Configure it through the separate write-only OpenAI setting and select the live
-mode explicitly. Voice billing is separate from the selected agent's usage;
+Configure it through the separate write-only OpenAI setting. Each configured
+service has its own chat button; no exclusive mode selection is required.
+Voice billing is separate from the selected agent's usage;
 automated release tests use fake provider transports and must not spend quota.
 The GPT-Live voice picker stores a separate owner preference (default `marin`)
 and applies it to the next conversation. Its explicit preview button creates a

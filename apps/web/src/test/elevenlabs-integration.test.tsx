@@ -83,6 +83,21 @@ describe("owner-scoped ElevenLabs integration", () => {
     vi.unstubAllGlobals();
   });
 
+  it("hides removed ElevenLabs actions while preserving Live when bootstrap is unavailable", async () => {
+    vi.mocked(api.elevenLabsIntegration).mockResolvedValue(configuredIntegration);
+    vi.spyOn(api, "elevenLabsVoices").mockResolvedValue({ items: [] });
+    vi.spyOn(api, "deleteElevenLabsKey").mockResolvedValue(undefined);
+    vi.mocked(api.bootstrap).mockRejectedValue(new Error("offline"));
+    useAppStore.setState({ features: { ...bootstrap.features, live: { available: true, provider: "openai", modelId: "gpt-live-1" } } });
+    const user = userEvent.setup();
+    render(<ElevenLabsIntegration />);
+    await user.click(await screen.findByRole("button", { name: "Eliminar clave" }));
+    const confirmation = screen.getByRole("group", { name: /Eliminar tu clave de ElevenLabs/ });
+    await user.click(within(confirmation).getByRole("button", { name: "Eliminar" }));
+    await waitFor(() => expect(useAppStore.getState().features?.dictation.available).toBe(false));
+    expect(useAppStore.getState().features?.live?.available).toBe(true);
+  });
+
   it("saves a write-only key, refreshes presence, tests it, and deletes it", async () => {
     const save = vi.spyOn(api, "saveElevenLabsKey").mockResolvedValue(configuredIntegration);
     const test = vi.spyOn(api, "testElevenLabsIntegration").mockResolvedValue({ ok: true, provider: "elevenlabs", modelId: "scribe_v2_realtime" });

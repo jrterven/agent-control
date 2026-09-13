@@ -605,7 +605,7 @@ export function insertTranscriptAtSelection(value: string, transcript: string, s
   return { value: `${before}${insertion}${after}`, caret: before.length + insertion.length };
 }
 
-function Composer({ agentName, sessionId, canInterrupt, offline = false, speechAvailable, liveSpeechEnabled, liveSpeechStatus, onLiveSpeechChange }: { agentName: string; sessionId: string; canInterrupt: boolean; offline?: boolean; speechAvailable: boolean; liveSpeechEnabled: boolean; liveSpeechStatus: LiveSpeechStatus; onLiveSpeechChange: (enabled: boolean) => void }) {
+function Composer({ agentName, sessionId, canInterrupt, offline = false, speechAvailable, liveSpeechEnabled, liveSpeechStatus, onLiveSpeechChange, onCaptureChange }: { agentName: string; sessionId: string; canInterrupt: boolean; offline?: boolean; speechAvailable: boolean; liveSpeechEnabled: boolean; liveSpeechStatus: LiveSpeechStatus; onLiveSpeechChange: (enabled: boolean) => void; onCaptureChange: (active: boolean) => void }) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
   const [dictationConsent, setDictationConsent] = useState(false);
@@ -617,10 +617,10 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
   const csrfToken = useAppStore((state) => state.csrfToken);
   const authState = useAppStore((state) => state.authState);
   const dictationConfigured = useAppStore((state) => state.features?.dictation.available === true);
-  const liveMode = useAppStore((state) => state.features?.voice?.provider === "openai_live");
   const liveConfigured = useAppStore((state) => state.features?.live?.available === true);
   const profileId = useAppStore((state) => state.selectedProfileId);
-  const live = useOpenAILive({ enabled: liveMode && liveConfigured && authState === "authenticated" && !offline, sessionId, profileId, csrfToken });
+  const live = useOpenAILive({ enabled: liveConfigured && authState === "authenticated" && !offline, sessionId, profileId, csrfToken });
+  const startingCaptureRef = useRef(false);
   const draft = useSessionDraft(sessionId);
   const setUpdateBlocker = usePwaUpdateStore((state) => state.setBlocker);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -654,7 +654,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
     });
   };
   const dictation = useScribeDictation({
-    enabled: !liveMode && dictationConfigured && authState === "authenticated" && !offline && !streamingMessageId,
+    enabled: dictationConfigured && authState === "authenticated" && !offline && !streamingMessageId,
     sessionId,
     csrfToken,
     onCommitted: insertCommitted,
@@ -673,13 +673,26 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
     };
   };
 
+  const startDictation = async () => {
+    if (startingCaptureRef.current || live.active || dictation.active || !dictation.available) return;
+    startingCaptureRef.current = true;
+    try { await dictation.start(); } finally { startingCaptureRef.current = false; }
+  };
+
+  const startLive = async () => {
+    if (startingCaptureRef.current || live.active || dictation.active || consentOpen || !live.available || value.trim() || attachments.length || streamingMessageId) return;
+    startingCaptureRef.current = true;
+    try { await live.start(); } finally { startingCaptureRef.current = false; }
+  };
+
   const beginDictation = () => {
+    if (live.active || startingCaptureRef.current) return;
     captureDictationSelection();
     if (!dictationConsent) {
       setConsentOpen(true);
       return;
     }
-    void dictation.start();
+    void startDictation();
   };
 
   const acceptDictation = () => {
@@ -687,7 +700,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
     setConsentOpen(false);
     // This remains inside the explicit consent button gesture. The hook asks
     // for a fresh token and microphone only now, never when opening the modal.
-    void dictation.start();
+    void startDictation();
   };
 
   useEffect(() => {
@@ -701,8 +714,9 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
 
   useEffect(() => {
     setUpdateBlocker("dictation", dictation.active || live.active);
-    return () => setUpdateBlocker("dictation", false);
-  }, [dictation.active, live.active, setUpdateBlocker]);
+    onCaptureChange(dictation.active || live.active);
+    return () => { setUpdateBlocker("dictation", false); onCaptureChange(false); };
+  }, [dictation.active, live.active, setUpdateBlocker, onCaptureChange]);
 
   useEffect(() => {
     setUpdateBlocker("draft", Boolean(value.trim()) || attachments.length > 0);
@@ -829,12 +843,15 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
             if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void onSubmit(); }
           }}
         />
-        {dictation.active || dictation.issue ? <div className={`dictation-state${dictation.issue ? " dictation-state--error" : ""}`} role={dictation.issue ? "alert" : "status"} aria-live={dictation.issue ? "assertive" : "polite"}>
-          <span>{dictation.issue ? t(`dictation.${dictation.issue}`) : dictation.phase === "connecting" ? t("dictation.connecting") : dictation.phase === "stopping" ? t("dictation.stopping") : t("dictation.listening")}</span>
+        {dictation.active || (dictation.issue && !live.active) ? <div className={`dictation-state live-voice-state${dictation.issue ? " dictation-state--error" : ""}`} data-live-phase={dictation.phase}>
+          <div className="live-voice-state__row">
+          <span className="live-voice-state__status" role={dictation.issue ? "alert" : "status"} aria-live={dictation.issue ? "assertive" : "polite"}>{dictation.issue ? t(`dictation.${dictation.issue}`) : dictation.phase === "connecting" ? t("dictation.connecting") : dictation.phase === "stopping" ? t("dictation.stopping") : dictation.phase === "paused" ? t("dictation.paused") : t("dictation.listening")}</span>
+          {!dictation.issue && ["listening", "transcribing", "paused"].includes(dictation.phase) ? <Button className="live-voice-state__pause" variant="ghost" size="sm" leadingIcon={dictation.phase === "paused" ? <Microphone /> : <Pause />} onClick={dictation.phase === "paused" ? dictation.resume : dictation.pause}>{t(dictation.phase === "paused" ? "dictation.resume" : "dictation.pause")}</Button> : null}
+          </div>
           {dictation.partial ? <em className="dictation-state__announcement">{t("dictation.provisional", { text: dictation.partial })}</em> : null}
           {!dictation.issue ? <small>{t("dictation.disclosure")}</small> : null}
         </div> : null}
-        {liveMode && (live.active || live.issue || live.waitingApproval || live.working) ? <div className={`dictation-state live-voice-state${live.issue ? " dictation-state--error" : ""}`} data-live-phase={live.phase}>
+        {!dictation.active && (live.active || live.issue || live.waitingApproval || live.working) ? <div className={`dictation-state live-voice-state${live.issue ? " dictation-state--error" : ""}`} data-live-phase={live.phase}>
           <div className="live-voice-state__row">
             <span className="live-voice-state__status" role={live.issue ? "alert" : "status"} aria-live={live.issue ? "assertive" : "polite"}>
               {!live.issue ? live.phase === "connecting" ? <CircleNotch className="spin" aria-hidden="true" /> : live.phase === "paused" ? <MicrophoneSlash weight="fill" aria-hidden="true" /> : live.phase === "listening" ? <span className="live-voice-state__dot" aria-hidden="true" /> : null : null}
@@ -847,19 +864,19 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
         </div> : null}
         <div className="composer__actions">
           <span />
-          {!offline && liveMode ? <IconButton
+          {!offline && liveConfigured ? <IconButton
             className="dictation-button"
             data-voice-provider="openai_live"
             data-live-phase={live.phase}
             selected={live.active}
             label={t(live.active ? "liveVoice.stop" : "liveVoice.start")}
             icon={live.active ? <Stop size={20} weight="fill" /> : <Waveform size={21} weight="bold" />}
-            disabled={live.phase === "stopping" || (!live.active && (!live.available || Boolean(streamingMessageId) || Boolean(value.trim()) || attachments.length > 0))}
-            onClick={() => { if (live.active) live.stop(); else void live.start(); }}
+            disabled={live.phase === "stopping" || (!live.active && (!live.available || dictation.active || consentOpen || Boolean(streamingMessageId) || Boolean(value.trim()) || attachments.length > 0))}
+            onClick={() => { if (live.active) live.stop(); else void startLive(); }}
           /> : null}
-          {!offline && liveMode && live.playbackBlocked ? <IconButton label={t("liveVoice.playAudio")} icon={<SpeakerHigh size={21} />} onClick={() => void live.play()} /> : null}
+          {!offline && dictationConfigured ? <IconButton className="dictation-button" data-voice-provider="elevenlabs" data-live-phase={dictation.phase} selected={dictation.active} label={t(dictation.active ? "dictation.stop" : "dictation.start")} icon={dictation.active ? <Stop size={20} weight="fill" /> : <Microphone size={21} weight="fill" />} disabled={dictation.phase === "stopping" || (!dictation.active && (!dictation.available || live.active || Boolean(streamingMessageId)))} onClick={() => { if (dictation.active) dictation.stop(); else beginDictation(); }} /> : null}
+          {!offline && live.playbackBlocked ? <IconButton label={t("liveVoice.playAudio")} icon={<SpeakerHigh size={21} />} onClick={() => void live.play()} /> : null}
           {offline ? <Badge tone="warning">{t("chat.offlineDraft")}</Badge> : streamingMessageId ? (canInterrupt ? <Button variant="danger" size="sm" leadingIcon={<Stop weight="fill" />} onClick={() => void stopPrompt()}>{t("chat.stop")}</Button> : <Badge tone="info">{t("chat.running")}</Badge>) : <>
-            {!liveMode && dictation.available ? <IconButton className="dictation-button" data-voice-provider="elevenlabs" selected={dictation.active} label={t(dictation.active ? "dictation.stop" : "dictation.start")} icon={dictation.active ? <Stop size={20} weight="fill" /> : <Microphone size={21} weight="fill" />} onClick={() => { if (dictation.active) dictation.stop(); else beginDictation(); }} /> : null}
             <IconButton className="send-button" label={t("chat.sendMessage")} disabled={(!value.trim() && !attachments.length) || dictation.active || live.active} icon={<PaperPlaneTilt size={22} weight="fill" />} onClick={() => void onSubmit()} />
           </>}
         </div>
@@ -918,11 +935,11 @@ export function ChatView() {
   )), [messages, sessionId]);
   const firstUserMessageId = useMemo(() => visibleMessages.find((message) => message.role === "user")?.id, [visibleMessages]);
   const globalSpeechAvailable = useAppStore((state) => state.features?.speech?.available === true);
-  const liveMode = useAppStore((state) => state.features?.voice?.provider === "openai_live");
   // Profiles from pre-voice cached bootstraps do not include ``speech``;
   // retain the global behavior until a fresh profile-aware bootstrap arrives.
   const speechAvailable = profile?.speech?.available ?? globalSpeechAvailable;
-  const canUseSpeech = !liveMode && speechAvailable && authState === "authenticated";
+  const [voiceCaptureActive, setVoiceCaptureActive] = useState(false);
+  const canUseSpeech = !voiceCaptureActive && speechAvailable && authState === "authenticated";
   const csrfToken = useAppStore((state) => state.csrfToken);
   const streamingMessage = visibleMessages.find((message) => message.id === streamingMessageId);
   const speech = useSpeechPlayback({
@@ -999,7 +1016,7 @@ export function ChatView() {
             : null}
         </div>
       </div>
-      {session && (canPrompt || offline) ? <Composer agentName={profile?.displayName ?? "Hermes"} sessionId={sessionId} canInterrupt={canInterrupt} offline={offline} speechAvailable={canUseSpeech} liveSpeechEnabled={speech.liveEnabled} liveSpeechStatus={speech.liveStatus} onLiveSpeechChange={speech.setLiveEnabled} /> : session ? <div className="composer-unavailable"><ShieldNotice /> {t(profile?.mutable ? "chat.promptUnavailable" : "chat.profileReadOnly")}</div> : profile && !profile.mutable ? <div className="composer-unavailable"><ShieldNotice /> {t("chat.chooseTestEnvironment")}</div> : null}
+      {session && (canPrompt || offline) ? <Composer agentName={profile?.displayName ?? "Hermes"} sessionId={sessionId} canInterrupt={canInterrupt} offline={offline} speechAvailable={canUseSpeech} liveSpeechEnabled={speech.liveEnabled} liveSpeechStatus={speech.liveStatus} onLiveSpeechChange={speech.setLiveEnabled} onCaptureChange={setVoiceCaptureActive} /> : session ? <div className="composer-unavailable"><ShieldNotice /> {t(profile?.mutable ? "chat.promptUnavailable" : "chat.profileReadOnly")}</div> : profile && !profile.mutable ? <div className="composer-unavailable"><ShieldNotice /> {t("chat.chooseTestEnvironment")}</div> : null}
     </section>
   );
 }

@@ -4,7 +4,7 @@ test("waits for readiness and pauses the microphone without a new call", async (
   let calls = 0;
   await page.route("**/api/v1/bootstrap", (route) => route.fulfill({ json: {
     ...bootstrapData,
-    features: { dictation: { available: false, provider: "elevenlabs", modelId: "scribe_v2_realtime" }, voice: { provider: "openai_live" }, live: { available: true, provider: "openai", modelId: "gpt-live-1" } },
+    features: { dictation: { available: true, provider: "elevenlabs", modelId: "scribe_v2_realtime" }, voice: { provider: "elevenlabs" }, live: { available: true, provider: "openai", modelId: "gpt-live-1" } },
   } }));
   await page.route("**/api/v1/realtime/live-session", (route) => {
     calls += 1;
@@ -33,7 +33,6 @@ test("waits for readiness and pauses the microphone without a new call", async (
     }
     Object.defineProperty(window, "RTCPeerConnection", { value: Peer });
     Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }) } });
-    Object.defineProperty(window, "AudioContext", { value: undefined });
     Object.assign(window, { liveTest: {
       ready: () => channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "session.started" }) })),
       enabled: () => track.enabled,
@@ -41,7 +40,10 @@ test("waits for readiness and pauses the microphone without a new call", async (
   });
   const micEnabled = () => page.evaluate(() => (window as unknown as { liveTest: { enabled(): boolean } }).liveTest.enabled());
   await page.goto("/chats");
+  await expect(page.getByRole("button", { name: "Dictar por voz" })).toBeEnabled();
+  await page.locator(".composer").screenshot({ path: testInfo.outputPath("both-voice-buttons.png") });
   await page.getByRole("button", { name: "Conversar con GPT-Live-1" }).click();
+  await expect(page.getByRole("button", { name: "Dictar por voz" })).toBeDisabled();
   await expect(page.getByText("Conectando… espera para hablar")).toBeVisible();
   await expect.poll(micEnabled).toBe(false);
   await expect.poll(() => calls).toBe(1);
@@ -51,6 +53,7 @@ test("waits for readiness and pauses the microphone without a new call", async (
   await page.locator(".composer").screenshot({ path: testInfo.outputPath("live-listening.png") });
   await page.getByRole("button", { name: "Pausar micrófono" }).click();
   await expect(page.getByText("Micrófono en pausa")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Dictar por voz" })).toBeDisabled();
   await expect.poll(micEnabled).toBe(false);
   await page.locator(".composer").screenshot({ path: testInfo.outputPath("live-paused.png") });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -61,5 +64,6 @@ test("waits for readiness and pauses the microphone without a new call", async (
   await page.getByRole("button", { name: "Pausar micrófono" }).click();
   await page.getByRole("button", { name: "Terminar conversación de voz" }).click();
   await expect(page.getByRole("button", { name: "Conversar con GPT-Live-1" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Dictar por voz" })).toBeEnabled();
   await expect(page.locator(".live-voice-state")).toHaveCount(0);
 });

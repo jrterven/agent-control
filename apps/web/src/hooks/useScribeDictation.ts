@@ -3,7 +3,7 @@ import type { RealtimeConnection } from "../lib/elevenlabsScribeClient";
 import { ApiError, api } from "../lib/api";
 
 export type DictationIssue = "permissionDenied" | "quota" | "network" | "auth" | "unavailable" | "tooLong" | "unconfirmed" | "generic";
-export type DictationPhase = "idle" | "connecting" | "listening" | "transcribing" | "stopping" | "error";
+export type DictationPhase = "idle" | "connecting" | "listening" | "transcribing" | "paused" | "stopping" | "error";
 
 const MAX_PARTIAL_CHARACTERS = 2_000;
 const MAX_COMMITTED_CHARACTERS = 8_000;
@@ -86,6 +86,8 @@ export function useScribeDictation({
   const generationRef = useRef(0);
   const startingRef = useRef(false);
   const stoppingRef = useRef(false);
+  const pausedRef = useRef(false);
+  const readyRef = useRef(false);
   const stopTimerRef = useRef<number | undefined>(undefined);
   const partialRef = useRef("");
   const onCommittedRef = useRef(onCommitted);
@@ -95,6 +97,8 @@ export function useScribeDictation({
     generationRef.current += 1;
     startingRef.current = false;
     stoppingRef.current = false;
+    pausedRef.current = false;
+    readyRef.current = false;
     window.clearTimeout(stopTimerRef.current);
     stopTimerRef.current = undefined;
     partialRef.current = "";
@@ -112,6 +116,8 @@ export function useScribeDictation({
     generationRef.current += 1;
     startingRef.current = false;
     stoppingRef.current = false;
+    pausedRef.current = false;
+    readyRef.current = false;
     window.clearTimeout(stopTimerRef.current);
     stopTimerRef.current = undefined;
     partialRef.current = "";
@@ -167,7 +173,10 @@ export function useScribeDictation({
       startingRef.current = false;
       const current = () => generationRef.current === generation && connectionRef.current === connection;
       connection.on(sdk.RealtimeEvents.SESSION_STARTED, () => {
-        if (current()) setPhase("listening");
+        if (current()) {
+          readyRef.current = true;
+          if (!stoppingRef.current) setPhase(pausedRef.current ? "paused" : "listening");
+        }
       });
       connection.on(sdk.RealtimeEvents.PARTIAL_TRANSCRIPT, (event) => {
         if (!current() || typeof event.text !== "string") return;
@@ -177,7 +186,7 @@ export function useScribeDictation({
         }
         partialRef.current = event.text;
         setPartial(event.text);
-        setPhase("transcribing");
+        if (!stoppingRef.current) setPhase(pausedRef.current ? "paused" : "transcribing");
       });
       connection.on(sdk.RealtimeEvents.COMMITTED_TRANSCRIPT, (event) => {
         if (!current() || typeof event.text !== "string") return;
@@ -191,7 +200,7 @@ export function useScribeDictation({
         if (stoppingRef.current) {
           release(true);
         } else {
-          setPhase("listening");
+          setPhase(pausedRef.current ? "paused" : "listening");
         }
       });
       const terminal = (nextIssue: DictationIssue) => {
@@ -226,6 +235,7 @@ export function useScribeDictation({
   }, [available, csrfToken, fail, languageCode, sessionId]);
 
   const stop = useCallback(() => {
+    if (stoppingRef.current) return;
     setIssue(null);
     const connection = connectionRef.current;
     if (!connection) {
@@ -242,6 +252,29 @@ export function useScribeDictation({
       else release(true);
     }, 1_500);
   }, [fail, release]);
+
+  const pause = useCallback(() => {
+    const connection = connectionRef.current;
+    if (!connection || !readyRef.current || stoppingRef.current || pausedRef.current) return;
+    try { connection.mute(); }
+    catch { fail("network"); return; }
+    pausedRef.current = true;
+    setPhase("paused");
+    // Confirm speech already sent before the pause. Late hypotheses stay
+    // provisional, and a late commit must not resume the microphone/UI.
+    if (partialRef.current.trim()) {
+      try { connection.commit(); } catch { /* VAD may still confirm this segment. */ }
+    }
+  }, [fail]);
+
+  const resume = useCallback(() => {
+    const connection = connectionRef.current;
+    if (!connection || !pausedRef.current || stoppingRef.current) return;
+    try { connection.unmute(); }
+    catch { fail("network"); return; }
+    pausedRef.current = false;
+    setPhase("listening");
+  }, [fail]);
 
   useEffect(() => {
     // Session/profile changes and auth/offline transitions cannot carry an
@@ -266,8 +299,10 @@ export function useScribeDictation({
     phase,
     partial,
     issue,
-    active: phase === "connecting" || phase === "listening" || phase === "transcribing" || phase === "stopping",
+    active: phase === "connecting" || phase === "listening" || phase === "transcribing" || phase === "paused" || phase === "stopping",
     start,
     stop,
+    pause,
+    resume,
   };
 }
