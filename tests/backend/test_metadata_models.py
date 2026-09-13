@@ -43,6 +43,7 @@ APPLICATION_TABLES = {
     "idempotency_operations",
     "profile_refs",
     "profile_voice_preferences",
+    "openai_profile_voice_preferences",
     "push_subscriptions",
     "realtime_tickets",
     "session_links",
@@ -110,6 +111,15 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     schema = inspect(engine)
     table_names = set(schema.get_table_names())
     assert table_names - {"alembic_version"} == APPLICATION_TABLES
+    live_profile_fks = {
+        tuple(foreign_key["constrained_columns"]): foreign_key
+        for foreign_key in schema.get_foreign_keys("openai_profile_voice_preferences")
+    }
+    assert live_profile_fks[("owner_id",)]["referred_table"] == "users"
+    assert live_profile_fks[("profile_id",)]["referred_table"] == "profile_refs"
+    assert all(fk["options"].get("ondelete") == "CASCADE" for fk in live_profile_fks.values())
+    assert schema.get_pk_constraint("openai_profile_voice_preferences")["constrained_columns"] == ["owner_id", "profile_id"]
+    assert any(item["name"] == "ck_openai_profile_voice_supported" for item in schema.get_check_constraints("openai_profile_voice_preferences"))
     voice_provider_checks = schema.get_check_constraints("user_voice_preferences")
     assert any(
         item["name"] == "ck_user_voice_preferences_provider"
@@ -269,7 +279,7 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0019_openai_voice"
+        ).scalar_one() == "0020_openai_profile_voices"
     engine.dispose()
 
     downgrade = subprocess.run(

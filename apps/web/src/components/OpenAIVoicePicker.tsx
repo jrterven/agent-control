@@ -12,12 +12,37 @@ import { getCurrentLanguage } from "../i18n";
 
 export function OpenAIVoicePicker({ configured }: { configured: boolean }) {
   const { t } = useTranslation();
+  const profiles = useAppStore((state) => state.profiles);
+  const gateways = useAppStore((state) => state.gateways);
+  const authState = useAppStore((state) => state.authState);
+  const [scope, setScope] = useState("");
+  const profileId = profiles.some((profile) => profile.id === scope) ? scope : "";
+
+  return <div>
+    {profiles.length > 0 ? <label className="integration-settings__model">
+      <span>{t("voiceSettings.scope")}</span>
+      <select aria-label={t("voiceSettings.scope")} value={profileId} onChange={(event) => setScope(event.target.value)}>
+        <option value="">{t("voiceSettings.generalVoice")}</option>
+        {profiles.map((profile) => {
+          const gateway = gateways.find((item) => item.id === profile.gatewayId);
+          return <option key={profile.id} value={profile.id}>{profile.displayName}{gateway ? ` · ${gateway.name}` : ""}</option>;
+        })}
+      </select>
+      <small>{t("voiceSettings.scopeHint")}</small>
+    </label> : null}
+    <OpenAIVoiceEditor key={`${authState}:${profileId}`} configured={configured} profileId={profileId || undefined} />
+  </div>;
+}
+
+function OpenAIVoiceEditor({ configured, profileId }: { configured: boolean; profileId?: string }) {
+  const { t } = useTranslation();
   const csrfToken = useAppStore((state) => state.csrfToken);
   const authState = useAppStore((state) => state.authState);
   const demoMode = useAppStore((state) => state.demoMode);
   const [online, setOnline] = useState(() => navigator.onLine);
   const [voiceId, setVoiceId] = useState<OpenAILiveVoiceId>("marin");
   const [savedVoiceId, setSavedVoiceId] = useState<OpenAILiveVoiceId | null>(null);
+  const [inherited, setInherited] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
@@ -72,27 +97,32 @@ export function OpenAIVoicePicker({ configured }: { configured: boolean }) {
     let active = true;
     setLoading(true);
     setError("");
-    void api.openaiVoice()
-      .then(({ voiceId }) => {
+    void (profileId ? api.openaiProfileVoice(profileId) : api.openaiVoice())
+      .then((saved) => {
         if (!active) return;
-        setVoiceId(voiceId);
-        setSavedVoiceId(voiceId);
+        setVoiceId(saved.voiceId);
+        setSavedVoiceId(saved.voiceId);
+        setInherited("inherited" in saved && saved.inherited === true);
       })
       .catch(() => { if (active) setError(t("voiceSettings.voiceLoadError")); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [blocked, t]);
+  }, [blocked, profileId, t]);
 
-  const saveVoice = async () => {
-    if (blocked || saving || loading || !savedVoiceId || voiceId === savedVoiceId) return;
+  const saveVoice = async (useGeneral = false) => {
+    if (blocked || saving || loading || !savedVoiceId) return;
+    if (useGeneral ? !profileId || inherited : voiceId === savedVoiceId && (!profileId || !inherited)) return;
     stopPreview();
     setSaving(true);
     setNotice("");
     setError("");
     try {
-      const saved = await api.saveOpenAIVoice(voiceId, csrfToken);
+      const saved = profileId
+        ? useGeneral ? await api.deleteOpenAIProfileVoice(profileId, csrfToken) : await api.saveOpenAIProfileVoice(profileId, voiceId, csrfToken)
+        : await api.saveOpenAIVoice(voiceId, csrfToken);
       setSavedVoiceId(saved.voiceId);
       setVoiceId(saved.voiceId);
+      setInherited("inherited" in saved && saved.inherited === true);
       setNotice(t("voiceSettings.voiceSaved"));
     } catch {
       setError(t("voiceSettings.voiceSaveError"));
@@ -103,7 +133,7 @@ export function OpenAIVoicePicker({ configured }: { configured: boolean }) {
 
   const playPreview = async () => {
     if (previewRef.current) { previewRef.current.stop(); return; }
-    if (blocked || !configured || !selectedVoice || !previewSupported || document.visibilityState === "hidden") return;
+    if (blocked || loading || !savedVoiceId || !configured || !selectedVoice || !previewSupported || document.visibilityState === "hidden") return;
     setPreviewError("");
     setPlaybackBlocked(false);
     const preview = new OpenAILiveVoicePreview({
@@ -154,17 +184,18 @@ export function OpenAIVoicePicker({ configured }: { configured: boolean }) {
         variant="secondary"
         leadingIcon={previewActive ? <Stop weight="fill" /> : <Play />}
         aria-label={t(previewActive ? "voiceSettings.stopPreview" : "voiceSettings.preview")}
-        disabled={previewPhase === "stopping" || (!previewActive && (blocked || saving || !configured || !selectedVoice || !previewSupported))}
+        disabled={previewPhase === "stopping" || (!previewActive && (blocked || loading || saving || !savedVoiceId || !configured || !selectedVoice || !previewSupported))}
         onClick={() => void playPreview()}
       >{t(previewPhase === "connecting" ? "voiceSettings.loadingPreview" : previewActive ? "voiceSettings.stopPreview" : "voiceSettings.preview")}</Button>
-      <Button variant="secondary" disabled={blocked || loading || saving || !savedVoiceId || voiceId === savedVoiceId} onClick={() => void saveVoice()}>
+      <Button variant="secondary" disabled={blocked || loading || saving || !savedVoiceId || (voiceId === savedVoiceId && (!profileId || !inherited))} onClick={() => void saveVoice()}>
         {t(saving ? "voiceSettings.savingVoice" : "voiceSettings.saveVoice")}
       </Button>
+      {profileId ? <Button variant="ghost" disabled={blocked || loading || saving || !savedVoiceId || inherited} onClick={() => void saveVoice(true)}>{t("voiceSettings.useGeneral")}</Button> : null}
     </div>
     {playbackBlocked ? <Button variant="secondary" leadingIcon={<Play />} onClick={() => void previewRef.current?.play()}>{t("voiceSettings.playPreview")}</Button> : null}
     <small className="form-hint">{t("voiceSettings.previewHint")}</small>
     {!configured ? <small className="form-hint">{t("voiceSettings.previewKeyRequired")}</small> : !previewSupported ? <small className="form-hint">{t("voiceSettings.previewUnavailable")}</small> : null}
-    {loading ? <small role="status">{t("integrations.loading")}</small> : savedVoice ? <small className="integration-settings__voice-current"><CheckCircle weight="fill" /> {t("voiceSettings.currentVoice", { voice: savedVoice.name })}</small> : null}
+    {loading ? <small role="status">{t("integrations.loading")}</small> : savedVoice ? <small className="integration-settings__voice-current"><CheckCircle weight="fill" /> {t(profileId ? inherited ? "voiceSettings.inheritedVoice" : "voiceSettings.agentVoice" : "voiceSettings.currentVoice", { voice: savedVoice.name })}</small> : null}
     {notice ? <p className="integration-settings__notice" role="status"><CheckCircle weight="fill" /> {notice}</p> : null}
     {error || previewError ? <p className="form-error" role="alert"><WarningCircle weight="fill" /> {error || previewError}</p> : null}
   </div>;

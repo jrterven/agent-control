@@ -280,6 +280,12 @@ the production gateway's own `default` profile remains Newton.
   ElevenLabs configuration and that selecting a mode does not open a session.
 - Verify that the saved Live voice survives provider/key changes, invalid voice
   identifiers are rejected, and ordinary Live creation forwards the preference.
+  Check per-agent Live overrides with two profiles and a second owner: an
+  override affects only that owner/profile pair, changing the general voice
+  updates inherited profiles, and resetting uses the latest general voice.
+  Migration `0020_openai_profile_voices` adds an empty override table; existing
+  voices remain inherited. Verify profile/owner deletion cascades, preserve
+  all existing preferences and credentials, and test migration on a backup.
   A preview must not save a voice, change the mode, acquire the microphone,
   include chat history, or delegate work. Check explicit playback, cancellation,
   automatic timeout, navigation/background cleanup and blocked-audio recovery.

@@ -69,6 +69,7 @@ export type OpenAIIntegrationView = {
 
 export type OpenAILiveVoiceId = typeof OPENAI_LIVE_VOICES[number]["id"];
 export type OpenAIVoiceView = { voiceId: OpenAILiveVoiceId };
+export type OpenAIProfileVoiceView = OpenAIVoiceView & { profileId: string; inherited: boolean };
 
 export type OpenAILiveSessionView = {
   session: { id: string };
@@ -494,6 +495,13 @@ export const api = {
   }),
   openaiIntegration: () => request<OpenAIIntegrationView>("/integrations/openai"),
   openaiVoice: () => request<OpenAIVoiceView>("/integrations/openai/voice"),
+  openaiProfileVoice: (profileId: string) => request<OpenAIProfileVoiceView>(`/integrations/openai/profiles/${encodeURIComponent(profileId)}/voice`),
+  saveOpenAIProfileVoice: (profileId: string, voiceId: OpenAILiveVoiceId, csrfToken?: string) => request<OpenAIProfileVoiceView>(`/integrations/openai/profiles/${encodeURIComponent(profileId)}/voice`, {
+    method: "PUT", headers: mutationHeaders(csrfToken), body: JSON.stringify({ voiceId }),
+  }),
+  deleteOpenAIProfileVoice: (profileId: string, csrfToken?: string) => request<OpenAIProfileVoiceView>(`/integrations/openai/profiles/${encodeURIComponent(profileId)}/voice`, {
+    method: "DELETE", headers: mutationHeaders(csrfToken),
+  }),
   saveOpenAIVoice: (voiceId: OpenAILiveVoiceId, csrfToken?: string) => request<OpenAIVoiceView>("/integrations/openai/voice", {
     method: "PUT",
     headers: mutationHeaders(csrfToken),

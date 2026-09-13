@@ -29,6 +29,11 @@ class OpenAIVoiceSettingsView(ApiModel):
     voice_id: OpenAILiveVoiceId
 
 
+class OpenAIProfileVoiceView(OpenAIVoiceSettingsView):
+    profile_id: str
+    inherited: bool
+
+
 class LiveSDPOffer(ApiModel):
     sdp: str = Field(min_length=1, max_length=65_536)
 

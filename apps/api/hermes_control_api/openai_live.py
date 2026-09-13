@@ -15,7 +15,7 @@ from .integrations import (
     _safe_retry_after,
 )
 from .live_context import LiveAgentContext
-from .models import User, UserIntegration, UserVoicePreference
+from .models import OpenAIProfileVoicePreference, User, UserIntegration, UserVoicePreference
 from .openai_voices import (
     OPENAI_LIVE_DEFAULT_VOICE_ID,
     OPENAI_LIVE_PREVIEW_PHRASES,
@@ -88,7 +88,11 @@ def set_voice_provider(db: Session, owner: User, provider: VoiceProvider) -> Non
     db.flush()
 
 
-def openai_voice_id(db: Session, owner: User) -> OpenAILiveVoiceId:
+def openai_voice_id(db: Session, owner: User, profile_id: str | None = None) -> OpenAILiveVoiceId:
+    if profile_id is not None:
+        override = db.get(OpenAIProfileVoicePreference, (owner.id, profile_id))
+        if override is not None and override.openai_voice_id in OPENAI_LIVE_VOICE_IDS:
+            return cast(OpenAILiveVoiceId, override.openai_voice_id)
     preference = db.get(UserVoicePreference, owner.id)
     if preference is not None and preference.openai_voice_id in OPENAI_LIVE_VOICE_IDS:
         return cast(OpenAILiveVoiceId, preference.openai_voice_id)
@@ -112,6 +116,24 @@ def set_openai_voice_id(
     if preference is None:
         db.add(UserVoicePreference(
             owner_id=owner.id, provider="elevenlabs", openai_voice_id=voice_id,
+        ))
+    else:
+        preference.openai_voice_id = voice_id
+    db.flush()
+
+
+def set_profile_openai_voice_id(
+    db: Session, owner: User, profile_id: str, voice_id: OpenAILiveVoiceId | None,
+) -> None:
+    if voice_id is not None:
+        _validate_voice_id(voice_id)
+    preference = db.get(OpenAIProfileVoicePreference, (owner.id, profile_id))
+    if voice_id is None:
+        if preference is not None:
+            db.delete(preference)
+    elif preference is None:
+        db.add(OpenAIProfileVoicePreference(
+            owner_id=owner.id, profile_id=profile_id, openai_voice_id=voice_id,
         ))
     else:
         preference.openai_voice_id = voice_id

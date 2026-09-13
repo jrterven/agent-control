@@ -3,8 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ElevenLabsIntegration } from "../components/ElevenLabsIntegration";
 import { OpenAIVoicePicker } from "../components/OpenAIVoicePicker";
+import { profiles, gateways } from "../data";
 import i18n from "../i18n";
-import { api } from "../lib/api";
+import { api, type OpenAIProfileVoiceView } from "../lib/api";
 import { OPENAI_LIVE_VOICES } from "../lib/openaiLiveVoices";
 import { useAppStore } from "../store/appStore";
 
@@ -225,5 +226,101 @@ describe("GPT Live voice selection and samples", () => {
     expect(FakeAudio.instances[0].pause).toHaveBeenCalledTimes(1);
     expect(FakeAudio.instances[0].src).toBe("");
     expect(previewMock.Preview.instances).toHaveLength(2);
+  });
+
+  it("saves a voice for one agent, previews it and restores the current general voice", async () => {
+    useAppStore.setState({ profiles, gateways });
+    vi.mocked(api.openaiVoice).mockResolvedValue({ voiceId: "stone" });
+    const overrides = new Map<string, OpenAIProfileVoiceView>();
+    vi.spyOn(api, "openaiProfileVoice").mockImplementation(async (profileId) => overrides.get(profileId) ?? { profileId, voiceId: "stone", inherited: true });
+    const save = vi.spyOn(api, "saveOpenAIProfileVoice").mockImplementation(async (profileId, voiceId) => {
+      const saved = { profileId, voiceId, inherited: false };
+      overrides.set(profileId, saved);
+      return saved;
+    });
+    const reset = vi.spyOn(api, "deleteOpenAIProfileVoice").mockImplementation(async (profileId) => {
+      overrides.delete(profileId);
+      return { profileId, voiceId: "stone", inherited: true };
+    });
+    const generalSave = vi.spyOn(api, "saveOpenAIVoice");
+    const user = userEvent.setup();
+    render(<OpenAIVoicePicker configured />);
+    const scope = screen.getByRole("combobox", { name: "Configurar voz de" });
+    await user.selectOptions(scope, "profile-jarvis");
+    expect(await screen.findByText("Usa la voz general: Stone")).toBeVisible();
+    // The current general voice can be pinned without changing its value.
+    expect(screen.getByRole("button", { name: "Guardar voz" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Usar voz general" })).toBeDisabled();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Voz de GPT-Live-1" }), "cedar");
+    await user.click(screen.getByRole("button", { name: "Probar voz" }));
+    expect(api.createLiveVoicePreview).toHaveBeenLastCalledWith({ sdp: "sample-offer", voiceId: "cedar", language: "es" }, "csrf-memory", expect.any(AbortSignal));
+    await user.click(screen.getByRole("button", { name: "Guardar voz" }));
+    expect(save).toHaveBeenCalledWith("profile-jarvis", "cedar", "csrf-memory");
+    expect(await screen.findByText("Voz de este agente: Cedar")).toBeVisible();
+    expect(previewMock.Preview.instances[0].dispose).toHaveBeenCalled();
+    await user.selectOptions(scope, "profile-newton");
+    expect(await screen.findByText("Usa la voz general: Stone")).toBeVisible();
+    await user.selectOptions(scope, "profile-jarvis");
+    expect(await screen.findByText("Voz de este agente: Cedar")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Usar voz general" }));
+    expect(reset).toHaveBeenCalledWith("profile-jarvis", "csrf-memory");
+    expect(await screen.findByText("Usa la voz general: Stone")).toBeVisible();
+    expect(generalSave).not.toHaveBeenCalled();
+  });
+
+  it("ignores old agent loads and saves after switching profiles", async () => {
+    useAppStore.setState({ profiles, gateways });
+    let finishLoad!: (value: OpenAIProfileVoiceView) => void;
+    vi.spyOn(api, "openaiProfileVoice").mockImplementationOnce(() => new Promise((resolve) => { finishLoad = resolve; }))
+      .mockImplementation(async (profileId) => ({ profileId, voiceId: profileId === "profile-jarvis" ? "willow" : "cedar", inherited: false }));
+    let finishSave!: (value: OpenAIProfileVoiceView) => void;
+    vi.spyOn(api, "saveOpenAIProfileVoice").mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+    const user = userEvent.setup();
+    render(<OpenAIVoicePicker configured={false} />);
+    const scope = screen.getByRole("combobox", { name: "Configurar voz de" });
+    await user.selectOptions(scope, "profile-newton");
+    expect(screen.getByRole("button", { name: "Guardar voz" })).toBeDisabled();
+    await user.selectOptions(scope, "profile-jarvis");
+    expect(await screen.findByText("Voz de este agente: Willow")).toBeVisible();
+    await act(async () => finishLoad({ profileId: "profile-newton", voiceId: "stone", inherited: false }));
+    expect(screen.getByRole("combobox", { name: "Voz de GPT-Live-1" })).toHaveValue("willow");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Voz de GPT-Live-1" }), "ash");
+    await user.click(screen.getByRole("button", { name: "Guardar voz" }));
+    await user.selectOptions(scope, "profile-newton");
+    expect(await screen.findByText("Voz de este agente: Cedar")).toBeVisible();
+    await act(async () => finishSave({ profileId: "profile-jarvis", voiceId: "ash", inherited: false }));
+    expect(screen.getByRole("combobox", { name: "Voz de GPT-Live-1" })).toHaveValue("cedar");
+    expect(screen.queryByText("Voz guardada para la próxima conversación.")).not.toBeInTheDocument();
+  });
+
+  it("stops preview on agent change and does not preview or save after a failed profile load", async () => {
+    useAppStore.setState({ profiles, gateways });
+    vi.spyOn(api, "openaiProfileVoice").mockRejectedValue(new Error("unavailable"));
+    const user = userEvent.setup();
+    render(<OpenAIVoicePicker configured />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Probar voz" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Probar voz" }));
+    const preview = previewMock.Preview.instances[0];
+    await user.selectOptions(screen.getByRole("combobox", { name: "Configurar voz de" }), "profile-jarvis");
+    expect(preview.dispose).toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo cargar la voz guardada.");
+    expect(screen.getByRole("button", { name: "Probar voz" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Guardar voz" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Usar voz general" })).toBeDisabled();
+    expect(api.createLiveVoicePreview).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the saved agent override visible when reset fails", async () => {
+    useAppStore.setState({ profiles, gateways });
+    vi.spyOn(api, "openaiProfileVoice").mockImplementation(async (profileId) => ({ profileId, voiceId: "ash", inherited: false }));
+    vi.spyOn(api, "deleteOpenAIProfileVoice").mockRejectedValue(new Error("unavailable"));
+    const user = userEvent.setup();
+    render(<OpenAIVoicePicker configured={false} />);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Configurar voz de" }), "profile-newton");
+    expect(await screen.findByText("Voz de este agente: Ash")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Usar voz general" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo guardar la voz.");
+    expect(screen.getByText("Voz de este agente: Ash")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Usar voz general" })).toBeEnabled();
   });
 });

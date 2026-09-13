@@ -115,6 +115,23 @@ class UserVoicePreference(Base, Timestamped):
     )
 
 
+class OpenAIProfileVoicePreference(Base, Timestamped):
+    """Built-in Live voice override for one owner and stable profile identity."""
+
+    __tablename__ = "openai_profile_voice_preferences"
+    __table_args__ = (
+        CheckConstraint(OPENAI_LIVE_VOICE_CHECK, name="ck_openai_profile_voice_supported"),
+        Index("ix_openai_profile_voice_profile_id", "profile_id"),
+    )
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True,
+    )
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("profile_refs.id", ondelete="CASCADE"), primary_key=True,
+    )
+    openai_voice_id: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)

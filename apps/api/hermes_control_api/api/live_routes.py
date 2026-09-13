@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, Response
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Path, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -11,16 +13,18 @@ from ..integration_schemas import (
     LiveVoicePreviewRequest,
     OpenAIIntegrationView,
     OpenAIKeyMutation,
+    OpenAIProfileVoiceView,
     OpenAIVoiceSettingsView,
     VoiceSettingsView,
 )
 from ..integrations import IntegrationError
 from ..live_context import live_agent_context
-from ..models import AuthSession, Gateway, ProfileRef, SessionLink, User
+from ..models import AuthSession, Gateway, OpenAIProfileVoicePreference, ProfileRef, SessionLink, User
 from ..openai_live import (
     OpenAIIntegrationService,
     openai_voice_id,
     set_openai_voice_id,
+    set_profile_openai_voice_id,
     set_voice_provider,
     voice_provider,
 )
@@ -116,6 +120,59 @@ def update_openai_voice_settings(
     return OpenAIVoiceSettingsView(voice_id=openai_voice_id(db, auth.user))
 
 
+def _profile_voice_view(db: Session, owner: User, profile_id: str) -> OpenAIProfileVoiceView:
+    if db.get(ProfileRef, profile_id) is None:
+        raise NotFoundError("The selected agent is unavailable")
+    return OpenAIProfileVoiceView(
+        profile_id=profile_id,
+        voice_id=openai_voice_id(db, owner, profile_id),
+        inherited=db.get(OpenAIProfileVoicePreference, (owner.id, profile_id)) is None,
+    )
+
+
+@router.get("/integrations/openai/profiles/{profile_id}/voice", response_model=OpenAIProfileVoiceView)
+def profile_voice_settings(
+    profile_id: Annotated[str, Path(min_length=1, max_length=36)],
+    owner: User = Depends(current_user), db: Session = Depends(get_db),
+) -> OpenAIProfileVoiceView:
+    return _profile_voice_view(db, owner, profile_id)
+
+
+@router.put("/integrations/openai/profiles/{profile_id}/voice", response_model=OpenAIProfileVoiceView)
+def update_profile_voice_settings(
+    profile_id: Annotated[str, Path(min_length=1, max_length=36)],
+    payload: OpenAIVoiceSettingsView,
+    request: Request,
+    auth: AuthSession = Depends(require_csrf),
+    _: str = Depends(require_idempotency),
+    db: Session = Depends(get_db),
+) -> OpenAIProfileVoiceView:
+    _profile_voice_view(db, auth.user, profile_id)
+    set_profile_openai_voice_id(db, auth.user, profile_id, payload.voice_id)
+    audit(db, actor=auth.user, action="integration.openai.profile-voice.set",
+          target_type="profile", target_id=profile_id,
+          request_id=getattr(request.state, "request_id", None))
+    db.commit()
+    return _profile_voice_view(db, auth.user, profile_id)
+
+
+@router.delete("/integrations/openai/profiles/{profile_id}/voice", response_model=OpenAIProfileVoiceView)
+def delete_profile_voice_settings(
+    profile_id: Annotated[str, Path(min_length=1, max_length=36)],
+    request: Request,
+    auth: AuthSession = Depends(require_csrf),
+    _: str = Depends(require_idempotency),
+    db: Session = Depends(get_db),
+) -> OpenAIProfileVoiceView:
+    _profile_voice_view(db, auth.user, profile_id)
+    set_profile_openai_voice_id(db, auth.user, profile_id, None)
+    audit(db, actor=auth.user, action="integration.openai.profile-voice.delete",
+          target_type="profile", target_id=profile_id,
+          request_id=getattr(request.state, "request_id", None))
+    db.commit()
+    return _profile_voice_view(db, auth.user, profile_id)
+
+
 @router.put("/integrations/openai/key", response_model=OpenAIIntegrationView)
 def set_openai_key(
     payload: OpenAIKeyMutation,
@@ -196,7 +253,7 @@ async def create_live_session(
             )
         result = await request.app.state.openai_live_client.create_session(
             api_key=api_key, sdp=payload.sdp, history=history,
-            voice_id=openai_voice_id(db, owner),
+            voice_id=openai_voice_id(db, owner, profile.id),
             agent_context=await live_agent_context(
                 db, request.app.state.services, owner, profile, conversation,
             ),

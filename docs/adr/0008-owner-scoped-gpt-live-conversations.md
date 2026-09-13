@@ -22,6 +22,18 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
   Switching providers or replacing/deleting a key retains the voice preference.
   A running Live session keeps its original voice; settings explain that the
   change applies to the next conversation.
+- Allow each owner to override the general Live voice for a stable Control
+  profile ID. Resolve the override server-side for the authorized selected
+  profile at session creation, falling back to the owner's current general
+  voice. An explicit choice equal to the general voice remains pinned when
+  the general voice changes; deleting the override restores inheritance.
+  These built-in voice preferences survive provider/key changes and require
+  no key or upstream request to save. Deleting the owner or profile cascades
+  its overrides. Same-named profiles on different gateways remain distinct.
+  The settings picker can target the general voice or any agent and retains
+  explicit previews; changing the target ends a preview and isolates pending
+  loads and saves from the newly selected agent. Previews use the requested
+  voice without changing either the general voice or an agent override.
 - Let users compare voices through explicit, brief GPT-Live preview sessions.
   Explain that previews use the owner's OpenAI quota before the play action.
   Feed generated silence instead of microphone audio, request one short phrase
