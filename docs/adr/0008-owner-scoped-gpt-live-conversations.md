@@ -93,6 +93,14 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
   prompt adopts that name and delegates questions about missing memory,
   personality, projects or capabilities to the same agent. The delegation
   wrapper preserves the backend agent's own identity and configured behavior.
+- For general capability questions, use a broad, outcome-oriented introduction
+  and a few varied, verified examples. The bounded catalog is a sample, not the
+  agent's capability ceiling. Ask the selected agent for a current overview and
+  confirmation of skill creation/update support before describing persistent
+  learning. Explain learning as reusable, improved procedures rather than model
+  retraining or automatic acquisition of account access. Keep this presentation
+  guidance in both the voice prompt and backend delegation context; do not
+  promise arbitrary task success or a saved skill before confirmed execution.
 - For administrators, add a bounded snapshot of enabled skills and configured,
   enabled toolsets through the existing capability-gated read service. Exclude
   explicitly unavailable toolsets. Preserve admin-only inventory access; other
