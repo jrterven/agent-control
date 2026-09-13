@@ -580,7 +580,7 @@ describe("mobile-first chat", () => {
     await waitFor(() => expect(screen.getByText("Reproduciendo")).toBeVisible());
   });
 
-  it("requires explicit first-use consent before requesting a token or microphone", async () => {
+  it("starts from the microphone gesture without an app disclosure modal", async () => {
     enableBrowserAudio();
     useAppStore.setState({
       features: {
@@ -595,13 +595,11 @@ describe("mobile-first chat", () => {
     const user = userEvent.setup();
     render(<ChatView />);
 
-    await user.click(screen.getByRole("button", { name: "Dictar por voz" }));
-    expect(screen.getByRole("dialog", { name: "Activar dictado por voz" })).toBeVisible();
-    expect(screen.getByText(/nunca se envía automáticamente al agente/i)).toBeVisible();
     expect(token).not.toHaveBeenCalled();
     expect(chatScribeMock.connect).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole("button", { name: "Aceptar y activar micrófono" }));
+    await user.click(screen.getByRole("button", { name: "Dictar por voz" }));
+    expect(screen.queryByRole("dialog", { name: "Activar dictado por voz" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/nunca se envía automáticamente al agente/i)).not.toBeInTheDocument();
     await waitFor(() => expect(token).toHaveBeenCalledWith({ sessionId: "session-papers" }, "csrf-memory-only"));
     await waitFor(() => expect(chatScribeMock.connect).toHaveBeenCalledTimes(1));
   });
@@ -629,7 +627,6 @@ describe("mobile-first chat", () => {
     await user.type(composer, "Antes después");
     composer.setSelectionRange(5, 5);
     await user.click(screen.getByRole("button", { name: "Dictar por voz" }));
-    await user.click(screen.getByRole("button", { name: "Aceptar y activar micrófono" }));
     await waitFor(() => expect(chatScribeMock.connect).toHaveBeenCalledTimes(1));
 
     act(() => chatScribeMock.emit("partial_transcript", { text: "texto provisional de varias palabras" }));

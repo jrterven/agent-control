@@ -86,7 +86,8 @@ updating its browser SDK or token contract:
   `wss://api.elevenlabs.io` while Permissions Policy remains
   `microphone=(self)`;
 - smoke-test real-device start/stop, background, navigation and logout cleanup,
-  prior destination/retention consent and the native-keyboard fallback, without
+  the Settings → Privacy destination/retention information, browser microphone
+  permission and the native-keyboard fallback, without
   promoting partial text or auto-submitting a transcript.
 
 Changing the STT vendor must be a new reviewed integration/ADR. It must not be

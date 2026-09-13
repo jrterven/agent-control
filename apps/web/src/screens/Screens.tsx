@@ -1226,6 +1226,15 @@ export function SettingsScreen() {
       </Panel>
       <VoiceSettings />
       <ElevenLabsIntegration />
+      <Panel id="privacy" className="settings-section privacy-settings" aria-labelledby="privacy-title">
+        <header><ShieldCheck aria-hidden="true" /><div><strong id="privacy-title">{t("dictation.privacyTitle")}</strong><p>{t("dictation.privacyDescription")}</p></div></header>
+        <h3>ElevenLabs · Scribe v2 Realtime</h3>
+        <ul>
+          <li>{t("dictation.privacyAudio")}</li>
+          <li>{t("dictation.privacyRetention")}</li>
+          <li>{t("dictation.privacyDraft")}</li>
+        </ul>
+      </Panel>
       <Panel className="settings-section"><header><Database /><div><strong>{t("settingsPage.offline")}</strong><p>{t("settingsPage.offlineDescription")}</p></div></header><Switch checked={cacheEnabled} onChange={changeCache} label={t("settingsPage.encryptedCache")} description={t("settingsPage.cacheLimits")} /><Button variant="ghost" onClick={() => void clearPrivateCache()}>{t("settingsPage.clearLocal")}</Button></Panel>
       <Panel className="settings-section"><header><UserCircle /><div><strong>{t("settingsPage.session")}</strong><p>{t("settingsPage.cookieAuth", { user: userName })}</p></div></header><Button variant="danger" disabled={loggingOut} onClick={() => void logout()}>{loggingOut ? t("settingsPage.loggingOut") : t("settingsPage.logout")}</Button></Panel>
     </div>

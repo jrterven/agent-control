@@ -50,11 +50,12 @@ exception to the normal same-origin browser boundary.
   the exact `wss://api.elevenlabs.io` source and Permissions Policy permits
   `microphone=(self)`; no broad `wss:`, `https:`, script or iframe relaxation is
   accepted.
-- Before capture, the UI discloses that audio goes directly to ElevenLabs and
-  that provider retention depends on the user's ElevenLabs account and terms.
-  The microphone action is enabled only after that notice is visible; the
-  user's subsequent mic action and browser permission are the explicit consent
-  for that capture. Control does not claim zero retention.
+- Settings → Privacy explains that audio goes directly to ElevenLabs, that
+  retention depends on the user's ElevenLabs account and terms, and that only
+  confirmed text enters the draft without automatic submission to the agent.
+  The microphone button starts dictation directly on the user's gesture, subject
+  to browser microphone permission. No app-level disclosure modal or repeated
+  inline notice gates capture. Control does not claim zero retention.
   Stopping, backgrounding, navigation, logout and error close microphone tracks,
   audio processing and the WebSocket.
 - The reviewed `@elevenlabs/client` version is pinned and receives the

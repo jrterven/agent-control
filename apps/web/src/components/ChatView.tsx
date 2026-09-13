@@ -9,7 +9,6 @@ import remarkGfm from "remark-gfm";
 import { Badge, Button, IconButton } from "@hermes-control/ui";
 import { createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
 import { api } from "../lib/api";
-import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
 import { useOpenAILive } from "../hooks/useOpenAILive";
@@ -608,8 +607,6 @@ export function insertTranscriptAtSelection(value: string, transcript: string, s
 function Composer({ agentName, sessionId, canInterrupt, offline = false, speechAvailable, liveSpeechEnabled, liveSpeechStatus, onLiveSpeechChange, onCaptureChange }: { agentName: string; sessionId: string; canInterrupt: boolean; offline?: boolean; speechAvailable: boolean; liveSpeechEnabled: boolean; liveSpeechStatus: LiveSpeechStatus; onLiveSpeechChange: (enabled: boolean) => void; onCaptureChange: (active: boolean) => void }) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
-  const [dictationConsent, setDictationConsent] = useState(false);
-  const [consentOpen, setConsentOpen] = useState(false);
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachmentIssue, setAttachmentIssue] = useState<"tooMany" | "tooLarge" | "tooMuchTotal" | "unsupported" | undefined>();
@@ -659,12 +656,6 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
     csrfToken,
     onCommitted: insertCommitted,
   });
-  const consentDialog = useOverlayDialog<HTMLDivElement>({
-    open: consentOpen,
-    onClose: () => setConsentOpen(false),
-    mediaQuery: "(min-width: 0px)",
-  });
-
   const captureDictationSelection = () => {
     const textarea = textareaRef.current;
     dictationSelectionRef.current = {
@@ -680,7 +671,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
   };
 
   const startLive = async () => {
-    if (startingCaptureRef.current || live.active || dictation.active || consentOpen || !live.available || value.trim() || attachments.length || streamingMessageId) return;
+    if (startingCaptureRef.current || live.active || dictation.active || !live.available || value.trim() || attachments.length || streamingMessageId) return;
     startingCaptureRef.current = true;
     try { await live.start(); } finally { startingCaptureRef.current = false; }
   };
@@ -688,29 +679,8 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
   const beginDictation = () => {
     if (live.active || startingCaptureRef.current) return;
     captureDictationSelection();
-    if (!dictationConsent) {
-      setConsentOpen(true);
-      return;
-    }
     void startDictation();
   };
-
-  const acceptDictation = () => {
-    setDictationConsent(true);
-    setConsentOpen(false);
-    // This remains inside the explicit consent button gesture. The hook asks
-    // for a fresh token and microphone only now, never when opening the modal.
-    void startDictation();
-  };
-
-  useEffect(() => {
-    if (authState !== "authenticated") {
-      setConsentOpen(false);
-      setDictationConsent(false);
-    } else if (!dictation.available) {
-      setConsentOpen(false);
-    }
-  }, [authState, dictation.available]);
 
   useEffect(() => {
     setUpdateBlocker("dictation", dictation.active || live.active);
@@ -849,7 +819,6 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           {!dictation.issue && ["listening", "transcribing", "paused"].includes(dictation.phase) ? <Button className="live-voice-state__pause" variant="ghost" size="sm" leadingIcon={dictation.phase === "paused" ? <Microphone /> : <Pause />} onClick={dictation.phase === "paused" ? dictation.resume : dictation.pause}>{t(dictation.phase === "paused" ? "dictation.resume" : "dictation.pause")}</Button> : null}
           </div>
           {dictation.partial ? <em className="dictation-state__announcement">{t("dictation.provisional", { text: dictation.partial })}</em> : null}
-          {!dictation.issue ? <small>{t("dictation.disclosure")}</small> : null}
         </div> : null}
         {!dictation.active && (live.active || live.issue || live.waitingApproval || live.working) ? <div className={`dictation-state live-voice-state${live.issue ? " dictation-state--error" : ""}`} data-live-phase={live.phase}>
           <div className="live-voice-state__row">
@@ -871,7 +840,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
             selected={live.active}
             label={t(live.active ? "liveVoice.stop" : "liveVoice.start")}
             icon={live.active ? <Stop size={20} weight="fill" /> : <Waveform size={21} weight="bold" />}
-            disabled={live.phase === "stopping" || (!live.active && (!live.available || dictation.active || consentOpen || Boolean(streamingMessageId) || Boolean(value.trim()) || attachments.length > 0))}
+            disabled={live.phase === "stopping" || (!live.active && (!live.available || dictation.active || Boolean(streamingMessageId) || Boolean(value.trim()) || attachments.length > 0))}
             onClick={() => { if (live.active) live.stop(); else void startLive(); }}
           /> : null}
           {!offline && dictationConfigured ? <IconButton className="dictation-button" data-voice-provider="elevenlabs" data-live-phase={dictation.phase} selected={dictation.active} label={t(dictation.active ? "dictation.stop" : "dictation.start")} icon={dictation.active ? <Stop size={20} weight="fill" /> : <Microphone size={21} weight="fill" />} disabled={dictation.phase === "stopping" || (!dictation.active && (!dictation.available || live.active || Boolean(streamingMessageId)))} onClick={() => { if (dictation.active) dictation.stop(); else beginDictation(); }} /> : null}
@@ -883,23 +852,6 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
       </div>
       {attachmentIssue ? <p className="composer-attachment-error" role="alert">{t(`chat.attachments.errors.${attachmentIssue}`)}</p> : null}
       <p className="composer-note">{t(offline ? "chat.offlineDraftNote" : "chat.disclaimer")}</p>
-      {consentOpen ? <div ref={consentDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="dictation-consent-title" aria-describedby="dictation-consent-description">
-        <button className="modal-scrim" aria-label={t("dictation.consentClose")} onClick={() => setConsentOpen(false)} />
-        <div className="hc-panel form-modal dictation-consent">
-          <span className="eyebrow">ElevenLabs · Scribe v2 Realtime</span>
-          <h2 id="dictation-consent-title">{t("dictation.consentTitle")}</h2>
-          <p id="dictation-consent-description">{t("dictation.consentDescription")}</p>
-          <ul className="dictation-consent__points">
-            <li><Microphone aria-hidden="true" /><span>{t("dictation.consentAudio")}</span></li>
-            <li><WarningCircle aria-hidden="true" /><span>{t("dictation.consentRetention")}</span></li>
-            <li><Check aria-hidden="true" /><span>{t("dictation.consentDraft")}</span></li>
-          </ul>
-          <div className="dictation-consent__actions">
-            <Button type="button" variant="ghost" onClick={() => setConsentOpen(false)}>{t("dictation.consentCancel")}</Button>
-            <Button type="button" variant="primary" leadingIcon={<Microphone />} onClick={acceptDictation}>{t("dictation.consentAccept")}</Button>
-          </div>
-        </div>
-      </div> : null}
     </div>
   );
 }

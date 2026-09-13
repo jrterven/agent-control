@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatView } from "../components/ChatView";
@@ -183,7 +183,6 @@ describe("live voice in the chat", () => {
     render(<ChatView />);
     await user.click(screen.getByRole("button", { name: "Dictar por voz" }));
     expect(screen.getByRole("button", { name: "Conversar con GPT-Live-1" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Aceptar y activar micrófono" }));
     await user.click(screen.getByRole("button", { name: "Pausar dictado" }));
     expect(screen.getByText("Dictado en pausa")).toBeVisible();
     expect(screen.getByRole("button", { name: "Conversar con GPT-Live-1" })).toBeDisabled();
@@ -339,13 +338,12 @@ describe("live voice in the chat", () => {
     expect(transport.Client.instances).toHaveLength(0);
   });
 
-  it("routes the ElevenLabs icon through its existing consent flow", async () => {
+  it("starts ElevenLabs directly from its icon without opening a disclosure modal", async () => {
     const user = userEvent.setup();
     render(<ChatView />);
-    await user.click(screen.getByRole("button", { name: "Dictar por voz" }));
     expect(transport.scribeStart).not.toHaveBeenCalled();
-    const dialog = screen.getByRole("dialog", { name: "Activar dictado por voz" });
-    await user.click(within(dialog).getByRole("button", { name: "Aceptar y activar micrófono" }));
+    await user.click(screen.getByRole("button", { name: "Dictar por voz" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(transport.scribeStart).toHaveBeenCalledTimes(1);
     expect(transport.Client.instances).toHaveLength(0);
   });
