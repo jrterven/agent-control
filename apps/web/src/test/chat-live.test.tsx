@@ -18,6 +18,7 @@ const transport = vi.hoisted(() => {
     constructor(readonly options: LiveOptions) { Client.instances.push(this); }
     start = vi.fn(async () => { this.options.onPhase("listening"); });
     stop = vi.fn(() => { this.options.onPhase("idle"); });
+    setPaused = vi.fn((paused: boolean) => { this.options.onPhase(paused ? "paused" : "listening"); });
     dispose = vi.fn();
     play = vi.fn(async () => { this.options.onPlaybackBlocked(false); });
   }
@@ -106,8 +107,38 @@ describe("live voice in the chat", () => {
     expect(stop).toBeEnabled();
     expect(stop).toHaveClass("is-selected");
     expect(stop.closest(".composer__actions")).toBe(composerActions);
-    expect(screen.getByText("Conversación en vivo").closest(".dictation-state")).not.toBeNull();
+    expect(screen.getByText("Escuchando · ya puedes hablar").closest(".dictation-state")).not.toBeNull();
     expect(transport.scribeStart).not.toHaveBeenCalled();
+  });
+
+  it("separates connecting, listening and microphone pause without opening another call", async () => {
+    chooseLive();
+    const user = userEvent.setup();
+    render(<ChatView />);
+    await user.click(screen.getByRole("button", { name: "Conversar con GPT-Live-1" }));
+    const client = transport.Client.instances[0];
+    act(() => client.options.onPhase("connecting"));
+    expect(screen.getByText("Conectando… espera para hablar")).toBeVisible();
+    expect(screen.queryByText("Escuchando · ya puedes hablar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pausar micrófono" })).not.toBeInTheDocument();
+    act(() => client.options.onPhase("listening"));
+    await user.click(screen.getByRole("button", { name: "Pausar micrófono" }));
+    expect(client.setPaused).toHaveBeenLastCalledWith(true);
+    expect(screen.getByText("Micrófono en pausa")).toBeVisible();
+    expect(screen.queryByText("Escuchando · ya puedes hablar")).not.toBeInTheDocument();
+    expect(usePwaUpdateStore.getState().blockers.dictation).toBe(true);
+    expect(screen.getByRole("button", { name: "Terminar conversación de voz" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Enviar mensaje" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Reanudar micrófono" }));
+    expect(client.setPaused).toHaveBeenLastCalledWith(false);
+    expect(screen.getByText("Escuchando · ya puedes hablar")).toBeVisible();
+    expect(transport.Client.instances).toHaveLength(1);
+    expect(client.start).toHaveBeenCalledOnce();
+    expect(client.stop).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Pausar micrófono" }));
+    await user.click(screen.getByRole("button", { name: "Terminar conversación de voz" }));
+    expect(client.stop).toHaveBeenCalledOnce();
+    expect(usePwaUpdateStore.getState().blockers.dictation).toBe(false);
   });
 
   it("keeps the voice stop control accessible while the agent is streaming", async () => {
@@ -145,12 +176,14 @@ describe("live voice in the chat", () => {
     expect(screen.getByRole("button", { name: "Enviar mensaje" })).toBeEnabled();
   });
 
-  it.each(["session", "profile", "logout", "provider", "unmount"] as const)("releases an active microphone transport on %s without restarting it", async (transition) => {
+  it.each(["session", "profile", "logout", "provider", "unmount"] as const)("releases a paused microphone transport on %s without restarting it", async (transition) => {
     chooseLive();
     const user = userEvent.setup();
     const view = render(<ChatView />);
     await user.click(screen.getByRole("button", { name: "Conversar con GPT-Live-1" }));
     const client = transport.Client.instances[0];
+    await user.click(screen.getByRole("button", { name: "Pausar micrófono" }));
+    expect(screen.getByText("Micrófono en pausa")).toBeVisible();
     expect(client.dispose).not.toHaveBeenCalled();
     act(() => {
       if (transition === "session") useAppStore.setState({ selectedSessionId: "session-architecture" });

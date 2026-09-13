@@ -1,6 +1,6 @@
 // GPT-Live uses its own event protocol, separate from the Realtime API.
 // https://developers.openai.com/api/docs/guides/voice-webrtc
-export type LivePhase = "idle" | "connecting" | "listening" | "stopping" | "error";
+export type LivePhase = "idle" | "connecting" | "listening" | "paused" | "stopping" | "error";
 export type LiveIssue = "permissionDenied" | "auth" | "quota" | "network" | "generic" | "unconfirmed" | "contextFull";
 export type LiveFragment = { role: "user" | "assistant"; text: string; start: number; end: number; order: number };
 export type LiveInput = { stream: MediaStream; release: () => void };
@@ -50,6 +50,10 @@ export class OpenAILiveClient {
   private audio = new Audio();
   private abort = new AbortController();
   private ready = false;
+  private connectedOnce = false;
+  private paused = false;
+  private inputPhase: LivePhase = "connecting";
+  private readyCue?: AudioContext;
   private started = false;
   private closing = false;
   private disposed = false;
@@ -90,11 +94,58 @@ export class OpenAILiveClient {
     catch { if (!this.disposed) this.options.onPlaybackBlocked(true); }
   }
 
+  private updateInput() {
+    if (this.disposed || this.closing) return;
+    const tracks = this.input?.stream.getAudioTracks() ?? [];
+    const connected = this.ready && this.peer?.connectionState === "connected"
+      && tracks.length > 0 && tracks.every((track) => track.readyState !== "ended" && !track.muted);
+    if (connected) this.connectedOnce = true;
+    // Disabled tracks send silence, so startup and pause never buffer speech
+    // that could be sent unexpectedly when the user resumes.
+    tracks.forEach((track) => { track.enabled = connected && !this.paused; });
+    const next = this.paused ? "paused" : connected ? "listening" : "connecting";
+    if (next === this.inputPhase) return;
+    this.inputPhase = next;
+    this.options.onPhase(next);
+    if (next === "listening") this.playReadyCue();
+  }
+
+  private playReadyCue() {
+    const context = this.readyCue;
+    if (!context || context.state !== "running") return;
+    try {
+      const tone = context.createOscillator();
+      const gain = context.createGain();
+      const now = context.currentTime;
+      tone.frequency.setValueAtTime(660, now);
+      tone.frequency.linearRampToValueAtTime(880, now + 0.12);
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.06, now + 0.015);
+      gain.gain.linearRampToValueAtTime(0, now + 0.16);
+      tone.connect(gain).connect(context.destination);
+      tone.onended = () => { tone.disconnect(); gain.disconnect(); };
+      tone.start(now);
+      tone.stop(now + 0.18);
+    } catch { /* Readiness remains visible if the browser blocks the cue. */ }
+  }
+
+  setPaused(paused: boolean) {
+    if (!this.connectedOnce || this.disposed || this.closing || paused === this.paused) return;
+    this.paused = paused;
+    this.updateInput();
+  }
+
   async start() {
     if (this.started || this.disposed) return;
     this.started = true;
     this.options.onPhase("connecting");
-    this.later(() => { if (!this.ready) this.fail("network"); }, this.options.startupTimeoutMs ?? 60_000);
+    // Unlock the optional cue on the gesture, before permission/HTTP awaits.
+    // Voice previews supply their own silent input and must never play a cue.
+    if (!this.options.acquireInput && typeof AudioContext === "function") {
+      try { this.readyCue = new AudioContext(); void this.readyCue.resume().catch(() => {}); }
+      catch { /* A visual readiness indicator is always available. */ }
+    }
+    this.later(() => { if (!this.connectedOnce) this.fail("network"); }, this.options.startupTimeoutMs ?? 60_000);
     try {
       // Acquire on the user gesture. A late permission grant is still cleaned up.
       const input = this.options.acquireInput
@@ -112,9 +163,13 @@ export class OpenAILiveClient {
       });
       peer.addEventListener("connectionstatechange", () => {
         if (["failed", "disconnected"].includes(peer.connectionState)) this.fail("network");
+        else this.updateInput();
       });
       stream.getAudioTracks().forEach((track) => {
+        track.enabled = false;
         track.addEventListener("ended", () => { if (!this.closing) this.fail("network"); });
+        track.addEventListener("mute", () => this.updateInput());
+        track.addEventListener("unmute", () => this.updateInput());
         peer.addTrack(track, stream);
       });
       const channel = this.channel = peer.createDataChannel("oai-events");
@@ -167,7 +222,7 @@ export class OpenAILiveClient {
       if (this.closing) this.send({ type: "session.close" });
       else {
         if (this.options.initialCommentary) this.send({ type: "session.commentary.append", event_id: crypto.randomUUID(), delegation_id: null, content: boundedLiveCommentary(this.options.initialCommentary) });
-        this.options.onPhase("listening");
+        this.updateInput();
       }
     } else if (event.type === "session.closed") {
       const expected = this.closing || event.reason === "close_requested";
@@ -227,6 +282,8 @@ export class OpenAILiveClient {
     this.input?.release();
     this.input = undefined;
     this.audio.pause();
+    void this.readyCue?.close().catch(() => {});
+    this.readyCue = undefined;
     this.options.onPhase("stopping");
     if (!this.ready) { this.dispose(); this.options.onPhase("idle"); return; }
     this.send({ type: "session.close" });
@@ -246,5 +303,7 @@ export class OpenAILiveClient {
     this.peer?.close();
     this.audio.pause();
     this.audio.srcObject = null;
+    void this.readyCue?.close().catch(() => {});
+    this.readyCue = undefined;
   }
 }

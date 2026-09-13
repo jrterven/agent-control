@@ -60,6 +60,15 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
   status, errors and blocked-playback recovery add controls to the composer.
   Set `store: false`; this does not promise
   zero provider retention.
+- Keep input tracks disabled until `session.started`, a connected peer and an
+  unmuted live microphone are all available. Show connecting separately from
+  listening, with a short local readiness cue when browser playback permits.
+  The active composer can pause/resume microphone tracks without reconnecting,
+  recording or buffering paused speech. Playback, existing delegated work and
+  duration billing continue while paused; this is not a provider-session pause
+  or a way to retract audio already sent. Keep pause visible independently of
+  agent work/approval status, retain the end-call control, and block PWA updates
+  until the call ends. Navigation/background/logout still close paused calls.
 - Use `delegation: {type: "client"}` so the existing selected Control agent
   handles work. GPT-Live handles the spoken exchange; Control retains agent
   routing, authorization, approvals and task state. The Live model does not

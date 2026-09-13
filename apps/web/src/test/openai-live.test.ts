@@ -22,8 +22,23 @@ class Peer extends EventTarget {
   constructor() { super(); Peer.latest = this; }
 }
 
+class CueContext {
+  static latest: CueContext;
+  state = "running";
+  currentTime = 0;
+  destination = {};
+  createOscillator = vi.fn(() => ({
+    frequency: { setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn() },
+    connect: (node: unknown) => node, disconnect: vi.fn(), start: vi.fn(), stop: vi.fn(), onended: null,
+  }));
+  createGain = vi.fn(() => ({ gain: { setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn() }, connect: vi.fn(), disconnect: vi.fn() }));
+  resume = vi.fn(async () => {});
+  close = vi.fn(async () => {});
+  constructor() { CueContext.latest = this; }
+}
+
 describe("GPT-Live WebRTC", () => {
-  let track: EventTarget & { enabled: boolean; stop: ReturnType<typeof vi.fn> };
+  let track: EventTarget & { enabled: boolean; muted: boolean; readyState: string; stop: ReturnType<typeof vi.fn> };
   let getUserMedia: ReturnType<typeof vi.fn>;
   let client: OpenAILiveClient;
   function setup() {
@@ -37,10 +52,11 @@ describe("GPT-Live WebRTC", () => {
   }
   beforeEach(() => {
     vi.useFakeTimers();
-    track = Object.assign(new EventTarget(), { enabled: true, stop: vi.fn() });
+    track = Object.assign(new EventTarget(), { enabled: true, muted: false, readyState: "live", stop: vi.fn() });
     getUserMedia = vi.fn(async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }));
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia } });
     vi.stubGlobal("RTCPeerConnection", Peer);
+    vi.stubGlobal("AudioContext", CueContext);
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   });
@@ -56,9 +72,87 @@ describe("GPT-Live WebRTC", () => {
     expect(peer.setRemoteDescription).toHaveBeenCalledWith({ type: "answer", sdp: "answer" });
     expect(peer.channel.send).not.toHaveBeenCalled();
     expect(options.onPhase).toHaveBeenLastCalledWith("connecting");
+    expect(track.enabled).toBe(false);
+    expect(CueContext.latest.createOscillator).not.toHaveBeenCalled();
     peer.channel.emit({ type: "session.started", session: { id: "live_opaque" } });
     expect(options.onPhase).toHaveBeenLastCalledWith("listening");
     expect(track.enabled).toBe(true);
+    expect(CueContext.latest.createOscillator).toHaveBeenCalledOnce();
+    peer.channel.emit({ type: "session.started" });
+    expect(CueContext.latest.createOscillator).toHaveBeenCalledOnce();
+  });
+
+  it("announces readiness only after both Live startup and a usable microphone connection", async () => {
+    const options = setup();
+    await client.start();
+    Peer.latest.connectionState = "connecting";
+    Peer.latest.channel.emit({ type: "session.started" });
+    expect(track.enabled).toBe(false);
+    expect(options.onPhase).toHaveBeenLastCalledWith("connecting");
+    expect(CueContext.latest.createOscillator).not.toHaveBeenCalled();
+    track.muted = true;
+    Peer.latest.connectionState = "connected";
+    Peer.latest.dispatchEvent(new Event("connectionstatechange"));
+    expect(track.enabled).toBe(false);
+    track.muted = false;
+    track.dispatchEvent(new Event("unmute"));
+    expect(track.enabled).toBe(true);
+    expect(options.onPhase).toHaveBeenLastCalledWith("listening");
+    expect(CueContext.latest.createOscillator).toHaveBeenCalledOnce();
+  });
+
+  it("silences microphone tracks while paused and resumes the same session with no renegotiation", async () => {
+    const options = setup();
+    await client.start();
+    client.setPaused(false);
+    expect(track.enabled).toBe(false);
+    Peer.latest.channel.emit({ type: "session.started" });
+    client.setPaused(true);
+    expect(track.enabled).toBe(false);
+    expect(track.stop).not.toHaveBeenCalled();
+    expect(options.onPhase).toHaveBeenLastCalledWith("paused");
+    expect(Peer.latest.close).not.toHaveBeenCalled();
+    expect(Peer.latest.channel.send).not.toHaveBeenCalled();
+    // Source recovery and duplicate startup must never unpause automatically.
+    track.dispatchEvent(new Event("unmute"));
+    Peer.latest.channel.emit({ type: "session.started" });
+    expect(track.enabled).toBe(false);
+    expect(CueContext.latest.createOscillator).toHaveBeenCalledOnce();
+    client.setPaused(false);
+    expect(track.enabled).toBe(true);
+    expect(options.onPhase).toHaveBeenLastCalledWith("listening");
+    expect(CueContext.latest.createOscillator).toHaveBeenCalledTimes(2);
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(options.negotiate).toHaveBeenCalledOnce();
+    client.setPaused(true);
+    client.stop();
+    client.setPaused(false);
+    expect(track.enabled).toBe(false);
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(CueContext.latest.close).toHaveBeenCalledOnce();
+    expect(options.onPhase).toHaveBeenLastCalledWith("stopping");
+  });
+
+  it("times out an unready media connection without ever signalling listening", async () => {
+    const options = setup();
+    await client.start();
+    Peer.latest.connectionState = "connecting";
+    Peer.latest.channel.emit({ type: "session.started" });
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(options.onIssue).toHaveBeenCalledWith("network");
+    expect(options.onPhase).not.toHaveBeenCalledWith("listening");
+    expect(CueContext.latest.createOscillator).not.toHaveBeenCalled();
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("keeps readiness usable when the browser cannot play the optional cue", async () => {
+    const options = setup();
+    await client.start();
+    CueContext.latest.state = "suspended";
+    Peer.latest.channel.emit({ type: "session.started" });
+    expect(options.onPhase).toHaveBeenLastCalledWith("listening");
+    expect(track.enabled).toBe(true);
+    expect(options.onIssue).not.toHaveBeenCalled();
   });
 
   it("includes late captions, delegates once and sends the correlated confirmed result while keeping the mic live", async () => {

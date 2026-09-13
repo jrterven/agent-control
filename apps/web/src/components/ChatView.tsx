@@ -1,4 +1,4 @@
-import { CaretDown, Check, Checks, File, Image, Lightning, Microphone, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle, Waveform, Wrench, X } from "@phosphor-icons/react";
+import { CaretDown, Check, Checks, CircleNotch, File, Image, Lightning, Microphone, MicrophoneSlash, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle, Waveform, Wrench, X } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { TFunction } from "i18next";
@@ -834,14 +834,23 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           {dictation.partial ? <em className="dictation-state__announcement">{t("dictation.provisional", { text: dictation.partial })}</em> : null}
           {!dictation.issue ? <small>{t("dictation.disclosure")}</small> : null}
         </div> : null}
-        {liveMode && (live.active || live.issue || live.waitingApproval || live.working) ? <div className={`dictation-state live-voice-state${live.issue ? " dictation-state--error" : ""}`} role={live.issue ? "alert" : "status"} aria-live={live.issue ? "assertive" : "polite"}>
-          <span>{live.issue ? t(`liveVoice.${live.issue}`) : live.waitingApproval ? t("liveVoice.waitingApproval") : live.working ? t("liveVoice.working", { agent: agentName }) : live.phase === "connecting" ? t("dictation.connecting") : live.phase === "stopping" ? t("liveVoice.stopping") : t("liveVoice.listening")}</span>
+        {liveMode && (live.active || live.issue || live.waitingApproval || live.working) ? <div className={`dictation-state live-voice-state${live.issue ? " dictation-state--error" : ""}`} data-live-phase={live.phase}>
+          <div className="live-voice-state__row">
+            <span className="live-voice-state__status" role={live.issue ? "alert" : "status"} aria-live={live.issue ? "assertive" : "polite"}>
+              {!live.issue ? live.phase === "connecting" ? <CircleNotch className="spin" aria-hidden="true" /> : live.phase === "paused" ? <MicrophoneSlash weight="fill" aria-hidden="true" /> : live.phase === "listening" ? <span className="live-voice-state__dot" aria-hidden="true" /> : null : null}
+              {live.issue ? t(`liveVoice.${live.issue}`) : live.phase === "connecting" ? t("liveVoice.connecting") : live.phase === "stopping" ? t("liveVoice.stopping") : live.phase === "paused" ? t("liveVoice.paused") : t("liveVoice.listening")}
+            </span>
+            {!live.issue && (live.phase === "listening" || live.phase === "paused") ? <Button className="live-voice-state__pause" variant="ghost" size="sm" leadingIcon={live.phase === "paused" ? <Microphone /> : <Pause />} onClick={live.phase === "paused" ? live.resume : live.pause}>{t(live.phase === "paused" ? "liveVoice.resume" : "liveVoice.pause")}</Button> : null}
+          </div>
+          {live.phase === "paused" && !live.issue ? <small>{t("liveVoice.pausedHint")}</small> : null}
+          {!live.issue && (live.waitingApproval || live.working) ? <small role="status">{t(live.waitingApproval ? "liveVoice.waitingApproval" : "liveVoice.working", { agent: agentName })}</small> : null}
         </div> : null}
         <div className="composer__actions">
           <span />
           {!offline && liveMode ? <IconButton
             className="dictation-button"
             data-voice-provider="openai_live"
+            data-live-phase={live.phase}
             selected={live.active}
             label={t(live.active ? "liveVoice.stop" : "liveVoice.start")}
             icon={live.active ? <Stop size={20} weight="fill" /> : <Waveform size={21} weight="bold" />}

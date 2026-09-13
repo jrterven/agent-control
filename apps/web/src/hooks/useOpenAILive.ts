@@ -131,11 +131,13 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken }: { en
   return {
     phase, issue, working, waitingApproval, playbackBlocked, supported,
     available: enabled && supported,
-    active: phase === "connecting" || phase === "listening" || phase === "stopping",
+    active: phase === "connecting" || phase === "listening" || phase === "paused" || phase === "stopping",
     inputCaption: voiceContext(fragments.filter((part) => part.role === "user")).replace(/^User: /, "").slice(-1800),
     outputCaption: voiceContext(fragments.filter((part) => part.role === "assistant")).replace(/^Voice assistant: /, "").slice(-1800),
     start,
     stop: () => clientRef.current?.stop(),
+    pause: () => clientRef.current?.setPaused(true),
+    resume: () => clientRef.current?.setPaused(false),
     play: () => clientRef.current?.play(),
   };
 }
