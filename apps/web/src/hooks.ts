@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { api, ApiError, connectRealtime } from "./lib/api";
+import { absoluteTimestamp } from "./lib/chatTimeline";
 import {
   clearPrivateCache,
   clearDraft,
@@ -710,20 +711,15 @@ type HistoryToolItem = {
   sessionId: string;
   role: "tool";
   createdAt: string;
+  timestamp?: string;
   tool: ToolRun;
   emailReferences: EmailReference[];
 };
 
 type MappedHistoryItem = ChatMessage | HistoryToolItem;
 
-function historyTime(item: Record<string, unknown>) {
-  const raw = item.createdAt ?? item.created_at ?? item.timestamp;
-  const date = typeof raw === "number"
-    ? new Date(raw > 10_000_000_000 ? raw : raw * 1_000)
-    : typeof raw === "string" ? new Date(raw) : null;
-  return date && !Number.isNaN(date.getTime())
-    ? date.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })
-    : "";
+function historyTimestamp(item: Record<string, unknown>) {
+  return absoluteTimestamp(item.createdAt ?? item.created_at ?? item.timestamp);
 }
 
 function boundedToolSummary(value: unknown) {
@@ -792,7 +788,8 @@ function attachmentsFromHistory(item: Record<string, unknown>) {
 
 function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index: number): MappedHistoryItem | null {
   const role = item.role;
-  const createdAt = historyTime(item);
+  const timestamp = historyTimestamp(item);
+  const createdAt = timestamp ? new Date(timestamp).toLocaleTimeString(getCurrentLanguage(), { hour: "2-digit", minute: "2-digit" }) : "";
   if (role === "tool") {
     const id = String(item.id ?? item.tool_call_id ?? item.toolCallId ?? `${sessionId}-history-tool-${index}`);
     return {
@@ -800,6 +797,7 @@ function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index:
       sessionId,
       role: "tool",
       createdAt,
+      timestamp,
       tool: toolFromHistory(item, id),
       emailReferences: emailReferencesFromValue(sessionId, item.controlEmailReferences),
     };
@@ -816,6 +814,7 @@ function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index:
     role,
     content,
     createdAt,
+    timestamp,
     delivery: role === "user" ? "sent" : undefined,
     ...(media.length ? { media } : {}),
     ...(attachments.length ? { attachments } : {}),
@@ -830,6 +829,7 @@ function historyMessages(sessionId: string, items: Record<string, unknown>[]): C
   const messages: ChatMessage[] = [];
   let pendingTools: ToolRun[] = [];
   let pendingEmailReferences: EmailReference[] = [];
+  let pendingTimestamp: string | undefined;
 
   const attachPendingEvidence = () => {
     if (!pendingTools.length && !pendingEmailReferences.length) return;
@@ -848,6 +848,7 @@ function historyMessages(sessionId: string, items: Record<string, unknown>[]): C
         role: "assistant",
         content: "",
         createdAt: "",
+        timestamp: pendingTimestamp,
         ...(pendingTools.length ? { tools: pendingTools } : {}),
         ...(pendingEmailReferences.length ? { emailReferences: pendingEmailReferences } : {}),
       });
@@ -865,10 +866,12 @@ function historyMessages(sessionId: string, items: Record<string, unknown>[]): C
     }
     pendingTools = [];
     pendingEmailReferences = [];
+    pendingTimestamp = undefined;
   };
 
   mapped.forEach((item) => {
     if (item.role === "tool") {
+      pendingTimestamp ??= item.timestamp;
       const existing = pendingTools.findIndex((tool) => tool.id === item.tool.id);
       if (existing >= 0) pendingTools[existing] = item.tool;
       else pendingTools.push(item.tool);
@@ -888,6 +891,7 @@ function historyMessages(sessionId: string, items: Record<string, unknown>[]): C
       });
       pendingTools = [];
       pendingEmailReferences = [];
+      pendingTimestamp = undefined;
       return;
     }
     messages.push(item);
@@ -936,6 +940,7 @@ function appendTerminalHistoryNotice(
     role: "assistant",
     content,
     createdAt: "",
+    timestamp: historyTimestamp(history.at(-1) ?? {}),
   });
 }
 
@@ -1049,6 +1054,7 @@ export async function rehydrateSession(sessionId: string, recoveryAttempted = fa
           role: "assistant",
           content: "",
           createdAt: "",
+          timestamp: absoluteTimestamp(activeOperation.acceptedAt) ?? new Date().toISOString(),
           streaming: true,
         });
       }
@@ -1556,12 +1562,12 @@ export async function submitPrompt(content: string, attachments: File[] = []) {
   const now = new Date();
   const userMessage: ChatMessage = {
     id: crypto.randomUUID(), sessionId: state.selectedSessionId, role: "user", content: content.trim(),
-    createdAt: now.toLocaleTimeString(getCurrentLanguage(), { hour: "2-digit", minute: "2-digit" }), delivery: "sending",
+    createdAt: now.toLocaleTimeString(getCurrentLanguage(), { hour: "2-digit", minute: "2-digit" }), timestamp: now.toISOString(), delivery: "sending",
     ...(attachments.length ? { attachments: attachments.map((file) => ({ kind: file.type.startsWith("image/") || /\.(?:gif|jpe?g|png|webp)$/i.test(file.name) ? "image" as const : "file" as const, name: file.name, mediaType: file.type || "application/octet-stream", size: file.size })) } : {}),
   };
   const assistantId = crypto.randomUUID();
   state.appendMessage(userMessage);
-  state.appendMessage({ id: assistantId, sessionId: state.selectedSessionId, role: "assistant", content: "", createdAt: userMessage.createdAt, streaming: true });
+  state.appendMessage({ id: assistantId, sessionId: state.selectedSessionId, role: "assistant", content: "", createdAt: userMessage.createdAt, timestamp: userMessage.timestamp, streaming: true });
   state.setStreamingMessageId(state.selectedSessionId, assistantId);
   void clearDraft(state.selectedSessionId).catch(() => undefined);
 

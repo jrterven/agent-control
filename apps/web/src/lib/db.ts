@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { BootstrapData, ChatMessage, EmailReference } from "../types";
+import { absoluteTimestamp } from "./chatTimeline";
 
 export type DraftRecord = { sessionId: string; content: string; updatedAt: number };
 export type PreferenceRecord = { key: string; value: string; updatedAt: number };
@@ -194,6 +195,7 @@ function sanitizeTranscript(messages: ChatMessage[]): ChatMessage[] {
       role: message.role,
       content: message.content,
       createdAt: message.createdAt,
+      timestamp: absoluteTimestamp(message.timestamp),
       delivery: message.delivery,
       tools: message.tools?.map((tool) => ({
         id: tool.id,

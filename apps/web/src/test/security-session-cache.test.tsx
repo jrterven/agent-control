@@ -129,6 +129,7 @@ describe("browser security state", () => {
       role: "assistant",
       content: "contenido extremadamente privado",
       createdAt: "10:30",
+      timestamp: "2026-09-13T16:30:00.000Z",
     }];
     await saveEncryptedTranscript("session-1", "workspace-1", messages);
     const record = await db.transcripts.get("session-1");

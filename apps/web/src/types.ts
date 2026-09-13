@@ -202,6 +202,8 @@ export type ChatMessage = {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt: string;
+  /** Absolute instant for ordering with voice calls; createdAt is a clock label. */
+  timestamp?: string;
   delivery?: "sending" | "sent" | "ambiguous" | "failed";
   tools?: ToolRun[];
   activity?: AgentActivityItem[];

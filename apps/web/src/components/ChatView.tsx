@@ -9,6 +9,7 @@ import remarkGfm from "remark-gfm";
 import { Badge, Button, IconButton } from "@hermes-control/ui";
 import { createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
 import { api } from "../lib/api";
+import { conversationTimeline } from "../lib/chatTimeline";
 import { useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
 import { useOpenAILive } from "../hooks/useOpenAILive";
@@ -905,12 +906,7 @@ export function ChatView() {
   const canPrompt = canMutate && Boolean(profile?.capabilities?.prompts);
   const liveConfigured = useAppStore((state) => state.features?.live?.available === true);
   const live = useOpenAILive({ enabled: liveConfigured && canPrompt && authState === "authenticated" && Boolean(session), sessionId, profileId, csrfToken });
-  const timeline = useMemo(() => [
-    // Hermes messages carry formatted clock labels, not sortable timestamps.
-    // Keep their canonical order and show voice calls together below them.
-    ...visibleMessages.map((message) => ({ kind: "message" as const, id: message.id, message })),
-    ...live.transcripts.calls.map((call) => ({ kind: "transcript" as const, id: call.id, call })),
-  ], [visibleMessages, live.transcripts.calls]);
+  const timeline = useMemo(() => conversationTimeline(visibleMessages, live.transcripts.calls), [visibleMessages, live.transcripts.calls]);
   const canInterrupt = canMutate && Boolean(profile?.capabilities?.interrupt);
   const canMutateInteractions = authState === "authenticated" && profile?.mutable === true;
   const canApprove = canMutateInteractions

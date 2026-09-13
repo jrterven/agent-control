@@ -104,3 +104,58 @@ test("waits for readiness and pauses the microphone without a new call", async (
   await expect(page.getByText("Gracias.", { exact: true })).toBeVisible();
   expect(calls).toBe(1);
 });
+
+test("shows a background voice result and two typed messages below the saved voice transcript", async ({ page }, testInfo) => {
+  const callStart = Date.now() - 120_000;
+  const items: { id: string; role: string; content: string; timestamp: number }[] = [
+    { id: "voice-request", role: "user", content: "Solicitud delegada por voz", timestamp: (callStart + 10_000) / 1000 },
+  ];
+  let working = true;
+  let submissions = 0;
+  let interruptions = 0;
+  await page.route("**/api/v1/sessions/*/live-transcripts**", (route) => route.fulfill({ json: { items: [{
+    id: "saved-voice", createdAt: new Date(callStart).toISOString(), fragments: [
+      { role: "user", text: "Revisa el encargo que te pedí. ".repeat(14), start: 0, end: 5000, order: 0 },
+      { role: "assistant", text: "Claro, lo reviso.", start: 5000, end: 6000, order: 1 },
+    ],
+  }], nextCursor: null } }));
+  await page.route("**/api/v1/sessions/session-e2e/messages", (route) => route.fulfill({ json: {
+    items, sessionStatus: working ? "streaming" : "ready", activeOperation: working ? { operationId: "voice-operation", status: "streaming", acceptedAt: new Date(callStart + 10_000).toISOString() } : null,
+  } }));
+  await page.route("**/api/v1/sessions/session-e2e/interrupt", (route) => { interruptions += 1; return route.fulfill({ status: 204 }); });
+  await page.route("**/api/v1/sessions/session-e2e/prompts", async (route) => {
+    submissions += 1;
+    items.push({ id: `text-${submissions}`, role: "user", content: route.request().postDataJSON().content, timestamp: Date.now() / 1000 });
+    items.push({ id: `answer-${submissions}`, role: "assistant", content: `Respuesta al mensaje ${submissions}`, timestamp: Date.now() / 1000 });
+    return route.fulfill({ json: { operationId: route.request().headers()["idempotency-key"], status: "completed" } });
+  });
+  await page.goto("/chats");
+  await expect(page.getByRole("button", { name: "Detener", exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  items.push({ id: "voice-result", role: "assistant", content: "Necesito tu confirmación para continuar.", timestamp: (callStart + 60_000) / 1000 });
+  working = false;
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.getByText("Necesito tu confirmación para continuar.")).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Detener", exact: true })).toHaveCount(0);
+  for (const text of ["¿Ya quedó?", "Hola"]) {
+    await page.getByRole("textbox", { name: "Mensaje a Newton…" }).fill(text);
+    await page.getByRole("button", { name: "Enviar mensaje" }).click();
+    await expect(page.getByText(text, { exact: true })).toBeInViewport();
+    await expect(page.getByText(`Respuesta al mensaje ${submissions}`)).toBeInViewport();
+  }
+  expect(submissions).toBe(2);
+  expect(interruptions).toBe(0);
+  await page.reload();
+  await expect(page.getByText("Respuesta al mensaje 2")).toBeInViewport();
+  const order = await page.locator(".message-scroll").innerText();
+  expect(order.indexOf("Claro, lo reviso.")).toBeLessThan(order.indexOf("Necesito tu confirmación"));
+  expect(order.indexOf("Necesito tu confirmación")).toBeLessThan(order.indexOf("¿Ya quedó?"));
+  expect(order.indexOf("¿Ya quedó?")).toBeLessThan(order.indexOf("Hola"));
+  await page.screenshot({ path: testInfo.outputPath("voice-text-background-recovered.png"), fullPage: true });
+});

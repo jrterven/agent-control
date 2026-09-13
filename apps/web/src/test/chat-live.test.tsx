@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatView } from "../components/ChatView";
+import { rehydrateSession } from "../hooks";
 import { automations, gateways, initialMessages, profiles, sessions, workspaces } from "../data";
 import i18n from "../i18n";
 import { api } from "../lib/api";
@@ -81,6 +82,31 @@ describe("live voice in the chat", () => {
     cleanup();
     vi.restoreAllMocks();
     await db.drafts.clear();
+  });
+
+  it("releases backgrounded voice without cancelling the agent and shows its recovered answer after the captions", async () => {
+    const user = userEvent.setup();
+    const interrupt = vi.spyOn(api, "interrupt");
+    render(<ChatView />);
+    await user.click(screen.getByRole("button", { name: "Conversar con GPT-Live-1" }));
+    const client = transport.Client.instances[0];
+    act(() => {
+      client.options.onTranscript!([{ role: "assistant", text: "Claro, lo reviso.", start: 0, end: 100, order: 0 }]);
+      useAppStore.getState().appendMessage({ id: "pending-voice-result", sessionId: "session-papers", role: "assistant", content: "", streaming: true, createdAt: "", timestamp: new Date().toISOString() });
+      useAppStore.getState().setStreamingMessageId("session-papers", "pending-voice-result");
+    });
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    fireEvent(document, new Event("visibilitychange"));
+    expect(client.dispose).toHaveBeenCalledOnce();
+    expect(interrupt).not.toHaveBeenCalled();
+    expect(useAppStore.getState().streamingBySession["session-papers"]).toBe("pending-voice-result");
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({ items: [{ id: "durable-result", role: "assistant", content: "Necesito tu confirmación para continuar.", timestamp: Date.now() / 1000 + 1 }], sessionStatus: "ready", activeOperation: null });
+    await act(() => rehydrateSession("session-papers"));
+    const caption = screen.getByText("Claro, lo reviso.");
+    const answer = screen.getByText("Necesito tu confirmación para continuar.");
+    expect(caption.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(useAppStore.getState().streamingBySession["session-papers"]).toBeUndefined();
+    expect(screen.getByRole("button", { name: "Enviar mensaje" })).toBeInTheDocument();
   });
 
   it("shows both speakers immediately, keeps captions after stop, and restores them from history", async () => {
