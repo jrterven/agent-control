@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { submitPrompt } from "../hooks";
 import { delegateLiveRequest } from "../hooks/useOpenAILive";
+import { liveDelegationConversation } from "../lib/liveDelegation";
 import { profiles, sessions } from "../data";
 import { useAppStore } from "../store/appStore";
 
@@ -24,6 +25,7 @@ describe("Live delegation to the selected agent", () => {
     await Promise.resolve();
     expect(submitPrompt).toHaveBeenCalledOnce();
     expect(vi.mocked(submitPrompt).mock.calls[0][0]).toContain("User: Busca mi archivo");
+    expect(liveDelegationConversation(vi.mocked(submitPrompt).mock.calls[0][0])).toEqual([{ role: "user", text: "Busca mi archivo" }]);
     expect(finished).not.toHaveBeenCalled();
     useAppStore.getState().updateMessage("voice-answer", { content: "Encontré informe.pdf", streaming: false });
     useAppStore.getState().setStreamingMessageId("session-papers", undefined);

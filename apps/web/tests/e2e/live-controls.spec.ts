@@ -1,6 +1,27 @@
 import { bootstrapData, expect, test } from "./fixtures";
 import type { LiveFragment } from "../../src/lib/openaiLiveClient";
 
+test("shows conversation without internal delegation instructions in saved voice history", async ({ page }, testInfo) => {
+  await page.route("**/api/v1/sessions/*/live-transcripts**", (route) => route.fulfill({ json: { items: [], nextCursor: null } }));
+  await page.route("**/api/v1/sessions/session-e2e/messages", (route) => route.fulfill({ json: {
+    items: [
+      { id: "voice-question", role: "user", content: "This is a live voice request in your current conversation. Keep your own identity, personality, configured instructions, memory, tools and permissions.\n\nLive conversation:\nUser: Hola, ¿quién eres?\nVoice assistant: Soy Newton, tu agente.\nUser: ¿Qué puedes hacer por mí?", timestamp: Date.now() / 1000 - 10 },
+      { id: "voice-answer", role: "assistant", content: "Puedo ayudarte con tareas digitales y aprender nuevos procedimientos.", timestamp: Date.now() / 1000 },
+    ], sessionStatus: "ready", activeOperation: null,
+  } }));
+  await page.goto("/chats");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await expect(page.getByText("Hola, ¿quién eres?", { exact: true })).toBeVisible();
+    await expect(page.getByText("Soy Newton, tu agente.", { exact: true })).toBeVisible();
+    await expect(page.getByText("¿Qué puedes hacer por mí?", { exact: true })).toBeVisible();
+    await expect(page.getByText("Puedo ayudarte con tareas digitales y aprender nuevos procedimientos.")).toBeVisible();
+    await expect(page.getByText(/This is a live voice request|Keep your own identity|Live conversation:|Voice assistant:/)).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    if (attempt === 0) await page.reload();
+  }
+  await page.screenshot({ path: testInfo.outputPath("voice-conversation-only.png"), fullPage: true });
+});
+
 test("waits for readiness and pauses the microphone without a new call", async ({ page }, testInfo) => {
   let calls = 0;
   const history = new Map<string, { id: string; createdAt: string; fragments: LiveFragment[] }>();

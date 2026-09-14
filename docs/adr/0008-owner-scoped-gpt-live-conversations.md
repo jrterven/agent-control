@@ -120,6 +120,12 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
   enough conversation context for corrections and short replies. Transcript
   fragments alone do not trigger agent work. Dispatch the delegated request
   through Control's normal authenticated conversation path.
+- Render recognized voice delegation messages as speaker-labelled dialogue,
+  omitting the internal instruction prefix and transport labels from the chat.
+  Apply this presentation to both optimistic messages and historical prompts,
+  including older instruction versions. Keep the original message content for
+  delivery, reconciliation and the agent's context; preserve delivery warnings
+  and do not rewrite stored history or ordinary user-authored messages.
 - Display input/output transcript deltas in the chat, labelled by speaker,
   including overlapping speech and late fragments. Preserve the original text,
   timestamps and arrival order; display groups use a revisable 1.2-second gap,

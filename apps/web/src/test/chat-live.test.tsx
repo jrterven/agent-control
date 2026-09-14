@@ -6,6 +6,7 @@ import { rehydrateSession } from "../hooks";
 import { automations, gateways, initialMessages, profiles, sessions, workspaces } from "../data";
 import i18n from "../i18n";
 import { api } from "../lib/api";
+import { liveConversationSeparator, liveDelegationPrefix } from "../lib/liveDelegation";
 import { db, loadDraft } from "../lib/db";
 import { usePwaUpdateStore } from "../lib/pwaUpdate";
 import { useAppStore } from "../store/appStore";
@@ -82,6 +83,29 @@ describe("live voice in the chat", () => {
     cleanup();
     vi.restoreAllMocks();
     await db.drafts.clear();
+  });
+
+  it("shows only dialogue from an internal voice prompt, including after durable history replaces it", async () => {
+    const content = `${liveDelegationPrefix}Keep your own identity, personality, configured instructions, memory, tools and permissions.${liveConversationSeparator}User: Hola, ¿quién eres?\nVoice assistant: Soy Newton, tu agente.\nUser: ¿Qué puedes hacer por mí?\nMe interesa automatizar tareas.`;
+    useAppStore.setState({ messages: [{ id: "optimistic-voice", sessionId: "session-papers", role: "user", content, createdAt: "12:20", delivery: "ambiguous" }] });
+    render(<ChatView />);
+    expect(screen.queryByText(/This is a live voice request|Keep your own identity|Live conversation:/)).not.toBeInTheDocument();
+    expect(screen.getByText("Hola, ¿quién eres?")).toBeVisible();
+    expect(screen.getByText("Soy Newton, tu agente.")).toBeVisible();
+    expect(screen.getByText(/¿Qué puedes hacer por mí\?/)).toHaveTextContent("Me interesa automatizar tareas.");
+    expect(screen.getByLabelText(i18n.t("chat.delivery.unconfirmed"))).toBeVisible();
+    expect(useAppStore.getState().messages[0].content).toBe(content);
+    act(() => useAppStore.getState().updateMessage("optimistic-voice", { delivery: "sent" }));
+
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({ items: [
+      { id: "durable-voice", role: "user", content, timestamp: Date.now() / 1000 },
+      { id: "durable-answer", role: "assistant", content: "Puedo ayudarte a automatizar ese proceso.", timestamp: Date.now() / 1000 + 1 },
+    ], sessionStatus: "ready", activeOperation: null });
+    await act(() => rehydrateSession("session-papers"));
+    expect(screen.getByText("Hola, ¿quién eres?")).toBeVisible();
+    expect(screen.getByText("Puedo ayudarte a automatizar ese proceso.")).toBeVisible();
+    expect(screen.queryByText(/This is a live voice request|Keep your own identity|Live conversation:/)).not.toBeInTheDocument();
+    expect(useAppStore.getState().messages.find((message) => message.id === "durable-voice")?.content).toBe(content);
   });
 
   it("releases backgrounded voice without cancelling the agent and shows its recovered answer after the captions", async () => {

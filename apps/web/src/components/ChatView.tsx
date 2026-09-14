@@ -10,6 +10,7 @@ import { Badge, Button, IconButton } from "@hermes-control/ui";
 import { createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
 import { api } from "../lib/api";
 import { conversationTimeline } from "../lib/chatTimeline";
+import { liveDelegationConversation } from "../lib/liveDelegation";
 import { useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
 import { useOpenAILive } from "../hooks/useOpenAILive";
@@ -18,7 +19,7 @@ import { usePwaUpdateStore } from "../lib/pwaUpdate";
 import type { AgentActivityItem, ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageAttachment, MessageMedia, Profile } from "../types";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { EmailReferences } from "./EmailReferences";
-import { LiveTranscript } from "./LiveTranscript";
+import { LiveTranscript, LiveTranscriptRows } from "./LiveTranscript";
 import { isCloudProfileOffline, useCloudConfigurationStore } from "../lib/cloud";
 import { CloudEmptyState } from "../screens/CloudScreens";
 
@@ -515,6 +516,13 @@ function AutomationInstructionMessage({ message }: { message: ChatMessage }) {
 function Message({ message, profile, agentName, speech, automationInstruction = false }: { message: ChatMessage; profile?: Profile; agentName: string; speech: MessageSpeech; automationInstruction?: boolean }) {
   const { t } = useTranslation();
   if (message.role === "user") {
+    const conversation = liveDelegationConversation(message.content);
+    if (conversation) return <article className="live-transcript" aria-label={t("liveVoice.transcript")}>
+      <header className="live-transcript__header"><Waveform aria-hidden="true" /><strong>{t("liveVoice.transcript")}</strong><time>{message.createdAt}</time><DeliveryIcon delivery={message.delivery} /></header>
+      {message.attachments?.length ? <MessageAttachments attachments={message.attachments} /> : null}
+      <LiveTranscriptRows rows={conversation} agentName={agentName} />
+      {message.delivery === "ambiguous" ? <p className="delivery-warning"><WarningCircle /> {t("chat.deliveryWarning")}</p> : null}
+    </article>;
     return (
       <article className="message message--user" aria-label={t(automationInstruction ? "chat.automationInstruction.title" : "chat.userMessage")}>
         {automationInstruction ? <AutomationInstructionMessage message={message} /> : <div className="user-bubble"><span className="message-time">{message.createdAt} <DeliveryIcon delivery={message.delivery} /></span>{message.attachments?.length ? <MessageAttachments attachments={message.attachments} /> : null}{message.content ? <p>{message.content}</p> : null}</div>}
