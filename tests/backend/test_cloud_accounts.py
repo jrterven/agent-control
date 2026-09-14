@@ -67,6 +67,7 @@ def test_cloud_owner_scope_all_resource_projections(cloud):
     bootstrap = client.get("/api/v1/bootstrap")
     assert bootstrap.status_code == 200, bootstrap.text
     body = bootstrap.json()
+    assert body["userId"] == alice[0]
     assert [row["id"] for row in body["gateways"]] == [alice[1]]
     assert bob[1] not in bootstrap.text and bob[2] not in bootstrap.text and bob[3] not in bootstrap.text
     assert len(client.get("/api/v1/gateways").json()) == 1

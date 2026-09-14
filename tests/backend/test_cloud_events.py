@@ -91,6 +91,120 @@ def test_remote_media_is_owner_scoped_and_never_cacheable(cloud, monkeypatch):
 from .test_cloud_accounts import cloud  # noqa: E402,F401
 
 
+@pytest.fixture
+def threaded_cloud_sink(tmp_path, monkeypatch):
+    """Exercise the PostgreSQL offload branch with independent file-DB sessions."""
+    from types import SimpleNamespace
+    from hermes_control_api import main
+    from hermes_control_api.config import Settings
+    from hermes_control_api.database import Base, build_engine, build_session_factory
+    from hermes_control_api.models import Gateway, ProfileRef, User
+    engine = build_engine(Settings(environment="test", database_url=f"sqlite:///{tmp_path / 'events.db'}"))
+    factory = build_session_factory(engine)
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr(main, "build_engine", lambda settings: SimpleNamespace(dialect=SimpleNamespace(name="postgresql")))
+    monkeypatch.setattr(main, "build_session_factory", lambda unused: factory)
+    app = main.create_app(Settings(environment="test", deployment_mode="cloud", public_base_url="https://control.test", database_url="sqlite://"))
+    owners = []
+    with factory() as db:
+        for name in ("alice", "bob"):
+            user = User(username=name, password_hash="disabled-test")
+            db.add(user)
+            db.flush()
+            gateway = Gateway(owner_id=user.id, name=name, rest_url=f"connector://{name}", ws_url=f"connector://{name}", transport_kind="connector")
+            db.add(gateway)
+            db.flush()
+            db.add(ProfileRef(gateway_id=gateway.id, profile_name="default", display_name=name))
+            owners.append((user.id, gateway.id))
+        db.commit()
+    yield app, factory, owners
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cloud_persistence_worker_preserves_order_isolation_and_loop_progress(threaded_cloud_sink, monkeypatch):
+    import asyncio
+    import threading
+    from hermes_control_api import main
+    from hermes_control_api.realtime import persist_normalized_event
+    app, _, (alice, bob) = threaded_cloud_sink
+    hub = app.state.services.event_hub
+    alice_sub, bob_sub = await hub.subscribe(alice[0]), await hub.subscribe(bob[0])
+    sink = app.state.connector_registry.event_sink
+    entered, release = asyncio.Event(), threading.Event()
+    loop, loop_thread = asyncio.get_running_loop(), threading.get_ident()
+    calls = []
+    def persist(factory, event, **kwargs):
+        assert threading.get_ident() != loop_thread
+        calls.append(event.event_id)
+        if event.event_id == "alice-1":
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(3)
+        return persist_normalized_event(factory, event, **kwargs)
+    monkeypatch.setattr(main, "persist_normalized_event", persist)
+    def connection(identity, owner):
+        return NormalizedEvent.create(event_id=identity, type="control.connection", gateway_id=owner[1],
+            profile_name="default", data={"state": "connected"}, private_data={"private": "clear after persistence"})
+    first_event = connection("alice-1", alice)
+    first = asyncio.create_task(sink(first_event))
+    await asyncio.wait_for(entered.wait(), 1)
+    second = asyncio.create_task(sink(connection("alice-2", alice)))
+    try:
+        # Another gateway and the event loop progress while Alice's DB work is
+        # blocked. Neither account can receive the other's buffered event.
+        await asyncio.wait_for(sink(connection("bob-1", bob)), 1)
+        assert (await hub.next_event(bob_sub))["eventId"] == "bob-1"
+        assert alice_sub.queue.empty()
+        assert "alice-2" not in calls and not second.done()
+    finally:
+        release.set()
+        await asyncio.gather(first, second)
+    assert calls.index("alice-1") < calls.index("alice-2")
+    assert [(await hub.next_event(alice_sub))["eventId"] for _ in range(2)] == ["alice-1", "alice-2"]
+    assert bob_sub.queue.empty() and first_event.private_data == {}
+    await sink(connection("missing-gateway", ("nobody", "missing")))
+    assert alice_sub.queue.empty() and bob_sub.queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_cloud_persistence_finishes_before_next_gateway_event(threaded_cloud_sink, monkeypatch):
+    import asyncio
+    import threading
+    from hermes_control_api import main
+    from hermes_control_api.models import Gateway
+    from hermes_control_api.realtime import persist_normalized_event
+    app, factory, (alice, _) = threaded_cloud_sink
+    sink = app.state.connector_registry.event_sink
+    entered, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    calls = []
+    def persist(factory, event, **kwargs):
+        calls.append(event.event_id)
+        if event.event_id == "old-connection":
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(3)
+        return persist_normalized_event(factory, event, **kwargs)
+    monkeypatch.setattr(main, "persist_normalized_event", persist)
+    def connection(identity, state):
+        return NormalizedEvent.create(event_id=identity, type="control.connection", gateway_id=alice[1],
+            profile_name="default", data={"state": state})
+    first = asyncio.create_task(sink(connection("old-connection", "offline")))
+    await asyncio.wait_for(entered.wait(), 1)
+    first.cancel()
+    second = asyncio.create_task(sink(connection("new-connection", "connected")))
+    try:
+        await asyncio.sleep(.01)
+        assert not first.done() and not second.done()
+        assert calls == ["old-connection"]
+    finally:
+        release.set()
+        results = await asyncio.gather(first, second, return_exceptions=True)
+    assert isinstance(results[0], asyncio.CancelledError) and results[1] is None
+    assert calls == ["old-connection", "new-connection"]
+    with factory() as db:
+        assert db.get(Gateway, alice[1]).health_status == "online"
+
+
 def test_research_only_connector_refresh_uses_approved_discovery_profile(cloud, monkeypatch):
     from .test_cloud_accounts import seed_tenants
     from hermes_client import CapabilitySet

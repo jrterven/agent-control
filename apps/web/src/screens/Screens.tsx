@@ -1,3 +1,4 @@
+import { acceptAuthenticatedIdentity } from "../hooks";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   ArrowClockwise, ArrowRight, CheckCircle, Clock, CloudCheck, Code,
@@ -44,7 +45,6 @@ export function LoginScreen() {
   const configuration = useCloudConfiguration();
   const cloud = configuration.methods?.mode === "cloud";
   const googleError = new URLSearchParams(window.location.search).has("error");
-  const setAuth = useAppStore((state) => state.setAuth);
   const [serverError, setServerError] = useState("");
   const loginSchema = useMemo(() => z.object({
     username: z.string().min(1, t("login.usernameRequired")),
@@ -55,7 +55,7 @@ export function LoginScreen() {
     setServerError("");
     try {
       const user = await api.login(values.username, values.password);
-      setAuth("authenticated", user.name, user.csrfToken, false);
+      await acceptAuthenticatedIdentity(user);
     } catch {
       setServerError(t("login.error"));
     }

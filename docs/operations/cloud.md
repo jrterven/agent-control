@@ -167,6 +167,19 @@ Monitor public readiness externally and alert on sustained failure, backup
 failure, disk pressure or increasing error rate; an individual sleeping laptop
 is normal and does not page the platform operator.
 
+The single cloud API worker admits at most 20 HTTP API requests at once and
+queues at most 40 more for up to ten seconds. Additional requests receive a
+retryable 503 before authentication or a mutation begins. Health/readiness use
+two separate probe slots, and existing WebSocket connections do not consume
+HTTP slots. PostgreSQL connections are bounded to 64 with no overflow and no
+synchronous pool wait, leaving room for connector replies and background work
+while HTTP requests await their results. Cloud event persistence runs outside
+the connection loop with at most 16 database workers and preserves each
+gateway's event order through completion or cancellation. Keep PostgreSQL's connection budget
+above this bound with capacity reserved for backups and operator access. These
+limits prevent local pool starvation; validate throughput and latency on the
+actual dedicated server before claiming capacity for the pilot.
+
 ## Data handling and retention
 
 The cloud processes conversations and files in transit; this beta does not

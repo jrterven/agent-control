@@ -311,6 +311,7 @@ export type RealtimeEvent = Partial<NormalizedEvent> & {
 };
 
 export type BootstrapData = {
+  userId?: string;
   gateways: Gateway[];
   profiles: Profile[];
   workspaces: Workspace[];

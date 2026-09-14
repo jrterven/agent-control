@@ -7,7 +7,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import Field, model_validator
 from sqlalchemy import and_, or_, select, update
-from sqlalchemy.dialects.sqlite import insert
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from ..auth import current_user, get_db, require_csrf
@@ -106,6 +107,7 @@ def save_transcript(
     if payload.offset == 0:
         initial = TranscriptSnapshot(fragments=payload.fragments)
         ciphertext = request.app.state.services.vault.encrypt(initial.model_dump_json(), aad=aad)
+        insert = {"sqlite": sqlite_insert, "postgresql": postgresql_insert}[db.get_bind().dialect.name]
         db.execute(insert(LiveTranscript).values(
             id=identifier, owner_id=auth.user.id, session_link_id=session_id,
             revision=len(initial.fragments), payload_ciphertext=ciphertext,
@@ -113,6 +115,8 @@ def save_transcript(
         ).on_conflict_do_nothing(index_elements=["id"]))
     row = db.get(LiveTranscript, identifier)
     if row is None:
+        if payload.offset == 0:
+            raise NotFoundError("Transcript is unavailable")
         raise HTTPException(409, "The beginning of this transcript has not been saved")
     if row.owner_id != auth.user.id or row.session_link_id != session_id:
         raise NotFoundError("Transcript is unavailable")

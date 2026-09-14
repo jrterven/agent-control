@@ -21,6 +21,7 @@ type AuthState = "checking" | "authenticated" | "offline" | "unauthenticated";
 type AppState = {
   authState: AuthState;
   userName: string;
+  userId?: string;
   csrfToken?: string;
   demoMode: boolean;
   leftDrawerOpen: boolean;
@@ -51,7 +52,7 @@ type AppState = {
   streamingBySession: Record<string, string>;
   pendingOperations: Record<string, string>;
   messages: ChatMessage[];
-  setAuth: (state: AuthState, userName?: string, csrfToken?: string, demoMode?: boolean) => void;
+  setAuth: (state: AuthState, userName?: string, csrfToken?: string, demoMode?: boolean, userId?: string) => void;
   setLeftDrawerOpen: (open: boolean) => void;
   setActivityOpen: (open: boolean) => void;
   setDesktopContextOpen: (open: boolean) => void;
@@ -86,11 +87,12 @@ type AppState = {
   setStreamingMessageId: (sessionId: string, id?: string) => void;
   bindOperation: (operationId: string, messageId: string) => void;
   clearOperation: (operationId: string) => void;
-  resetPrivateState: () => void;
+  resetPrivateState: (retainAuthState?: boolean) => void;
 };
 
 const emptyPrivateState = {
   userName: "Administrador",
+  userId: undefined as string | undefined,
   csrfToken: undefined,
   demoMode: false,
   bootstrapLoaded: false,
@@ -173,7 +175,7 @@ export const useAppStore = create<AppState>((set) => ({
   advancedMode: false,
   offlineCacheEnabled: false,
   ...emptyPrivateState,
-  setAuth: (authState, userName = "Administrador", csrfToken, demoMode = false) => set((state) => {
+  setAuth: (authState, userName = "Administrador", csrfToken, demoMode = false, userId) => set((state) => {
     if (authState === "unauthenticated") {
       return {
         ...emptyPrivateState,
@@ -196,8 +198,11 @@ export const useAppStore = create<AppState>((set) => ({
     const recovering = state.authState === "offline" && (
       authState === "checking" || authState === "authenticated"
     );
+    const changedOwner = !!userId && !!state.userId && userId !== state.userId;
     return {
+      ...(changedOwner ? emptyPrivateState : {}),
       authState,
+      userId: userId ?? state.userId,
       userName,
       csrfToken,
       demoMode,
@@ -380,9 +385,9 @@ export const useAppStore = create<AppState>((set) => ({
     delete pendingOperations[operationId];
     return { pendingOperations };
   }),
-  resetPrivateState: () => set((state) => ({
+  resetPrivateState: (retainAuthState = false) => set((state) => ({
     ...emptyPrivateState,
-    authState: "unauthenticated",
+    authState: retainAuthState ? state.authState : "unauthenticated",
     theme: state.theme,
     timeZone: state.timeZone,
     advancedMode: state.advancedMode,

@@ -100,6 +100,23 @@ def _fake_host(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
         fake_bin / "uname",
         "#!/usr/bin/env bash\nprintf 'Darwin\\n'\n",
     )
+    # A simulated macOS host also needs BSD stat, even when pytest runs on Linux.
+    # Read the actual metadata so permission and ownership checks stay meaningful.
+    _write_executable(
+        fake_bin / "stat",
+        f"""#!/usr/bin/env bash
+exec {shlex.quote(sys.executable)} - "$@" <<'PY'
+import os
+import stat
+import sys
+
+if len(sys.argv) != 4 or sys.argv[1] != "-f" or sys.argv[2] not in ("%Lp", "%u"):
+    raise SystemExit("Unsupported BSD stat invocation")
+metadata = os.stat(sys.argv[3])
+print(format(stat.S_IMODE(metadata.st_mode), "o") if sys.argv[2] == "%Lp" else metadata.st_uid)
+PY
+""",
+    )
     _write_executable(
         fake_bin / "git",
         f"""#!/usr/bin/env bash

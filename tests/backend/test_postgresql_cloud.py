@@ -24,7 +24,7 @@ from hermes_control_api.cloud_auth import enroll_google_identity, invite_email
 from hermes_control_api.config import Settings
 from hermes_control_api.database import build_engine, build_session_factory
 from hermes_control_api.main import create_app
-from hermes_control_api.models import BetaInvitation, ExternalIdentity, Gateway, ProfileRef, SessionLink, User
+from hermes_control_api.models import BetaInvitation, ExternalIdentity, Gateway, LiveTranscript, ProfileRef, SessionLink, User
 
 REPO = Path(__file__).resolve().parents[2]
 POSTGRES = os.environ.get("AGENT_CONTROL_TEST_POSTGRES_URL")
@@ -149,3 +149,57 @@ def test_postgresql_api_never_exposes_other_tenants_gateway_profile_or_session(p
             response = client.patch(f"/api/v1/gateways/{other[0]}",json={"name":"stolen"},
                 headers={"X-CSRF-Token":own[4],"Idempotency-Key":uuid4().hex})
             assert response.status_code == 404
+
+
+def test_postgresql_voice_transcripts_append_retry_stay_encrypted_and_owner_scoped(pg_url):
+    migrate(pg_url)
+    app = create_app(settings(pg_url))
+    with TestClient(app) as client:
+        owners = []
+        with app.state.session_factory() as db:
+            for name in ("voice-alice", "voice-bob"):
+                user = User(username=name, password_hash="unused", is_admin=False)
+                db.add(user)
+                db.flush()
+                gateway = Gateway(owner_id=user.id, name=name, transport_kind="connector",
+                    rest_url=f"connector://{name}", ws_url=f"connector://{name}")
+                db.add(gateway)
+                db.flush()
+                session = SessionLink(owner_id=user.id, gateway_id=gateway.id,
+                    profile_name="personal", stored_session_id=name)
+                db.add(session)
+                db.commit()
+                token, csrf, _ = issue_session(db, user, ttl_hours=1)
+                owners.append((user.id, session.id, token, csrf))
+        alice, bob = owners
+        client.cookies.set("hc_session", alice[2])
+        headers = {"X-CSRF-Token": alice[3]}
+        path = f"/api/v1/sessions/{alice[1]}/live-transcripts"
+        call_id = str(uuid4())
+        first = {"role": "user", "text": "Private PostgreSQL voice message", "order": 0, "start": 0, "end": 1}
+        second = {"role": "assistant", "text": "Private voice response", "order": 1, "start": 1, "end": 2}
+        initial = {"fragments": [first]}
+        append = {"offset": 1, "fragments": [second]}
+        for payload in (initial, initial, append, append, initial):
+            response = client.put(f"{path}/{call_id}", headers=headers, json=payload)
+            assert response.status_code == 204, response.text
+        page = client.get(path)
+        assert page.status_code == 200, page.text
+        assert page.json()["items"][0]["fragments"] == [first, second]
+        assert len(page.json()["items"]) == 1
+        with app.state.session_factory() as db:
+            row = db.get(LiveTranscript, call_id)
+            assert row.revision == 2
+            assert row.owner_id == alice[0]
+            assert row.payload_ciphertext.startswith("v1.")
+            assert all(part["text"] not in row.payload_ciphertext for part in (first, second))
+            with pytest.raises(ValueError):
+                app.state.services.vault.decrypt(row.payload_ciphertext,
+                    aad=f"live-transcript:{bob[0]}:{alice[1]}:{call_id}")
+        client.cookies.set("hc_session", bob[2])
+        headers = {"X-CSRF-Token": bob[3]}
+        assert client.get(path).status_code == 404
+        assert client.put(f"{path}/{call_id}", headers=headers, json=initial).status_code == 404
+        own_path = f"/api/v1/sessions/{bob[1]}/live-transcripts"
+        assert client.put(f"{own_path}/{call_id}", headers=headers, json=initial).status_code == 404
+        assert client.get(own_path).json()["items"] == []

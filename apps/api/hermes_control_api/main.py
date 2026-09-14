@@ -7,6 +7,7 @@ import mimetypes
 import re
 from collections.abc import AsyncIterator
 from pathlib import Path
+from weakref import WeakValueDictionary
 
 import uvicorn
 import httpx
@@ -191,7 +192,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         vapid_subject=settings.push_vapid_subject,
     )
 
-    async def durable_event_sink(event) -> None:
+    offload_cloud_events = settings.deployment_mode == "cloud" and engine.dialect.name == "postgresql"
+    cloud_event_slots = asyncio.Semaphore(16)
+    cloud_event_locks = WeakValueDictionary()
+
+    def persist_event(event):
         recipient_user_id = None
         if settings.deployment_mode == "cloud":
             with session_factory() as db:
@@ -199,19 +204,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     Gateway.id == event.gateway_id, Gateway.enabled.is_(True),
                 ))
             if recipient_user_id is None:
-                return
+                return None, None
         completion = persist_normalized_event(
             session_factory,
             event,
             gateway_health_ttl_seconds=settings.upstream_health_ttl_seconds,
             vault=vault,
         )
+        return recipient_user_id, completion
+
+    async def publish_persisted_event(event, recipient_user_id, completion):
+        if settings.deployment_mode == "cloud" and recipient_user_id is None:
+            return
         # Private validated cache seeds have completed their only durable use.
         # Do not retain them in replay/correlation memory or browser fanout.
         event.private_data.clear()
         event_hub.remember_correlation(event)
         await event_hub.publish(event, recipient_user_id=recipient_user_id)
         push_notification_service.schedule(completion)
+
+    async def durable_event_sink(event) -> None:
+        if offload_cloud_events:
+            lock = cloud_event_locks.get(event.gateway_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                cloud_event_locks[event.gateway_id] = lock
+            async with lock:
+                async with cloud_event_slots:
+                    # A PostgreSQL round trip must not delay WebSocket replies,
+                    # pings or unrelated owners. Each worker creates/closes its
+                    # own sessions; persistence for one gateway stays ordered.
+                    work = asyncio.create_task(asyncio.to_thread(persist_event, event))
+                    try:
+                        recipient_user_id, completion = await asyncio.shield(work)
+                    except asyncio.CancelledError:
+                        # Thread cancellation cannot stop an in-progress commit.
+                        # Finish it before releasing this gateway's ordering lock.
+                        with contextlib.suppress(Exception):
+                            await work
+                        raise
+                await publish_persisted_event(event, recipient_user_id, completion)
+        else:
+            recipient_user_id, completion = persist_event(event)
+            await publish_persisted_event(event, recipient_user_id, completion)
 
     connector_registry = ConnectorRegistry(durable_event_sink)
     provider_pool = build_provider_pool(settings, durable_event_sink, connector_registry=connector_registry)
@@ -410,6 +445,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings.deployment_mode == "cloud":
         app.add_middleware(CloudOperationsMiddleware, state=app.state, metrics=app.state.cloud_metrics)
     app.add_middleware(SecurityBoundaryMiddleware, settings=settings)
+    if settings.deployment_mode == "cloud":
+        from .cloud_concurrency import CloudConcurrencyMiddleware
+        # ASGI middleware is applied in reverse registration order. Admission
+        # must wrap SecurityBoundary's database-backed rate-limit lookup.
+        app.add_middleware(CloudConcurrencyMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,

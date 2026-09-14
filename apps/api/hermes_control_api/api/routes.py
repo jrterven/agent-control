@@ -708,6 +708,7 @@ def bootstrap(
 
     return {
         "deploymentMode": app_services.settings.deployment_mode,
+        "userId": user.id,
         "features": {
             "voice": {"provider": voice_provider(db, user)},
             "live": {

@@ -3,6 +3,8 @@ import { api, ApiError, connectRealtime } from "./lib/api";
 import { absoluteTimestamp } from "./lib/chatTimeline";
 import {
   clearPrivateCache,
+  bindPrivateCacheOwner,
+  privateCacheOwner,
   clearDraft,
   loadDraft,
   loadEncryptedTranscript,
@@ -23,6 +25,7 @@ import { recordSessionCompletion } from "./lib/chatNotifications";
 import { detectedTimeZone, isValidTimeZone, TIME_ZONE_PREFERENCE_KEY } from "./lib/dateTime";
 import type {
   AgentActivityItem,
+  BootstrapData,
   ApprovalChoice,
   ApprovalRequest,
   ChatMessage,
@@ -975,6 +978,7 @@ async function resumeActiveSession(sessionId: string) {
 }
 
 export async function rehydrateSession(sessionId: string, recoveryAttempted = false) {
+  const userId = useAppStore.getState().userId;
   nextRehydrationGeneration += 1;
   const generation = nextRehydrationGeneration;
   rehydrationGenerations.delete(sessionId);
@@ -990,7 +994,7 @@ export async function rehydrateSession(sessionId: string, recoveryAttempted = fa
     // Reconnect, replay and terminal events can all request history at nearly
     // the same time. Never let a slower, older active snapshot overwrite a
     // newer terminal transcript.
-    if (rehydrationGenerations.get(sessionId) !== generation) return;
+    if (rehydrationGenerations.get(sessionId) !== generation || useAppStore.getState().userId !== userId) return;
     const messages = historyMessages(sessionId, history.items);
     const state = useAppStore.getState();
     const activeOperation = history.activeOperation;
@@ -1109,15 +1113,67 @@ export async function rehydrateSession(sessionId: string, recoveryAttempted = fa
     appendTerminalHistoryNotice(sessionId, history.sessionStatus, history.items, messages);
     useAppStore.getState().setMessagesForSession(sessionId, messages);
   } catch {
-    if (rehydrationGenerations.get(sessionId) !== generation) return;
+    if (rehydrationGenerations.get(sessionId) !== generation || useAppStore.getState().userId !== userId) return;
     const state = useAppStore.getState();
     const workspaceId = state.sessions.find((session) => session.id === sessionId)?.workspaceId;
     if (state.offlineCacheEnabled && workspaceId) {
-      const cached = await loadEncryptedTranscript(sessionId, workspaceId).catch(() => []);
-      if (cached.length) state.setMessagesForSession(sessionId, cached);
+      const cached = await loadEncryptedTranscript(sessionId, workspaceId, userId).catch(() => []);
+      if (cached.length && useAppStore.getState().userId === userId) state.setMessagesForSession(sessionId, cached);
     }
     state.setConnection("degraded");
   }
+}
+
+function clearPrivateRuntimeState() {
+  unmatchedEvents.clear();
+  unmatchedSessionEvents.clear();
+  rehydrationGenerations.clear();
+  activeSessionRecoveries.clear();
+  interactionRevisions.clear();
+  clearStreamingContentFilterState();
+  useAppStore.getState().resetPrivateState(true);
+}
+
+export async function acceptAuthenticatedIdentity(
+  user: { id: string; name: string; csrfToken?: string },
+  isActive: () => boolean = () => true,
+) {
+  if (!isActive()) return;
+  const current = useAppStore.getState();
+  if (current.userId !== user.id && (current.userId || current.bootstrapLoaded || current.messages.length)) {
+    clearPrivateRuntimeState();
+  }
+  try {
+    const owner = await privateCacheOwner();
+    let legacyPrivateUserName: string | undefined;
+    if (!owner) {
+      // Only the server can certify the legacy single-user deployment. Cloud
+      // caches without stable identities must never be adopted by display name.
+      const methods = await boundedControlRead(api.authMethods()).catch(() => null);
+      if (!methods) {
+        if (isActive()) useAppStore.getState().setAuth("unauthenticated");
+        return;
+      }
+      if (methods.mode === "private") legacyPrivateUserName = user.name;
+    }
+    await bindPrivateCacheOwner(user.id, legacyPrivateUserName);
+    if (isActive()) useAppStore.getState().setAuth("authenticated", user.name, user.csrfToken, false, user.id);
+  } catch {
+    // A verified account change cannot fall back to another account's cache
+    // merely because IndexedDB failed while rotating its keys.
+    if (isActive()) useAppStore.getState().setAuth("unauthenticated");
+  }
+}
+
+function projectionMatchesIdentity(projection: BootstrapData, expectedUserId?: string) {
+  const current = useAppStore.getState();
+  if (current.userId !== expectedUserId) return false;
+  if (projection.userId && projection.userId !== expectedUserId) {
+    clearPrivateRuntimeState();
+    useAppStore.getState().setAuth("checking", current.userName, undefined, false, current.userId);
+    return false;
+  }
+  return true;
 }
 
 export function useAuthBootstrap() {
@@ -1132,7 +1188,7 @@ export function useAuthBootstrap() {
     if (authState !== "checking") return;
     let active = true;
     boundedControlRead(api.me())
-      .then((user) => { if (active) setAuth("authenticated", user.name, user.csrfToken, false); })
+      .then((user) => acceptAuthenticatedIdentity(user, () => active))
       .catch(async (error) => {
         if (!active) return;
         if (error instanceof ApiError && error.status === 401) {
@@ -1146,7 +1202,7 @@ export function useAuthBootstrap() {
         ) ?? await loadShellSnapshot().catch(() => null);
         if (!active) return;
         if (cached) {
-          setAuth("offline", cached.userName, undefined, false);
+          setAuth("offline", cached.userName, undefined, false, cached.userId);
           useAppStore.getState().hydrateBootstrap(cached.data);
           useAppStore.getState().setConnection("offline");
         } else {
@@ -1175,7 +1231,7 @@ export function useAuthBootstrap() {
       try {
         const user = await boundedControlRead(api.me());
         if (!active || useAppStore.getState().authState !== "offline") return;
-        setAuth("authenticated", user.name, user.csrfToken, false);
+        await acceptAuthenticatedIdentity(user, () => active);
       } catch (error) {
         if (!active || useAppStore.getState().authState !== "offline") return;
         if (error instanceof ApiError && error.status === 401) {
@@ -1225,6 +1281,7 @@ export function useAuthBootstrap() {
 }
 
 export function useBootstrapData() {
+  const userId = useAppStore((state) => state.userId);
   const authState = useAppStore((state) => state.authState);
   const demoMode = useAppStore((state) => state.demoMode);
   const bootstrapLoaded = useAppStore((state) => state.bootstrapLoaded);
@@ -1244,6 +1301,7 @@ export function useBootstrapData() {
         // degrade one agent, never hold the whole PWA on its dark boot screen.
         const projection = await boundedControlRead(api.bootstrap());
         if (!active) return;
+        if (!projectionMatchesIdentity(projection, userId)) return;
         hydrateBootstrap(projection);
         const snapshot = useAppStore.getState();
         const selectedGateway = projection.gateways.find((gateway) => gateway.id === snapshot.selectedGatewayId);
@@ -1256,6 +1314,7 @@ export function useBootstrapData() {
             projection,
             snapshot.userName,
             snapshot.selectedWorkspaceId,
+            snapshot.userId,
           ).catch(() => undefined);
         }
         retryDelayMs = CONTROL_BOOT_RETRY_INITIAL_MS;
@@ -1263,7 +1322,7 @@ export function useBootstrapData() {
         if (!active) return;
         const cached = await loadShellSnapshot().catch(() => null);
         if (!active) return;
-        if (cached && cached.userName === useAppStore.getState().userName) {
+        if (cached && !!userId && cached.userId === userId && useAppStore.getState().userId === userId) {
           hydrateBootstrap(cached.data);
         } else {
           // A first install has no shell snapshot. Keep the visible boot state
@@ -1282,7 +1341,7 @@ export function useBootstrapData() {
       active = false;
       window.clearTimeout(retryTimer);
     };
-  }, [authState, bootstrapLoaded, csrfToken, demoMode, hydrateBootstrap, setConnection]);
+  }, [userId, authState, bootstrapLoaded, csrfToken, demoMode, hydrateBootstrap, setConnection]);
 
   useEffect(() => {
     if (authState !== "authenticated" || demoMode || !bootstrapLoaded) return;
@@ -1295,7 +1354,7 @@ export function useBootstrapData() {
       refreshing = true;
       try {
         const refreshed = await api.bootstrap();
-        if (!active) return;
+        if (!active || !projectionMatchesIdentity(refreshed, userId)) return;
         hydrateBootstrap(refreshed);
         const snapshot = useAppStore.getState();
         const selectedGateway = refreshed.gateways.find(
@@ -1310,6 +1369,7 @@ export function useBootstrapData() {
             refreshed,
             snapshot.userName,
             snapshot.selectedWorkspaceId,
+            snapshot.userId,
           );
         }
       } catch {
@@ -1329,7 +1389,7 @@ export function useBootstrapData() {
         );
         if (!active) return;
         const refreshed = await api.bootstrap();
-        if (!active) return;
+        if (!active || !projectionMatchesIdentity(refreshed, userId)) return;
         await Promise.allSettled(
           refreshed.profiles.filter((profile) => !gatewayId || profile.gatewayId === gatewayId).map((profile) => api.syncSessions(
             profile.gatewayId,
@@ -1390,7 +1450,7 @@ export function useBootstrapData() {
       window.removeEventListener("hermes-control:connector-refresh", refreshConnector);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
-  }, [authState, bootstrapLoaded, demoMode, hydrateBootstrap, setConnection]);
+  }, [userId, authState, bootstrapLoaded, demoMode, hydrateBootstrap, setConnection]);
 }
 
 export function useSessionHistory() {
@@ -1472,6 +1532,7 @@ export function useThemePreference() {
 }
 
 export function useOfflineTranscriptCache() {
+  const userId = useAppStore((state) => state.userId);
   const authState = useAppStore((state) => state.authState);
   const enabled = useAppStore((state) => state.offlineCacheEnabled);
   const sessionId = useAppStore((state) => state.selectedSessionId);
@@ -1496,10 +1557,11 @@ export function useOfflineTranscriptCache() {
         userName,
         selectedWorkspaceId,
         selectedSessionId,
+        userId,
       ).catch(() => undefined);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [authState, automations, bootstrapLoaded, gateways, profiles, selectedSessionId, selectedWorkspaceId, sessions, userName, workspaces]);
+  }, [userId, authState, automations, bootstrapLoaded, gateways, profiles, selectedSessionId, selectedWorkspaceId, sessions, userName, workspaces]);
 
   useEffect(() => {
     if (authState !== "authenticated" || !enabled || !bootstrapLoaded) return;
@@ -1508,21 +1570,23 @@ export function useOfflineTranscriptCache() {
         { gateways, profiles, workspaces, sessions, automations },
         userName,
         selectedWorkspaceId,
+        userId,
       ).catch(() => undefined);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [authState, automations, bootstrapLoaded, enabled, gateways, profiles, selectedWorkspaceId, sessions, userName, workspaces]);
+  }, [userId, authState, automations, bootstrapLoaded, enabled, gateways, profiles, selectedWorkspaceId, sessions, userName, workspaces]);
 
   useEffect(() => {
     if (authState !== "authenticated" || !enabled || !sessionId || !workspaceId || !messages.length) return;
     const timer = window.setTimeout(() => {
-      void saveEncryptedTranscript(sessionId, workspaceId, messages).catch(() => undefined);
+      void saveEncryptedTranscript(sessionId, workspaceId, messages, userId).catch(() => undefined);
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [authState, enabled, messages, sessionId, workspaceId]);
+  }, [userId, authState, enabled, messages, sessionId, workspaceId]);
 }
 
 export function useRealtimeConnection() {
+  const userId = useAppStore((state) => state.userId);
   const authState = useAppStore((state) => state.authState);
   const demoMode = useAppStore((state) => state.demoMode);
   const csrfToken = useAppStore((state) => state.csrfToken);
@@ -1532,8 +1596,11 @@ export function useRealtimeConnection() {
     if (authState !== "authenticated" || demoMode) return;
     const controller = new AbortController();
     void connectRealtime({
-      onEvent: applyRealtimeEvent,
+      onEvent: (event) => {
+        if (!controller.signal.aborted && useAppStore.getState().userId === userId) applyRealtimeEvent(event);
+      },
       onState: (state) => {
+        if (controller.signal.aborted || useAppStore.getState().userId !== userId) return;
         // A healthy browser-to-Control socket does not prove the selected
         // Hermes route is healthy. `control.connection` owns the connected
         // state; transport failures can only lower confidence here.
@@ -1554,7 +1621,7 @@ export function useRealtimeConnection() {
       },
     }, controller.signal, csrfToken);
     return () => controller.abort();
-  }, [authState, csrfToken, demoMode, setConnection]);
+  }, [userId, authState, csrfToken, demoMode, setConnection]);
 }
 
 const activeDemoControllers = new Map<string, AbortController>();
@@ -1598,7 +1665,7 @@ export async function submitPrompt(content: string, attachments: File[] = []) {
   state.appendMessage(userMessage);
   state.appendMessage({ id: assistantId, sessionId: state.selectedSessionId, role: "assistant", content: "", createdAt: userMessage.createdAt, timestamp: userMessage.timestamp, streaming: true });
   state.setStreamingMessageId(state.selectedSessionId, assistantId);
-  void clearDraft(state.selectedSessionId).catch(() => undefined);
+  void clearDraft(state.selectedSessionId, state.userId).catch(() => undefined);
 
   if (!state.demoMode) {
     const idempotencyKey = crypto.randomUUID();
@@ -1804,6 +1871,7 @@ export async function stopPrompt() {
 }
 
 export function useSessionDraft(sessionId: string) {
+  const userId = useAppStore((state) => state.userId);
   const pendingWrites = useRef(new Map<string, Promise<void>>());
 
   const enqueue = (targetSessionId: string, operation: () => Promise<void>) => {
@@ -1823,17 +1891,18 @@ export function useSessionDraft(sessionId: string) {
   return {
     load: async () => {
       await pendingWrites.current.get(sessionId)?.catch(() => undefined);
-      return loadDraft(sessionId).catch(() => "");
+      if (useAppStore.getState().userId !== userId) return "";
+      return loadDraft(sessionId, userId).catch(() => "");
     },
     save: (value: string) => {
       // Start the IndexedDB transaction in the input event itself. A debounce
       // could be discarded by a sudden reload/tunnel loss before its timer
       // fired, leaving the offline shell without the draft it was meant to
       // reopen. Writes for the same session remain ordered.
-      void enqueue(sessionId, () => saveDraft(sessionId, value)).catch(() => undefined);
+      void enqueue(sessionId, () => useAppStore.getState().userId === userId ? saveDraft(sessionId, value, userId) : Promise.resolve()).catch(() => undefined);
     },
     clear: async () => {
-      await enqueue(sessionId, () => clearDraft(sessionId)).catch(() => undefined);
+      await enqueue(sessionId, () => useAppStore.getState().userId === userId ? clearDraft(sessionId, userId) : Promise.resolve()).catch(() => undefined);
     },
   };
 }

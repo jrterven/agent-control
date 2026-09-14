@@ -2,7 +2,7 @@ import Dexie, { type EntityTable } from "dexie";
 import type { BootstrapData, ChatMessage, EmailReference } from "../types";
 import { absoluteTimestamp } from "./chatTimeline";
 
-export type DraftRecord = { sessionId: string; content: string; updatedAt: number };
+export type DraftRecord = { sessionId: string; content: string; updatedAt: number; ownerId?: string };
 export type PreferenceRecord = { key: string; value: string; updatedAt: number };
 export type TranscriptRecord = { id: string; workspaceId: string; cipherText: string; bytes: number; itemCount: number; expiresAt: number; updatedAt: number };
 export type OfflineSnapshotRecord = { id: "latest"; cipherText: string; bytes?: number; expiresAt: number; updatedAt: number };
@@ -44,16 +44,67 @@ class ControlDatabase extends Dexie {
 
 export const db = new ControlDatabase();
 
-export async function saveDraft(sessionId: string, content: string) {
-  await db.drafts.put({ sessionId, content, updatedAt: Date.now() });
+const PRIVATE_OWNER_KEY = "private-cache-user-id";
+let privateCacheGeneration = 0;
+type PrivateCacheContext = { ownerId?: string; generation: number };
+
+export async function privateCacheOwner() {
+  return (await db.preferences.get(PRIVATE_OWNER_KEY))?.value;
 }
 
-export async function loadDraft(sessionId: string) {
-  return (await db.drafts.get(sessionId))?.content ?? "";
+async function privateContext(ownerId?: string): Promise<PrivateCacheContext> {
+  const generation = privateCacheGeneration;
+  return { ownerId: ownerId ?? await privateCacheOwner(), generation };
 }
 
-export async function clearDraft(sessionId: string) {
-  await db.drafts.delete(sessionId);
+async function cacheOwnerMatches(context: PrivateCacheContext) {
+  return context.generation === privateCacheGeneration && await privateCacheOwner() === context.ownerId;
+}
+
+/** Rotate every private cache together before accepting a different stable account. */
+export async function bindPrivateCacheOwner(userId: string, legacyPrivateUserName?: string) {
+  if (!userId) throw new Error("A stable account identity is required");
+  const previous = await privateCacheOwner();
+  let migrateLegacy = false;
+  if (!previous && legacyPrivateUserName) {
+    const legacy = await loadShellSnapshot() ?? await loadOfflineSnapshot();
+    migrateLegacy = !!legacy && !legacy.userId && legacy.userName === legacyPrivateUserName;
+  }
+  const generation = previous === userId ? privateCacheGeneration : ++privateCacheGeneration;
+  await db.transaction("rw", [db.preferences, db.drafts, db.transcripts, db.offlineSnapshots, db.shellSnapshots, db.deviceKeys], async () => {
+    const current = await privateCacheOwner();
+    if (generation !== privateCacheGeneration) throw new Error("Account changed during cache binding");
+    if (current !== userId && !(current === undefined && previous === undefined && migrateLegacy)) {
+      await db.drafts.clear();
+      await db.transcripts.clear();
+      await db.offlineSnapshots.clear();
+      await db.shellSnapshots.clear();
+      await db.deviceKeys.clear();
+    } else if (current === undefined && migrateLegacy) {
+      await db.drafts.toCollection().modify({ ownerId: userId });
+    }
+    await db.preferences.put({ key: PRIVATE_OWNER_KEY, value: userId, updatedAt: Date.now() });
+  });
+}
+
+export async function saveDraft(sessionId: string, content: string, ownerId?: string) {
+  // Start the actual put before yielding: a document teardown can discard an
+  // owner lookup callback. Captured ownership makes any late write unreadable
+  // by a different account; unknown legacy drafts need explicit migration.
+  await db.drafts.put({ sessionId, content, ownerId, updatedAt: Date.now() });
+}
+
+export async function loadDraft(sessionId: string, ownerId?: string) {
+  const context = await privateContext(ownerId);
+  const record = await db.drafts.get(sessionId);
+  return await cacheOwnerMatches(context) && record?.ownerId === context.ownerId ? record?.content ?? "" : "";
+}
+
+export async function clearDraft(sessionId: string, ownerId?: string) {
+  const context = await privateContext(ownerId);
+  await db.transaction("rw", db.drafts, db.preferences, async () => {
+    if (await cacheOwnerMatches(context)) await db.drafts.delete(sessionId);
+  });
 }
 
 /** Invalidate route-bearing offline projections without removing chat drafts or transcripts. */
@@ -88,7 +139,9 @@ export async function loadPreference(key: string) {
 }
 
 export async function clearPrivateCache() {
-  await db.transaction("rw", db.drafts, db.transcripts, db.offlineSnapshots, db.shellSnapshots, db.deviceKeys, async () => {
+  privateCacheGeneration += 1;
+  await db.transaction("rw", [db.preferences, db.drafts, db.transcripts, db.offlineSnapshots, db.shellSnapshots, db.deviceKeys], async () => {
+    await db.preferences.delete(PRIVATE_OWNER_KEY);
     await db.drafts.clear();
     await db.transcripts.clear();
     await db.offlineSnapshots.clear();
@@ -160,7 +213,7 @@ function base64ToBytes(value: string) {
   return bytes;
 }
 
-async function offlineCacheKey(create: boolean): Promise<CryptoKey | undefined> {
+async function offlineCacheKey(create: boolean, context?: PrivateCacheContext): Promise<CryptoKey | undefined> {
   const existing = await db.deviceKeys.get("offline-cache");
   if (existing?.key) return existing.key;
   if (!create) return undefined;
@@ -169,11 +222,13 @@ async function offlineCacheKey(create: boolean): Promise<CryptoKey | undefined> 
     false,
     ["encrypt", "decrypt"],
   );
-  await db.deviceKeys.put({ id: "offline-cache", key, createdAt: Date.now() });
+  await db.transaction("rw", db.deviceKeys, db.preferences, async () => {
+    if (!context || await cacheOwnerMatches(context)) await db.deviceKeys.put({ id: "offline-cache", key, createdAt: Date.now() });
+  });
   return key;
 }
 
-async function shellCacheKey(create: boolean): Promise<CryptoKey | undefined> {
+async function shellCacheKey(create: boolean, context?: PrivateCacheContext): Promise<CryptoKey | undefined> {
   const existing = await db.deviceKeys.get("offline-shell");
   if (existing?.key) return existing.key;
   if (!create) return undefined;
@@ -182,7 +237,9 @@ async function shellCacheKey(create: boolean): Promise<CryptoKey | undefined> {
     false,
     ["encrypt", "decrypt"],
   );
-  await db.deviceKeys.put({ id: "offline-shell", key, createdAt: Date.now() });
+  await db.transaction("rw", db.deviceKeys, db.preferences, async () => {
+    if (!context || await cacheOwnerMatches(context)) await db.deviceKeys.put({ id: "offline-shell", key, createdAt: Date.now() });
+  });
   return key;
 }
 
@@ -215,12 +272,14 @@ export async function saveEncryptedTranscript(
   sessionId: string,
   workspaceId: string,
   messages: ChatMessage[],
+  ownerId?: string,
 ) {
+  const context = await privateContext(ownerId);
   if (!sessionId || !workspaceId || !messages.length) return;
   const sanitized = sanitizeTranscript(messages);
   const plaintext = new TextEncoder().encode(JSON.stringify({ version: 1, sessionId, messages: sanitized }));
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
-  const key = await offlineCacheKey(true);
+  const key = await offlineCacheKey(true, context);
   if (!key) return;
   const encrypted = new Uint8Array(await globalThis.crypto.subtle.encrypt(
     { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(`${workspaceId}\u0000${sessionId}`) },
@@ -228,7 +287,8 @@ export async function saveEncryptedTranscript(
     plaintext,
   ));
   const now = Date.now();
-  await db.transaction("rw", db.transcripts, async () => {
+  await db.transaction("rw", db.transcripts, db.preferences, async () => {
+    if (!await cacheOwnerMatches(context)) return;
     // The option deliberately keeps only the most recently used workspace.
     const staleWorkspaceIds = (await db.transcripts.toArray())
       .filter((record) => record.workspaceId !== workspaceId)
@@ -250,7 +310,9 @@ export async function saveEncryptedTranscript(
 export async function loadEncryptedTranscript(
   sessionId: string,
   workspaceId: string,
+  ownerId?: string,
 ): Promise<ChatMessage[]> {
+  const context = await privateContext(ownerId);
   const record = await db.transcripts.get(sessionId);
   if (!record || record.workspaceId !== workspaceId || record.expiresAt <= Date.now()) {
     if (record?.expiresAt && record.expiresAt <= Date.now()) await db.transcripts.delete(sessionId);
@@ -271,7 +333,7 @@ export async function loadEncryptedTranscript(
     );
     const payload = JSON.parse(new TextDecoder().decode(plaintext)) as { version: number; sessionId: string; messages: ChatMessage[] };
     if (payload.version !== 1 || payload.sessionId !== sessionId || !Array.isArray(payload.messages)) return [];
-    return payload.messages.slice(-200);
+    return await cacheOwnerMatches(context) ? payload.messages.slice(-200) : [];
   } catch {
     // Session rotation or tampering makes the record intentionally unreadable.
     await db.transcripts.delete(sessionId);
@@ -283,7 +345,9 @@ export async function saveOfflineSnapshot(
   data: BootstrapData,
   userName: string,
   selectedWorkspaceId?: string,
+  ownerId?: string,
 ) {
+  const context = await privateContext(ownerId);
   const workspaceId = selectedWorkspaceId || data.workspaces[0]?.id || "";
   const sessions = data.sessions
     .filter((session) => !workspaceId || session.workspaceId === workspaceId)
@@ -328,10 +392,10 @@ export async function saveOfflineSnapshot(
       nextRuns: automation.nextRuns?.slice(0, 5).map((value) => boundedText(value, 256) ?? ""),
     })),
   };
-  const key = await offlineCacheKey(true);
+  const key = await offlineCacheKey(true, context);
   if (!key) return;
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = new TextEncoder().encode(JSON.stringify({ version: 1, userName, data: snapshot }));
+  const plaintext = new TextEncoder().encode(JSON.stringify({ version: 1, userId: context.ownerId, userName, data: snapshot }));
   const encrypted = new Uint8Array(await globalThis.crypto.subtle.encrypt(
     { name: "AES-GCM", iv, additionalData: new TextEncoder().encode("hermes-control/offline-snapshot/v1") },
     key,
@@ -339,20 +403,25 @@ export async function saveOfflineSnapshot(
   ));
   if (encrypted.byteLength > offlineCacheBudgetBytes) return;
   const now = Date.now();
-  await db.offlineSnapshots.put({
-    id: "latest",
-    cipherText: JSON.stringify({ iv: bytesToBase64(iv), data: bytesToBase64(encrypted) }),
-    bytes: encrypted.byteLength,
-    expiresAt: now + transcriptTtlMs,
-    updatedAt: now,
+  await db.transaction("rw", db.offlineSnapshots, db.preferences, async () => {
+    if (!await cacheOwnerMatches(context)) return;
+    await db.offlineSnapshots.put({
+      id: "latest",
+      cipherText: JSON.stringify({ iv: bytesToBase64(iv), data: bytesToBase64(encrypted) }),
+      bytes: encrypted.byteLength,
+      expiresAt: now + transcriptTtlMs,
+      updatedAt: now,
+    });
   });
   await trimTranscriptCache();
 }
 
 export async function loadOfflineSnapshot(): Promise<{
+  userId?: string;
   userName: string;
   data: BootstrapData;
 } | null> {
+  const context = await privateContext();
   const record = await db.offlineSnapshots.get("latest");
   if (!record || record.expiresAt <= Date.now()) {
     if (record) await db.offlineSnapshots.delete("latest");
@@ -373,11 +442,13 @@ export async function loadOfflineSnapshot(): Promise<{
     );
     const parsed = JSON.parse(new TextDecoder().decode(plaintext)) as {
       version: number;
+      userId?: string;
       userName: string;
       data: BootstrapData;
     };
     if (parsed.version !== 1 || !parsed.data || !Array.isArray(parsed.data.sessions)) return null;
-    return { userName: String(parsed.userName || "Administrador"), data: parsed.data };
+    if (!await cacheOwnerMatches(context) || (parsed.userId && parsed.userId !== context.ownerId)) return null;
+    return { userId: parsed.userId ?? context.ownerId, userName: String(parsed.userName || "Administrador"), data: parsed.data };
   } catch {
     await db.offlineSnapshots.delete("latest");
     return null;
@@ -410,7 +481,9 @@ export async function saveShellSnapshot(
   userName: string,
   selectedWorkspaceId?: string,
   selectedSessionId?: string,
+  ownerId?: string,
 ) {
+  const context = await privateContext(ownerId);
   const session = data.sessions.find((item) => item.id === selectedSessionId)
     ?? data.sessions.find((item) => !selectedWorkspaceId || item.workspaceId === selectedWorkspaceId)
     ?? data.sessions[0];
@@ -458,28 +531,33 @@ export async function saveShellSnapshot(
     }] : [],
     automations: [],
   };
-  const key = await shellCacheKey(true);
+  const key = await shellCacheKey(true, context);
   if (!key) return;
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = new TextEncoder().encode(JSON.stringify({ version: 1, userName, data: shell }));
+  const plaintext = new TextEncoder().encode(JSON.stringify({ version: 1, userId: context.ownerId, userName, data: shell }));
   const encrypted = new Uint8Array(await globalThis.crypto.subtle.encrypt(
     { name: "AES-GCM", iv, additionalData: new TextEncoder().encode("hermes-control/offline-shell/v1") },
     key,
     plaintext,
   ));
   const now = Date.now();
-  await db.shellSnapshots.put({
-    id: "latest",
-    cipherText: JSON.stringify({ iv: bytesToBase64(iv), data: bytesToBase64(encrypted) }),
-    expiresAt: now + transcriptTtlMs,
-    updatedAt: now,
+  await db.transaction("rw", db.shellSnapshots, db.preferences, async () => {
+    if (!await cacheOwnerMatches(context)) return;
+    await db.shellSnapshots.put({
+      id: "latest",
+      cipherText: JSON.stringify({ iv: bytesToBase64(iv), data: bytesToBase64(encrypted) }),
+      expiresAt: now + transcriptTtlMs,
+      updatedAt: now,
+    });
   });
 }
 
 export async function loadShellSnapshot(): Promise<{
+  userId?: string;
   userName: string;
   data: BootstrapData;
 } | null> {
+  const context = await privateContext();
   const record = await db.shellSnapshots.get("latest");
   if (!record || record.expiresAt <= Date.now()) {
     if (record) await db.shellSnapshots.delete("latest");
@@ -500,11 +578,13 @@ export async function loadShellSnapshot(): Promise<{
     );
     const parsed = JSON.parse(new TextDecoder().decode(plaintext)) as {
       version: number;
+      userId?: string;
       userName: string;
       data: BootstrapData;
     };
     if (parsed.version !== 1 || !parsed.data || !Array.isArray(parsed.data.sessions)) return null;
-    return { userName: String(parsed.userName || "Administrador"), data: parsed.data };
+    if (!await cacheOwnerMatches(context) || (parsed.userId && parsed.userId !== context.ownerId)) return null;
+    return { userId: parsed.userId ?? context.ownerId, userName: String(parsed.userName || "Administrador"), data: parsed.data };
   } catch {
     await db.shellSnapshots.delete("latest");
     return null;

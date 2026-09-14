@@ -41,8 +41,9 @@ describe("draft loading across sessions", () => {
     expect(composer).toHaveValue("Borrador B");
   });
 
-  it("starts persisting a draft before an immediate page teardown can discard it", () => {
-    const put = vi.spyOn(db.drafts, "put").mockResolvedValue("session-papers");
+  it("starts persisting a draft before an immediate page teardown can discard it", async () => {
+    await db.drafts.delete("session-papers");
+    const put = vi.spyOn(db.drafts, "put");
     const { unmount } = render(<ChatView />);
     const composer = screen.getByRole("textbox", { name: /Mensaje a/i });
 
@@ -53,5 +54,9 @@ describe("draft loading across sessions", () => {
       content: "Borrador antes de recargar",
     }));
     unmount();
+    await waitFor(async () => expect(await db.drafts.get("session-papers")).toEqual(expect.objectContaining({
+      sessionId: "session-papers",
+      content: "Borrador antes de recargar",
+    })));
   });
 });

@@ -15,6 +15,12 @@ class Base(DeclarativeBase):
 
 def build_engine(settings: Settings):
     kwargs: dict = {"pool_pre_ping": True}
+    if settings.deployment_mode == "cloud" and settings.database_url.startswith("postgresql"):
+        # HTTP admission is capped at 20 before authentication. Keep room for
+        # nested request sessions, connector replies, probes and supervisors.
+        # A synchronous checkout must NEVER wait on the event loop: the holder
+        # may itself be awaiting a connector reply or dependency cleanup there.
+        kwargs.update(pool_size=64, max_overflow=0, pool_timeout=0)
     if settings.database_url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}
         if settings.database_url in {"sqlite://", "sqlite:///:memory:"}:

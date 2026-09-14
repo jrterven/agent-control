@@ -30,7 +30,9 @@ describe("browser security state", () => {
     vi.stubGlobal("crypto", webcrypto);
     await db.delete();
     await db.open();
+    vi.spyOn(api, "authMethods").mockResolvedValue({ mode: "private", googleEnabled: false });
     useAppStore.setState({
+      userId: undefined,
       authState: "checking",
       demoMode: false,
       csrfToken: undefined,
@@ -80,7 +82,7 @@ describe("browser security state", () => {
   });
 
   it("probes Control while offline and forces a fresh bootstrap after recovery", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     useAppStore.setState({
       authState: "offline",
       bootstrapLoaded: true,
@@ -91,6 +93,7 @@ describe("browser security state", () => {
     render(<AuthProbe />);
 
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    await vi.waitFor(() => expect(useAppStore.getState().authState).toBe("authenticated"));
 
     expect(me).toHaveBeenCalledTimes(1);
     expect(useAppStore.getState().authState).toBe("authenticated");
