@@ -1,0 +1,81 @@
+name: agent-control-cloud
+
+services:
+  edge:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      AGENT_CONTROL_DOMAIN: ${AGENT_CONTROL_DOMAIN:?Set the public DNS hostname}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${AGENT_CONTROL_DOWNLOADS_DIR:-/var/lib/agent-control/downloads}:/srv/downloads:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [frontend]
+    depends_on:
+      control:
+        condition: service_healthy
+    security_opt: [no-new-privileges:true]
+
+  control:
+    image: ${HERMES_CONTROL_IMAGE:?Set an immutable image digest}
+    restart: unless-stopped
+    env_file:
+      - ${AGENT_CONTROL_ENV_FILE:-/etc/agent-control/cloud.env}
+    environment:
+      HERMES_CONTROL_DEPLOYMENT_MODE: cloud
+      HERMES_CONTROL_DATA_DIR: /var/lib/hermes-control
+      HERMES_CONTROL_CREATE_SCHEMA_ON_START: "false"
+      HERMES_CONTROL_TRUST_PRIVATE_ENDPOINTS: "false"
+      HERMES_CONTROL_SECURE_COOKIES: "true"
+      HERMES_CONTROL_PROVIDER_MODE: real
+      HERMES_CONTROL_MOCK_FALLBACK_ENABLED: "false"
+    # No host port: only Caddy can reach the HTTP listener. Caddy replaces
+    # client-supplied forwarded headers before proxying to this private link.
+    command: [hermes_control_api.main:app, --app-dir, apps/api, --host, "0.0.0.0", --port, "8000", --workers, "1", --no-access-log, --proxy-headers, --forwarded-allow-ips, "*", --ws-max-size, "262144"]
+    volumes:
+      - control_data:/var/lib/hermes-control
+    read_only: true
+    tmpfs: [/tmp:rw,noexec,nosuid,nodev,size=64m]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [frontend, database]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: agent_control
+      POSTGRES_USER: agent_control
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [database]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U agent_control -d agent_control"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    security_opt: [no-new-privileges:true]
+
+secrets:
+  postgres_password:
+    file: ${AGENT_CONTROL_POSTGRES_PASSWORD_FILE:-/etc/agent-control/postgres-password}
+
+networks:
+  frontend:
+  database:
+    internal: true
+
+volumes:
+  caddy_data:
+  caddy_config:
+  control_data:
+  postgres_data:

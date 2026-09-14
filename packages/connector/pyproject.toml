@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-control-connector"
+version = "0.1.0"
+description = "Outbound-only personal Hermes connector for Agent Control"
+requires-python = ">=3.12,<3.15"
+dependencies = ["hermes-control-client>=0.1.0", "httpx>=0.28,<1", "websockets>=14,<17"]
+
+[project.scripts]
+agent-control-connector = "agent_control_connector.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_control_connector"]

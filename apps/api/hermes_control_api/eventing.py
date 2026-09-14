@@ -643,7 +643,7 @@ class EventHub:
         subscription.queued_bytes = max(0, subscription.queued_bytes - size)
         return payload
 
-    async def publish(self, event: NormalizedEvent) -> None:
+    async def publish(self, event: NormalizedEvent, *, recipient_user_id: str | None = None) -> None:
         identities = (
             event.gateway_id,
             event.profile_name,
@@ -722,6 +722,10 @@ class EventHub:
         async with self._lock:
             subscriptions = tuple(self._subscriptions)
         for subscription in subscriptions:
+            # Cloud fanout is scoped before queueing, so a foreign account's
+            # traffic cannot disclose data or consume this user's queue.
+            if recipient_user_id is not None and subscription.user_id != recipient_user_id:
+                continue
             dropped = False
             while subscription.queue.full() or (
                 subscription.queued_bytes + payload_size > subscription.max_queue_bytes

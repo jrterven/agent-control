@@ -44,6 +44,23 @@ describe("browser API boundary", () => {
     expect(init.credentials).toBe("same-origin");
   });
 
+  it("protects connector pairing and revocation with same-origin CSRF and idempotency", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } })));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.inspectConnectorPairing("ABCD-EFGH", "csrf-memory-only");
+    await api.approveConnectorPairing("ABCD-EFGH", ["research"], "csrf-memory-only");
+    await api.revokeConnector("computer/private", "csrf-memory-only");
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      "/api/v1/connectors/pair/inspect", "/api/v1/connectors/pair/approve", "/api/v1/connectors/computer%2Fprivate",
+    ]);
+    for (const [, init] of fetchMock.mock.calls as [string, RequestInit][]) {
+      expect(init.credentials).toBe("same-origin");
+      expect(init.headers).toEqual(expect.objectContaining({ "X-CSRF-Token": "csrf-memory-only", "Idempotency-Key": expect.any(String) }));
+    }
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ code: "ABCD-EFGH", profiles: ["research"] });
+    expect(fetchMock.mock.calls[2][1].method).toBe("DELETE");
+  });
+
   it("uploads prompt attachments as browser-owned multipart data", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ operationId: "op-files", status: "accepted" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);

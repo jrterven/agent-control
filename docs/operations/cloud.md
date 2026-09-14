@@ -1,0 +1,204 @@
+# Public cloud beta
+
+Agent Control supports a separate, invitation-only cloud deployment. The existing
+private installation keeps its own users, database, secrets and Tailscale origin.
+The cloud does not seed an environment gateway or initiate direct connections to
+user-supplied URLs. See [ADR 0009](../adr/0009-public-cloud-personal-connectors.md).
+
+## First deployment
+
+Prerequisites: a confirmed Linux server with Docker Compose, util-linux (`flock`), a DNS hostname,
+inbound 80/443 for Caddy, outbound HTTPS, persistent storage, off-host backups,
+and a Google OAuth web application. Only Caddy publishes host ports; PostgreSQL
+and the API stay on private container networks. Start with no more than 20 beta
+accounts and measure capacity before increasing scope. One API worker is required.
+
+1. Build and test the committed revision. The manually triggered **Cloud and
+   connector release** GitHub Actions workflow runs the test/build suite,
+   builds native Intel/ARM Linux/macOS packages and records the cloud image digest.
+2. Configure Google with the exact redirect URI
+   `https://YOUR_DOMAIN/api/v1/auth/google/callback`; request only identity scopes.
+   No external Google mailbox or Drive access is requested.
+3. Place `deploy/cloud/cloud.env.example` outside the checkout as
+   `/etc/agent-control/cloud.env` (mode 0600). Fill in the public origin, matching
+   allowed origin, Google client credentials, independent random 32-byte vault
+   key and PostgreSQL URL. The PostgreSQL password must match the separate
+   `/etc/agent-control/postgres-password` file, also mode 0600. Percent-encode
+   URL password characters. Keep vault-key recovery separate from DB backups.
+4. Place `compose.env.example` as `/etc/agent-control/compose.env`. Set the domain,
+   file paths and the tested image **digest**, never `latest`. Prepare the
+   downloads and private backup directories. Check existing services and disk
+   capacity; do not reuse a port or overwrite another application's deployment.
+5. From this release's `deploy/cloud` directory, run:
+
+   ```bash
+   docker compose --env-file /etc/agent-control/compose.env -f compose.yml up -d --wait
+   python3 verify.py https://YOUR_DOMAIN
+   ```
+
+   The API entrypoint applies Alembic before serving. Cloud readiness describes
+   database and API background supervision; sleeping users' computers do not
+   make the service globally unready. Verification checks health/readiness and
+   the actual PWA HTML, manifest, icons, JS/CSS and service worker over HTTPS.
+6. Create an invitation using the installed CLI, then let that person sign in:
+
+   ```bash
+   docker compose --env-file /etc/agent-control/compose.env -f compose.yml exec control \
+     /opt/venv/bin/hermes-control-admin invite --email person@example.com
+   ```
+
+   Invitations expire after 14 days by default. The CLI and enrollment serialize
+   their PostgreSQL transactions to enforce the beta cap. Explicitly grant an
+   accepted operator identity platform administration with
+   `hermes-control-admin grant-platform-admin --email person@example.com`.
+   Invitations do not send email; distribute the public URL through your normal
+   invitation process.
+
+## Signed connector downloads
+
+CI builds four unsigned native archives and the cloud image; it does not receive
+the release signing key. Download all four `connector-*` artifacts from the
+successful run and sign them on the operator's trusted computer. Keep the PEM
+RSA private key at `~/.config/agent-control-release/connector-signing.pem` with
+mode 0600 and retain its offline backup outside the repository and DB backups.
+No signing key is generated or committed by the build scripts.
+
+```bash
+gh run download RUN_ID --pattern 'connector-*' --dir /ABSOLUTE_RELEASE_DIR/native
+python3 deploy/connector/prepare_release.py \
+  --artifacts /ABSOLUTE_RELEASE_DIR/native \
+  --output /ABSOLUTE_RELEASE_DIR/downloads \
+  --revision COMMITTED_REVISION \
+  --private-key ~/.config/agent-control-release/connector-signing.pem
+```
+
+Use the exact Git revision from that successful workflow run. The local signing
+command requires Python 3.12 or later and OpenSSL. It inserts the public key into
+the installer and each immutable native archive, verifies all four signed
+archives and refuses an incomplete or overwritten release. The private key
+stays on the signing computer.
+
+Copy the resulting `downloads` directory contents into the configured server
+downloads directory, preserving `connector/releases/<revision>`.
+Publish the immutable release directory first, then atomically replace the
+installer and `VERSION` pointer. Never publish the installer template containing
+`__CONNECTOR_RELEASE_PUBLIC_KEY__`. Caddy serves these at
+`/downloads/connector/`; it does not list directories.
+
+The web's **Connect a computer** command downloads and verifies the correct
+native package without requiring Node, Python installation or compilation.
+The connector detects a clean, audited Hermes checkout and an authenticated
+loopback dashboard on port 9119. An existing Hermes token is read from local
+configuration or requested through a hidden terminal prompt; it never goes to
+cloud. Nonstandard installations can use the runtime `connect --help` flags.
+The connector does not install Hermes or silently trust a different revision.
+
+After browser review, only selected profiles are shared. Explicit creation of a
+new agent may add that new profile; an existing unshared profile is never
+adopted by that operation. A revoked computer must be paired again with a new
+identity. Revocation blocks future operations; it cannot undo an action Hermes
+has already accepted.
+
+Files live under `~/.agent-control-connector`; credentials use Keychain on macOS
+and a protected local file on Linux. macOS LaunchAgents run only while the user
+is logged in and awake. Linux uses a user systemd service with lingering; setup
+must succeed before installation is reported as complete.
+
+```bash
+agent-control-connector doctor
+agent-control-connector status
+agent-control-connector update --release COMMITTED_REVISION
+agent-control-connector rollback
+agent-control-connector uninstall
+```
+
+Lifecycle commands refuse active or uncertain work. Updates verify signed
+metadata, retain previous releases and restore the previous binary if the new
+connection fails readiness. Uninstall removes the connector service while
+preserving configuration and Hermes data; revoke its cloud entry separately.
+Run `agent-control-connector install-service` to restore a previously removed
+service with its existing pairing. To pair a revoked computer again, run
+`agent-control-connector uninstall --forget` and repeat the guided installer.
+The explicit `--forget` removes the local device credential and pairing after
+the runtime has stopped; it preserves Hermes data and operation deduplication.
+
+## Updates, recovery and monitoring
+
+Run `deploy/cloud/backup.sh /etc/agent-control/compose.env /ABSOLUTE_BACKUP_DIR`
+daily and before every deployment. It creates a private PostgreSQL custom-format
+dump, restores it to an isolated database and verifies the schema before
+publishing the backup. Copy verified backups off-host; use a 30-day retention
+policy and keep the vault key separately. Configure the scheduler on the
+confirmed server, then verify an actual scheduled execution.
+
+For an existing cloud installation, run:
+
+```bash
+bash deploy/cloud/release.sh /etc/agent-control/compose.env \
+  ghcr.io/jrterven/agent-control@sha256:TESTED_DIGEST /ABSOLUTE_BACKUP_DIR
+```
+
+The release command takes an exclusive per-configuration lock, drains HTTP mutations, checks fresh agent inventories,
+backs up/restores PostgreSQL, migrates an isolated restored database with the
+new image and compares existing row counts. It checks fresh agent inventories
+again immediately before changing the active image, because work may start on
+the users' computers while the backup and migration rehearsal run.
+It preserves the previous Compose file and validates the public PWA afterward.
+An active or uncertain operation blocks cutover. A failed preflight resumes
+the current API. A post-cutover failure is a failed deployment: inspect it and
+use the retained image/backup according to schema compatibility; do not claim
+completion or blindly downgrade the live database. Keep the old release checkout
+available with its Caddy/Compose files as well as the previous image digest.
+
+For rollback, pause incoming requests, stop Control, retain a fresh copy of the
+failed database and confirm whether the previous binary supports its schema.
+If not, restore the validated pre-release dump into a separate database, select
+that database and the preceding image, then verify before resuming. Never run
+`pg_restore --clean` against the running production database or issue an
+unreviewed Alembic downgrade. Hermes runtimes stay separate.
+
+An operator can inspect aggregate metrics with
+`python -m hermes_control_api.cloud_operations status` inside the API container.
+The CLI issues a temporary local session and revokes it afterwards. Metrics
+contain route-template request counts, errors, cumulative durations, connector
+availability and pending operation counts; no transcript, path identifiers,
+query values or secrets. Use `drain` and `resume` for explicit maintenance.
+Monitor public readiness externally and alert on sustained failure, backup
+failure, disk pressure or increasing error rate; an individual sleeping laptop
+is normal and does not page the platform operator.
+
+## Data handling and retention
+
+The cloud processes conversations and files in transit; this beta does not
+provide end-to-end encryption. Hermes keeps the main conversation history on
+the user's computer and its credentials stay there. Some features also retain
+data in Control, as listed below. Encryption of stored payloads uses the cloud
+vault key and does not prevent the service from reading them when needed.
+
+| Data | Location and current retention |
+| --- | --- |
+| Accounts, external identities, invitations, computers, gateways, profiles, session metadata and audit records | PostgreSQL. Retained until explicit deletion or operator cleanup; there is no automatic account-deletion interface or general age-based cleanup policy. Revoking a computer blocks access but does not delete its records. |
+| Live voice transcripts (`LiveTranscript`) | Encrypted in PostgreSQL and retained until the associated conversation is deleted. These are persisted transcripts, not just data in transit. |
+| Email reference cache | Encrypted in PostgreSQL with a fixed seven-day TTL and at most 512 entries per session. Access does not extend the TTL. Expired records are removed lazily during cache operations, so physical deletion can occur after expiry. |
+| Conversation event replay buffers | Memory only, limited to 32 MiB across routes and 2 MiB per route, with an additional cap of at most 512 events per route. Entries are evicted under pressure and disappear on restart. These buffers are not a durable full conversation archive; persisted live voice transcripts remain subject to the separate rule above. |
+| Google authorization flows | Valid for ten minutes, consumed once. A subsequent authorization start removes expired flow records. |
+| Device pairing requests | Valid for ten minutes and cannot be reused. New device authorization requests prune records that expired more than one hour earlier; expiry blocks authorization even before physical cleanup. |
+| Cloud idempotency records | Durable operation deduplication records in PostgreSQL. They have no automatic expiration policy; a client retry must not be treated as a new operation merely because time has passed. |
+| Connector operation ledger | Stored locally to preserve operation identity across restarts. Retained receipts are bounded to 64 KiB each and 64 MiB in total, with a 128 MiB database file limit. These size limits do not establish an age-based expiration or permit automatic retry of uncertain operations. |
+| Browser drafts and conversation snapshots | Stored locally in that browser until cleared by the application or user. Logging in on another device does not itself remove these local copies. |
+| Database backups | Include persisted cloud records. The deployment policy is 30 days, but the operator must configure the backup scheduler, off-host copy and expiry on the actual server, then verify they run. Neither this document nor the backup command installs that schedule. Deleted live data can remain in retained backups until those backups expire. |
+
+Before opening the beta, publish this retention policy to invited users and
+provide an operator contact for deletion requests. An operator must separately
+handle the cloud records, browser copies under the user's control and backup
+retention; cloud cleanup does not delete Hermes history on the user's computer.
+
+## Validation
+
+`make test build` includes private-mode regressions, cloud authorization and
+connector protocol/lifecycle tests. `npm run test:e2e -- cloud-onboarding.spec.ts`
+exercises Google redirect, profile review, revocation and the empty state in
+mobile/desktop Chromium, WebKit and Firefox configurations. Google is mocked in
+automated tests; verify a real invited Google sign-in against the configured
+public origin before inviting external users. Use only isolated test agents
+for mutation checks; never send test prompts or reset personal agents.

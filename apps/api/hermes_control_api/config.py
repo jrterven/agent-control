@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     )
 
     environment: Literal["development", "test", "production"] = "development"
+    deployment_mode: Literal["private", "cloud"] = "private"
+    public_base_url: str | None = None
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    beta_max_users: int = Field(default=20, ge=1, le=20)
+    cloud_rate_limit_per_ip: int = Field(default=600, ge=30, le=6000)
+    cloud_rate_limit_per_user: int = Field(default=300, ge=30, le=3000)
     app_name: str = "Agent Control"
     database_url: str = "sqlite:///./hermes-control.db"
     static_dir: str | None = None
@@ -155,6 +162,29 @@ class Settings(BaseSettings):
         if "\x00" in normalized or "\n" in normalized or "\r" in normalized:
             raise ValueError("Hermes media root contains invalid characters")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_cloud_configuration(self) -> "Settings":
+        if self.deployment_mode == "cloud":
+            from urllib.parse import urlsplit
+            if not self.public_base_url:
+                raise ValueError("Cloud mode requires PUBLIC_BASE_URL")
+            origin = urlsplit(self.public_base_url)
+            if (origin.scheme != "https" or not origin.hostname or origin.username
+                or origin.password or origin.query or origin.fragment
+                or origin.path not in {"", "/"}):
+                raise ValueError("PUBLIC_BASE_URL must be an HTTPS origin")
+            self.public_base_url = self.public_base_url.rstrip("/")
+            if self.environment != "test" and not self.database_url.startswith(("postgresql://", "postgresql+psycopg://")):
+                raise ValueError("Cloud mode requires PostgreSQL")
+            if self.environment == "production" and not (self.google_client_id and self.google_client_secret):
+                raise ValueError("Production cloud requires Google OIDC credentials")
+            self.trust_private_endpoints = False
+            # Cloud authorization is the selected connector profile list; the
+            # private installation operator allowlist does not apply.
+            self.mutable_profiles = ["*"]
+            self.interactive_profiles = ["*"]
+        return self
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":

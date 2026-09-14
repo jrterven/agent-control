@@ -19,7 +19,8 @@ def build_engine(settings: Settings):
         kwargs["connect_args"] = {"check_same_thread": False}
         if settings.database_url in {"sqlite://", "sqlite:///:memory:"}:
             kwargs["poolclass"] = StaticPool
-    engine = create_engine(settings.database_url, **kwargs)
+    database_url = settings.database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    engine = create_engine(database_url, **kwargs)
     if settings.database_url.startswith("sqlite"):
         @event.listens_for(engine, "connect")
         def set_sqlite_pragmas(dbapi_connection, connection_record):

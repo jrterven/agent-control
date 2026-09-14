@@ -1,5 +1,31 @@
 export type ConnectionState = "connected" | "connecting" | "reconnecting" | "degraded" | "offline";
 
+export interface AuthMethods {
+  mode: "private" | "cloud";
+  googleEnabled: boolean;
+}
+
+export interface ConnectorView {
+  id: string;
+  name: string;
+  status: "online" | "offline" | "revoked";
+  version: string | null;
+  lastSeenAt: string | null;
+  profiles: string[];
+}
+
+export interface ConnectorList {
+  items: ConnectorView[];
+  installCommand: string;
+}
+
+export interface ConnectorPairing {
+  code: string;
+  name: string;
+  profiles: string[];
+  expiresAt: string;
+}
+
 export interface SessionRoute {
   gatewayId: string;
   profileName: string;

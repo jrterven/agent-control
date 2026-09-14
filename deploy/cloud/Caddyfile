@@ -1,0 +1,17 @@
+{$AGENT_CONTROL_DOMAIN} {
+    encode zstd gzip
+    header Strict-Transport-Security "max-age=31536000"
+    # Deliberately no access-log directive: OAuth/device codes and query
+    # strings must not enter an edge log.
+    handle_path /downloads/connector/* {
+        root * /srv/downloads/connector
+        header X-Content-Type-Options nosniff
+        header Cache-Control "no-cache"
+        file_server
+    }
+    handle {
+        reverse_proxy control:8000 {
+            stream_close_delay 5m
+        }
+    }
+}

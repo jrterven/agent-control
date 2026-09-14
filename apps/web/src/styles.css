@@ -1119,3 +1119,29 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .live-transcript__save { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; font-size: 12px; }
 .live-transcript__history { display: flex; justify-content: center; }
 .live-transcript__latest { align-self: center; margin: 4px 0; }
+
+/* The hosted onboarding uses the same panels and controls as private installs. */
+.cloud-page > p { color: var(--text-soft); line-height: 1.6; }
+.cloud-privacy { color: var(--text-soft); line-height: 1.6; font-size: 13px; }
+.cloud-privacy > svg { vertical-align: middle; flex-shrink: 0; }
+.cloud-login { display: grid; gap: 16px; }
+.cloud-empty-state { padding: 36px 24px; align-self: center; max-width: 620px; margin: auto; }
+.cloud-empty-state > svg { color: var(--accent); }
+.cloud-empty-state .hc-button { gap: 10px; }
+.cloud-empty-state .cloud-privacy { margin-top: 24px; }
+.connector-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 20px; margin-top: 20px; }
+.connector-command { padding: 16px; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; font-size: 12px; line-height: 1.6; user-select: all; }
+.connector-pairing form { display: grid; gap: 16px; }
+.connector-review { display: grid; gap: 16px; min-width: 0; }
+.connector-review h3 { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.connector-review fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; min-width: 0; }
+.connector-review legend { padding: 0 6px; color: var(--text-soft); }
+.connector-profile { display: flex; align-items: center; gap: 12px; min-height: 44px; cursor: pointer; overflow-wrap: anywhere; }
+.connector-profile input { width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--accent); }
+.connector-card dl { margin: 0; display: grid; gap: 12px; }
+.connector-card dl > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.connector-card dt { color: var(--muted); }
+.connector-card dd { margin: 0; overflow-wrap: anywhere; }
+.connector-profiles { display: flex; flex-wrap: wrap; gap: 8px; }
+.connector-revoke { display: flex; flex-wrap: wrap; gap: 12px; }
+.connector-revoke p { flex-basis: 100%; }

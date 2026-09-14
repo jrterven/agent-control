@@ -166,8 +166,9 @@ class AudioMediaMarker:
 @dataclass(frozen=True)
 class SessionMediaAsset:
     media_id: str
-    path: Path
+    path: Path | None
     media_type: str
+    content: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -260,7 +261,7 @@ def mutation_allowed_for_profile(
 ) -> bool:
     if capability not in UPSTREAM_MUTATION_CAPABILITIES:
         return True
-    if managed_by_control or profile_name in mutable_profiles:
+    if managed_by_control or "*" in mutable_profiles or profile_name in mutable_profiles:
         return True
     return (
         capability in INTERACTIVE_MUTATION_CAPABILITIES
@@ -579,6 +580,8 @@ async def require_capability(
             ProfileRef.profile_name == profile_name,
         )
     )
+    if services.settings.deployment_mode == "cloud" and profile is None:
+        raise NotFoundError("Profile not found")
     require_mutable_profile(
         profile_name,
         method,
@@ -678,14 +681,18 @@ class GatewayService:
     def __init__(self, services: AppServices) -> None:
         self.services = services
 
-    def seed_environment_gateway(self, db: Session) -> Gateway:
+    def seed_environment_gateway(self, db: Session) -> Gateway | None:
         settings = self.services.settings
+        if settings.deployment_mode == "cloud":
+            return None
+        owner = db.scalar(select(User).where(User.is_admin.is_(True)).order_by(User.created_at, User.id))
         configured_dashboard_token = settings.hermes_dashboard_token or None
         configured_api_key = settings.hermes_api_key or None
         gateway = db.scalar(select(Gateway).where(Gateway.env_managed.is_(True)))
         configuration_changed = False
         if gateway is None:
             gateway = Gateway(
+                owner_id=owner.id if owner else None,
                 name=settings.default_gateway_name,
                 rest_url=settings.hermes_dashboard_url,
                 ws_url=settings.hermes_dashboard_ws,
@@ -716,6 +723,8 @@ class GatewayService:
                 # Scrub values written by older releases. A successful probe
                 # will restore the same value only if Hermes itself reports it.
                 gateway.source_sha = None
+        if gateway.owner_id is None and owner is not None:
+            gateway.owner_id = owner.id
         credential = db.scalar(
             select(GatewayCredential).where(GatewayCredential.gateway_id == gateway.id)
         )
@@ -814,6 +823,8 @@ class GatewayService:
         return gateway
 
     async def create(self, db: Session, actor: User, payload: GatewayCreate) -> Gateway:
+        if self.services.settings.deployment_mode == "cloud":
+            raise ConflictError("Connect an equipment with the personal connector")
         await validate_endpoint(
             payload.rest_url,
             self._policy(payload.connection_mode, frozenset({"http", "https"})),
@@ -828,6 +839,7 @@ class GatewayService:
                 self._policy(payload.connection_mode, frozenset({"http", "https"})),
             )
         gateway = Gateway(
+            owner_id=actor.id,
             name=payload.name,
             rest_url=payload.rest_url.rstrip("/"),
             ws_url=payload.ws_url,
@@ -871,6 +883,8 @@ class GatewayService:
     async def _update_unlocked(
         self, db: Session, actor: User, gateway: Gateway, payload: GatewayUpdate
     ) -> Gateway:
+        if self.services.settings.deployment_mode == "cloud":
+            raise ConflictError("Manage connector equipment through My equipment")
         if gateway.env_managed:
             raise ConflictError("Environment-managed gateway is read-only")
         values = payload.model_dump(exclude_unset=True)
@@ -949,6 +963,12 @@ class GatewayService:
         gateway = db.get(Gateway, gateway_id)
         if gateway is None or not gateway.enabled:
             raise NotFoundError("Gateway not found or disabled")
+        if gateway.transport_kind == "connector":
+            return ProviderConnection(gateway_id=gateway.id, profile_name=profile_name,
+                                      rest_url=f"connector://{gateway.id}", ws_url=f"connector://{gateway.id}",
+                                      trusted_source_sha=trusted_gateway_source_sha(db, self.services, gateway.id))
+        if self.services.settings.deployment_mode == "cloud":
+            raise NotFoundError("Direct gateways are unavailable in cloud mode")
         rest_endpoint = await resolve_endpoint(
             gateway.rest_url,
             self._policy(gateway.connection_mode, frozenset({"http", "https"})),
@@ -1148,12 +1168,26 @@ class ProfileService:
         *,
         pending_managed_profiles: frozenset[str] = frozenset(),
     ) -> list[ProfileRef]:
+        gateway = db.get(Gateway, gateway_id)
+        approved_profiles = None
+        if gateway is not None and gateway.transport_kind == "connector":
+            from .connector_models import Connector
+            connector = db.scalar(select(Connector).where(
+                Connector.gateway_id == gateway_id, Connector.revoked_at.is_(None),
+            ))
+            if connector is None or not connector.profiles:
+                raise NotFoundError("Connector profiles were not found")
+            approved_profiles = frozenset(connector.profiles)
+            if profile_name not in approved_profiles:
+                profile_name = connector.profiles[0]
         discovery_connection = await self.gateway_service.connection(
             db, gateway_id, profile_name
         )
         discovery_provider = await self.services.provider_pool.get(discovery_connection)
         discovered = await authoritative_provider_read(discovery_provider, "list_profiles")
         profiles = list({profile.name: profile for profile in discovered}.values())
+        if approved_profiles is not None:
+            profiles = [profile for profile in profiles if profile.name in approved_profiles]
         now = utc_now()
         gateway = db.get(Gateway, gateway_id)
         managed_profiles = set(
@@ -3364,6 +3398,21 @@ class SessionService:
             # permissive history sanitizer expose their body text or source URL.
             safe_item.pop("emailReferences", None)
             safe_item.pop("email_references", None)
+            safe_item.pop("controlMedia", None)
+            if gateway is not None and gateway.transport_kind == "connector" and raw_item.get("role") == "assistant":
+                media = raw_item.get("controlMedia")
+                if isinstance(media, list):
+                    safe_media = [
+                        {"id": item["id"], "kind": "audio", "mediaType": item["mediaType"]}
+                        for item in media[:16]
+                        if isinstance(item, dict)
+                        and isinstance(item.get("id"), str)
+                        and _SAFE_MEDIA_ID.fullmatch(item["id"])
+                        and item.get("kind") == "audio"
+                        and item.get("mediaType") in _AUDIO_MEDIA_TYPES.values()
+                    ]
+                    if safe_media:
+                        safe_item["controlMedia"] = safe_media
             content_key = (
                 "content" if isinstance(raw_item.get("content"), str)
                 else "text" if isinstance(raw_item.get("text"), str)
@@ -3658,6 +3707,21 @@ class SessionService:
         if not _SAFE_MEDIA_ID.fullmatch(media_id):
             raise NotFoundError("Voice note not found")
         gateway = db.get(Gateway, row.gateway_id)
+        if gateway is not None and gateway.transport_kind == "connector":
+            if row.owner_id != actor.id or gateway.owner_id != actor.id or not gateway.enabled:
+                raise NotFoundError("Voice note not found")
+            connection = await self.gateways.connection(db, row.gateway_id, row.profile_name)
+            provider = await self.services.provider_pool.get(connection)
+            try:
+                result = await provider.media(row.stored_session_id, media_id)
+            except LookupError:
+                raise NotFoundError("Voice note not found") from None
+            content = result.get("content") if isinstance(result, dict) else None
+            media_type = result.get("media_type") if isinstance(result, dict) else None
+            if (not isinstance(content, bytes) or not 0 < len(content) <= self.services.settings.hermes_media_max_bytes
+                    or media_type not in _AUDIO_MEDIA_TYPES.values()):
+                raise NotFoundError("Voice note not found")
+            return SessionMediaAsset(media_id=media_id, path=None, media_type=media_type, content=content)
         if gateway is None or not gateway.env_managed:
             raise NotFoundError("Voice note not found")
         history = await self._raw_history(db, row)

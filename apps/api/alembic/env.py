@@ -13,7 +13,7 @@ from hermes_control_api import models  # noqa: F401
 config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("postgresql://", "postgresql+psycopg://", 1).replace("%", "%%"))
 target_metadata = Base.metadata
 
 

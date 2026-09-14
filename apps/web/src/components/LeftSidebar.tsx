@@ -11,9 +11,11 @@ import { useAppStore } from "../store/appStore";
 import { BrandMark } from "./BrandMark";
 import { ProfileAvatar } from "./ProfileAvatar";
 import type { SessionSummary, Workspace } from "../types";
+import { useCloudConfigurationStore } from "../lib/cloud";
 
 export function LeftSidebar() {
   const { t, i18n } = useTranslation();
+  const cloud = useCloudConfigurationStore((state) => state.methods?.mode === "cloud");
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const open = useAppStore((state) => state.leftDrawerOpen);
   const close = useAppStore((state) => state.setLeftDrawerOpen);
@@ -355,7 +357,7 @@ export function LeftSidebar() {
         {gatewayMenuOpen ? (
           <div className="gateway-popover">
             {gateways.map((item) => <button type="button" key={item.id} onClick={() => useAppStore.getState().selectGateway(item.id)}><StatusDot tone={item.status === "connected" ? "positive" : "warning"} /><span><strong>{item.name}</strong><small>{item.latencyMs} ms · {item.version}</small></span></button>)}
-            <Link to="/gateways"><Plus size={16} /> {t("sidebar.manageGateways")}</Link>
+            <Link to={cloud ? "/computers" : "/gateways"}><Plus size={16} /> {t(cloud ? "cloud.title" : "sidebar.manageGateways")}</Link>
           </div>
         ) : null}
 

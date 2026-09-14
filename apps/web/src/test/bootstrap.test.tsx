@@ -1,6 +1,7 @@
 import { render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useBootstrapData } from "../hooks";
+import { applyRealtimeEvent, useBootstrapData } from "../hooks";
+import { useCloudConfigurationStore } from "../lib/cloud";
 import { api } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 import type { BootstrapData, Gateway, Profile, SessionSummary } from "../types";
@@ -38,7 +39,33 @@ describe("fresh bootstrap", () => {
     });
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useCloudConfigurationStore.setState({ methods: undefined, error: false, loading: false });
+  });
+
+  it("refreshes verified capabilities after a paired connector reconnects without replaying a prompt", async () => {
+    useCloudConfigurationStore.setState({ methods: { mode: "cloud", googleEnabled: true } });
+    let projection = data("offline");
+    vi.spyOn(api, "bootstrap").mockImplementation(async () => projection);
+    const refresh = vi.spyOn(api, "refreshProfiles").mockResolvedValue([]);
+    vi.spyOn(api, "syncSessions").mockResolvedValue([]);
+    vi.spyOn(api, "syncAutomations").mockResolvedValue([]);
+    const prompt = vi.spyOn(api, "submitPrompt");
+    render(<BootstrapProbe />);
+    await waitFor(() => expect(api.bootstrap).toHaveBeenCalledTimes(3));
+    expect(useAppStore.getState().profiles[0].mutable).toBe(false);
+    refresh.mockClear();
+    projection = { ...data("connected"), profiles: [{ ...profile, mutable: true, capabilities: gateway("connected").capabilities }] };
+
+    expect(applyRealtimeEvent({ type: "control.reconcile", gatewayId: "gateway-a", profileName: "default", data: { historyRequired: true, reason: "connector_reconnected" } })).toBe(true);
+
+    await waitFor(() => expect(useAppStore.getState().profiles[0].mutable).toBe(true));
+    expect(refresh).toHaveBeenCalledWith("gateway-a", "csrf-memory-only");
+    expect(useAppStore.getState().profiles[0].capabilities?.prompts).toBe(true);
+    expect(useAppStore.getState().connection).toBe("connected");
+    expect(prompt).not.toHaveBeenCalled();
+  });
 
   it("renders the stored projection without waiting for a sleeping gateway", async () => {
     vi.spyOn(api, "bootstrap").mockResolvedValue(data("offline", [synchronizedSession]));

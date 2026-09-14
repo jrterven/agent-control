@@ -47,6 +47,8 @@ same-origin APIs and normalized realtime events.
 
 ## Documentation
 
+- [Public cloud beta](docs/operations/cloud.md): invitation-only Google login,
+  personal Linux/macOS connectors, signed downloads and isolated cloud deployment.
 - [User guide](docs/user-guide.md): concepts, everyday workflows, mobile use,
   dictation, spoken responses, language settings and troubleshooting.
 - [Architecture](docs/architecture.md): trust boundaries, provider adapters,
@@ -134,10 +136,15 @@ to the exact `control-dev` profile. See
 
 ## Production model
 
-Production keeps Hermes on loopback and exposes only Agent Control through
+The private production mode keeps Hermes on loopback and exposes only Agent Control through
 Tailscale Serve. Agent Control and Hermes run as separate services. This
 repository never vendors, patches or replaces Hermes, and never edits its
 internals, profiles, state databases or source code directly.
+
+The separate cloud mode uses PostgreSQL and Google invitations. Each user pairs
+an outbound-only connector beside their own Hermes installation, then uses the
+same PWA without Tailscale. Hermes credentials remain on that computer; cloud
+processes conversations in transit. See the public cloud runbook before deployment.
 
 The screenshots above were captured from the production web bundle with a
 deterministic local fixture. All names and conversation content shown are

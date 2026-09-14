@@ -316,8 +316,17 @@ class FailoverProvider:
 def build_provider_pool(
     settings: Settings,
     event_sink: Callable[[Any], Awaitable[None]],
+    *,
+    connector_registry=None,
 ) -> ProviderPool:
     def factory(connection: ProviderConnection) -> HermesProvider:
+        if connection.rest_url.startswith("connector://"):
+            if settings.deployment_mode != "cloud" or connector_registry is None:
+                raise ConnectionError("Remote connectors require cloud mode")
+            from .remote_provider import RemoteProvider
+            return RemoteProvider(connection, connector_registry)
+        if settings.deployment_mode == "cloud":
+            raise ConnectionError("Direct provider endpoints are unavailable in cloud mode")
         mock = InMemoryHermesProvider(connection, event_sink)
         if settings.provider_mode == "mock":
             return mock

@@ -30,6 +30,8 @@ import { useLanguagePreference } from "../hooks/useLanguagePreference";
 import { APP_VERSION, checkForPwaUpdate, hasPwaUpdateBlockers, requestPwaUpdate, usePwaUpdateStore } from "../lib/pwaUpdate";
 import { prepareProfileAvatar } from "../lib/profileAvatar";
 import { availableTimeZones, formatConversationTimestamp, TIME_ZONE_PREFERENCE_KEY } from "../lib/dateTime";
+import { googleLoginUrl, useCloudConfiguration, useCloudConfigurationStore } from "../lib/cloud";
+import { CloudSettingsPanel, ConnectorsScreen } from "./CloudScreens";
 
 export function PageHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
   return <header className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</header>;
@@ -39,6 +41,9 @@ type LoginValues = { username: string; password: string };
 
 export function LoginScreen() {
   const { t } = useTranslation();
+  const configuration = useCloudConfiguration();
+  const cloud = configuration.methods?.mode === "cloud";
+  const googleError = new URLSearchParams(window.location.search).has("error");
   const setAuth = useAppStore((state) => state.setAuth);
   const [serverError, setServerError] = useState("");
   const loginSchema = useMemo(() => z.object({
@@ -59,16 +64,20 @@ export function LoginScreen() {
     <main className="login-screen">
       <section className="login-card" aria-labelledby="login-title">
         <div className="login-brand"><BrandMark size="lg" label="Agent Control" /><div><strong>Agent</strong><span>Control</span></div></div>
-        <span className="eyebrow">{t("login.protected")}</span>
-        <h1 id="login-title">{t("login.title")}</h1>
-        <p>{t("login.description")}</p>
-        <form onSubmit={onSubmit} noValidate>
+        <span className="eyebrow">{t(cloud ? "cloud.beta" : "login.protected")}</span>
+        <h1 id="login-title">{t(cloud ? "cloud.loginTitle" : "login.title")}</h1>
+        <p>{t(cloud ? "cloud.loginDescription" : "login.description")}</p>
+        {!configuration.methods ? configuration.error ? <div><p className="form-error" role="alert">{t("cloud.unavailable")}</p><Button onClick={() => void configuration.load()}>{t("cloud.retry")}</Button></div> : <p role="status">{t("cloud.loading")}</p> : cloud ? <div className="cloud-login">
+          {googleError ? <p className="form-error" role="alert">{t("cloud.loginError")}</p> : null}
+          {configuration.methods.googleEnabled ? <a className="hc-button hc-button--primary hc-button--md" href={googleLoginUrl(window.location.search)}>{t("cloud.google")}</a> : <p role="alert">{t("cloud.unavailable")}</p>}
+          <p className="cloud-privacy">{t("cloud.privacy")}</p>
+        </div> : <form onSubmit={onSubmit} noValidate>
           <Field label={t("login.username")} autoComplete="username" error={errors.username?.message} {...register("username")} />
           <Field label={t("login.password")} type="password" autoComplete="current-password" error={errors.password?.message} {...register("password")} />
           {serverError ? <p className="form-error" role="alert"><WarningCircle /> {serverError}</p> : null}
           <Button type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? t("login.checking") : t("login.submit")}</Button>
-        </form>
-        <footer><ShieldCheck size={18} /> {t("login.footer")}</footer>
+        </form>}
+        <footer><ShieldCheck size={18} /> {t(cloud ? "cloud.offlineHint" : "login.footer")}</footer>
       </section>
     </main>
   );
@@ -854,6 +863,11 @@ const emptyGatewayValues: GatewayValues = {
 };
 
 export function GatewaysScreen() {
+  const cloud = useCloudConfigurationStore((state) => state.methods?.mode === "cloud");
+  return cloud ? <ConnectorsScreen /> : <PrivateGatewaysScreen />;
+}
+
+function PrivateGatewaysScreen() {
   const { t } = useTranslation();
   const gatewaySchema = useMemo(() => z.object({
     name: z.string().min(2, t("gatewaysPage.validationName")),
@@ -1197,6 +1211,7 @@ export function SettingsScreen() {
   return <div className="page-wrap">
     <PageHeader eyebrow={t("settingsPage.eyebrow")} title={t("settingsPage.title")} description={t("settingsPage.description")} />
     <div className="settings-layout">
+      <CloudSettingsPanel />
       <Panel className="settings-section">
         <header><Translate /><div><strong>{t("settingsPage.language")}</strong><p>{t("settingsPage.languageDescription")}</p></div></header>
         <label className="hc-field"><span>{t("settingsPage.languageLabel")}</span><select value={language} onChange={(event) => void changeLanguage(event.target.value as typeof language)}>{languageOptions.map((option) => <option key={option.code} value={option.code}>{option.nativeName}</option>)}</select></label>
@@ -1245,9 +1260,10 @@ export function SettingsScreen() {
 
 export function MoreScreen() {
   const { t } = useTranslation();
+  const cloud = useCloudConfigurationStore((state) => state.methods?.mode === "cloud");
   const moreItems = [
     { to: "/search", title: t("morePage.search"), description: t("morePage.searchDescription"), icon: MagnifyingGlass },
-    { to: "/gateways", title: t("morePage.gateways"), description: t("morePage.gatewaysDescription"), icon: HardDrives },
+    { to: cloud ? "/computers" : "/gateways", title: t(cloud ? "cloud.title" : "morePage.gateways"), description: t(cloud ? "cloud.description" : "morePage.gatewaysDescription"), icon: HardDrives },
     { to: "/config", title: t("morePage.config"), description: t("morePage.configDescription"), icon: GearSix },
     { to: "/diagnostics", title: t("morePage.diagnostics"), description: t("morePage.diagnosticsDescription"), icon: Pulse },
     { to: "/admin", title: t("morePage.security"), description: t("morePage.securityDescription"), icon: ShieldCheck },

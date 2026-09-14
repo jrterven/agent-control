@@ -292,6 +292,7 @@ class SecurityBoundaryMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.settings = settings
         self._login_attempts: dict[str, deque[float]] = defaultdict(deque)
+        self._cloud_requests: dict[str, deque[float]] = defaultdict(deque)
 
     def _login_rate_limited(self, peer: str, now: float) -> bool:
         """Limit both the direct peer and the whole single-admin endpoint.
@@ -322,9 +323,35 @@ class SecurityBoundaryMiddleware(BaseHTTPMiddleware):
                     del self._login_attempts[key]
         return False
 
+    def _cloud_rate_limited(self, request: Request) -> bool:
+        now = time.monotonic()
+        peer = request.client.host if request.client else "unknown"
+        keys = [(f"peer:{peer}", self.settings.cloud_rate_limit_per_ip)]
+        with request.app.state.session_factory() as db:
+            auth = resolve_session(db, request.cookies.get(SESSION_COOKIE))
+            if auth is not None:
+                keys.append((f"user:{auth.user_id}", self.settings.cloud_rate_limit_per_user))
+        if len(self._cloud_requests) > 4096:
+            self._cloud_requests = defaultdict(deque, {k: v for k, v in self._cloud_requests.items() if v and v[-1] > now - 60})
+            if len(self._cloud_requests) > 4096:
+                return True
+        for key, limit in keys:
+            queue = self._cloud_requests[key]
+            while queue and queue[0] <= now - 60:
+                queue.popleft()
+            if len(queue) >= limit:
+                return True
+        for key, _ in keys:
+            self._cloud_requests[key].append(now)
+        return False
+
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get("X-Request-ID") or uuid4().hex
         request.state.request_id = request_id
+        if (self.settings.deployment_mode == "cloud" and request.url.path.startswith("/api/")
+            and request.url.path not in {"/api/v1/health", "/api/v1/ready"}
+            and self._cloud_rate_limited(request)):
+            return self._error(429, "RATE_LIMITED", "Too many requests", request_id)
         content_length = request.headers.get("content-length")
         if content_length:
             try:
@@ -342,10 +369,13 @@ class SecurityBoundaryMiddleware(BaseHTTPMiddleware):
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             if origin and origin not in self.settings.allowed_origins:
                 return self._error(403, "ORIGIN_REJECTED", "Request origin is not allowed", request_id)
-            if not origin and self.settings.environment == "production":
+            connector_device_request = self.settings.deployment_mode == "cloud" and request.url.path in {
+                "/api/v1/connectors/device/authorize", "/api/v1/connectors/device/token",
+            }
+            if not origin and self.settings.environment == "production" and not connector_device_request:
                 return self._error(403, "ORIGIN_REQUIRED", "Request origin is required", request_id)
 
-        if request.url.path.endswith("/auth/login"):
+        if request.url.path.endswith(("/auth/login", "/auth/google/start")):
             # Proxy headers are disabled in the supported launch command. The
             # global bucket below remains a fail-safe against a future
             # accidental trust of caller-controlled forwarding headers.

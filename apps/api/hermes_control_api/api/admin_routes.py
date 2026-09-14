@@ -19,7 +19,7 @@ from ..admin_schemas import (
 )
 from ..admin_service import AdminResourceService
 from ..auth import (
-    current_admin,
+    current_agent_admin,
     get_db,
     require_csrf,
     require_idempotency,
@@ -56,7 +56,7 @@ async def models(
     gateway_id: str,
     profile_name: ResourceId,
     request: Request,
-    _: User = Depends(current_admin),
+    _: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).read(
@@ -77,7 +77,7 @@ async def set_model(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -102,7 +102,7 @@ async def config(
     gateway_id: str,
     profile_name: ResourceId,
     request: Request,
-    _: User = Depends(current_admin),
+    _: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).read(
@@ -123,7 +123,7 @@ async def update_config(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -144,7 +144,7 @@ async def soul(
     gateway_id: str,
     profile_name: ResourceId,
     request: Request,
-    _: User = Depends(current_admin),
+    _: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).read(
@@ -165,7 +165,7 @@ async def update_soul(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -186,7 +186,7 @@ async def memory(
     gateway_id: str,
     profile_name: ResourceId,
     request: Request,
-    _: User = Depends(current_admin),
+    _: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).read(
@@ -207,7 +207,7 @@ async def set_memory_provider(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -231,7 +231,7 @@ async def reset_memory(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -252,7 +252,7 @@ async def skills(
     gateway_id: str,
     profile_name: ResourceId,
     request: Request,
-    _: User = Depends(current_admin),
+    _: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).read(
@@ -274,7 +274,7 @@ async def toggle_skill(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -296,7 +296,7 @@ async def toolsets(
     gateway_id: str,
     profile_name: ResourceId,
     request: Request,
-    _: User = Depends(current_admin),
+    _: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).read(
@@ -318,7 +318,7 @@ async def toggle_toolset(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -340,7 +340,7 @@ async def mcp_servers(
     gateway_id: str,
     profile_name: ResourceId,
     request: Request,
-    _: User = Depends(current_admin),
+    _: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).read(
@@ -361,7 +361,7 @@ async def create_mcp_server(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -387,7 +387,7 @@ async def toggle_mcp_server(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -412,7 +412,7 @@ async def delete_mcp_server(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -437,7 +437,7 @@ async def test_mcp_server(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -459,7 +459,7 @@ async def channels(
     gateway_id: str,
     profile_name: ResourceId,
     request: Request,
-    _: User = Depends(current_admin),
+    _: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).read(
@@ -481,7 +481,7 @@ async def update_channel(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -506,7 +506,7 @@ async def test_channel(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -529,7 +529,7 @@ async def usage(
     profile_name: ResourceId,
     request: Request,
     days: int = Query(default=30, ge=1, le=365),
-    _: User = Depends(current_admin),
+    _: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).read(
@@ -547,7 +547,7 @@ async def secrets(
     gateway_id: str,
     profile_name: ResourceId,
     request: Request,
-    _: User = Depends(current_admin),
+    _: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).read(
@@ -569,7 +569,7 @@ async def set_secret(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(
@@ -596,7 +596,7 @@ async def delete_secret(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    actor: User = Depends(current_admin),
+    actor: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> AdminResourceView:
     snapshot = await _service(request).mutate(

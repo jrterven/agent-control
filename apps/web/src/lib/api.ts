@@ -1,5 +1,6 @@
 import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, EmailReferencePreview, Gateway, Profile, PushNotificationConfig, RealtimeEvent, SearchResult, SessionSummary, VoiceProvider, Workspace } from "../types";
 import type { OPENAI_LIVE_VOICES } from "./openaiLiveVoices";
+import type { AuthMethods, ConnectorList, ConnectorPairing, ConnectorView } from "@hermes-control/shared-types";
 
 export type AdminResourceName = "models" | "config" | "soul" | "skills" | "toolsets" | "mcp" | "channels" | "usage" | "secrets";
 
@@ -322,6 +323,17 @@ function adminMutation<T>(path: string, method: "PATCH" | "POST" | "DELETE", pay
 }
 
 export const api = {
+  authMethods: () => request<AuthMethods>("/auth/methods"),
+  connectors: () => request<ConnectorList>("/connectors"),
+  inspectConnectorPairing: (code: string, csrfToken?: string) => request<ConnectorPairing>("/connectors/pair/inspect", {
+    method: "POST", headers: mutationHeaders(csrfToken), body: JSON.stringify({ code }),
+  }),
+  approveConnectorPairing: (code: string, profiles: string[], csrfToken?: string) => request<ConnectorView>("/connectors/pair/approve", {
+    method: "POST", headers: mutationHeaders(csrfToken), body: JSON.stringify({ code, profiles }),
+  }),
+  revokeConnector: (id: string, csrfToken?: string) => request<void>(`/connectors/${encodeURIComponent(id)}`, {
+    method: "DELETE", headers: mutationHeaders(csrfToken),
+  }),
   me: () => request<{ id: string; name: string; csrfToken?: string }>("/auth/me"),
   login: (username: string, password: string) => request<{ id: string; name: string; csrfToken?: string }>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
   logout: (csrfToken?: string) => request<void>("/auth/logout", { method: "POST", headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined }),

@@ -25,6 +25,7 @@ from ..auth import (
     authenticate,
     csrf_for_session_token,
     current_admin,
+    current_agent_admin,
     current_auth_session,
     current_user,
     get_db,
@@ -336,6 +337,10 @@ def gateway_capability_set(
     }
 
 
+def public_gateway_name(row: Gateway) -> str:
+    return row.name.removesuffix(f" ({row.id})") if row.transport_kind == "connector" else row.name
+
+
 def gateway_view(
     db: Session, row: Gateway, app_services
 ) -> GatewayView:
@@ -350,7 +355,7 @@ def gateway_view(
     )
     return GatewayView(
         id=row.id,
-        name=row.name,
+        name=public_gateway_name(row),
         connection_mode=row.connection_mode,
         enabled=row.enabled,
         env_managed=row.env_managed,
@@ -434,6 +439,15 @@ def readiness(request: Request) -> Any:
             },
         )
     now = datetime.now(timezone.utc)
+    if request.app.state.services.settings.deployment_mode == "cloud":
+        supervisors = {}
+        for public_name, state_name in (("automationRoutes", "automation_route_health"), ("capabilityRefresh", "capability_refresh_health")):
+            watcher = getattr(request.app.state, state_name, None)
+            supervisors[public_name] = str(watcher.snapshot(at=now)["status"]) if watcher is not None else "unknown"
+        healthy = all(status in {"healthy", "starting"} for status in supervisors.values())
+        return JSONResponse(status_code=200 if healthy else 503, content={
+            "status": "ready" if healthy else "not_ready", "database": "ready", **supervisors, "time": now.isoformat(),
+        })
     ttl_seconds = request.app.state.services.settings.upstream_health_ttl_seconds
 
     states = [
@@ -505,6 +519,8 @@ def login(
     request: Request,
     db: Session = Depends(get_db),
 ) -> AuthView:
+    if request.app.state.services.settings.deployment_mode == "cloud":
+        raise HTTPException(status_code=403, detail="Use Google to sign in")
     user = authenticate(db, payload.username, payload.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -691,6 +707,7 @@ def bootstrap(
         }[health]
 
     return {
+        "deploymentMode": app_services.settings.deployment_mode,
         "features": {
             "voice": {"provider": voice_provider(db, user)},
             "live": {
@@ -714,7 +731,7 @@ def bootstrap(
         "gateways": [
             {
                 "id": row.id,
-                "name": row.name,
+                "name": public_gateway_name(row),
                 "location": "Túnel privado" if row.connection_mode == "tunnel" else row.connection_mode,
                 "status": bootstrap_gateway_status(row),
                 "version": row.version or "desconocida",
@@ -940,7 +957,7 @@ async def create_gateway(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    user: User = Depends(current_admin),
+    user: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> GatewayView:
     row = await GatewayService(services(request)).create(db, user, payload)
@@ -954,7 +971,7 @@ async def update_gateway(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    user: User = Depends(current_admin),
+    user: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> GatewayView:
     row = db.get(Gateway, gateway_id)
@@ -970,7 +987,7 @@ async def delete_gateway(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    user: User = Depends(current_admin),
+    user: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> Response:
     row = db.get(Gateway, gateway_id)
@@ -1000,7 +1017,7 @@ async def probe_gateway(
     profile_name: str = Query(default="default", alias="profileName"),
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    user: User = Depends(current_admin),
+    user: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> CapabilitiesView:
     capability = await GatewayService(services(request)).probe(db, user, gateway_id, profile_name)
@@ -1123,7 +1140,7 @@ async def create_profile(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    user: User = Depends(current_admin),
+    user: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> ProfileCreateView:
     app_services = services(request)
@@ -1187,7 +1204,7 @@ async def delete_profile(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    user: User = Depends(current_admin),
+    user: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> ProfileDeleteView:
     return await ProfileService(services(request)).delete(
@@ -1202,9 +1219,11 @@ async def move_profile(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    user: User = Depends(current_admin),
+    user: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> ProfileMoveView:
+    if services(request).settings.deployment_mode == "cloud":
+        raise HTTPException(status_code=403, detail="Moving agents is unavailable in the beta")
     return await ProfileService(services(request)).move(
         db, user, profile_id, payload
     )
@@ -1234,7 +1253,7 @@ async def update_profile_avatar(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    user: User = Depends(current_admin),
+    user: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> ProfileAvatarView:
     row = db.get(ProfileRef, profile_id)
@@ -1268,7 +1287,7 @@ def delete_profile_avatar(
     profile_id: str,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    user: User = Depends(current_admin),
+    user: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> ProfileAvatarView:
     row = db.get(ProfileRef, profile_id)
@@ -1293,7 +1312,7 @@ async def refresh_profiles(
     gateway_id: str = Query(alias="gatewayId"),
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    ___: User = Depends(current_admin),
+    ___: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> list[ProfileView]:
     app_services = services(request)
@@ -1559,7 +1578,7 @@ async def sync_sessions(
     request: Request,
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    user: User = Depends(current_admin),
+    user: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> list[SessionView]:
     rows = await SessionService(services(request)).sync(
@@ -1798,12 +1817,19 @@ async def session_media(
     request: Request,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
-) -> FileResponse:
+) -> Response:
     """Stream one history-bound voice note without exposing its host path."""
 
     service = SessionService(services(request))
     row = service.owned(db, user, session_id)
     asset = await service.media(db, user, row, media_id)
+    if asset.content is not None:
+        return Response(content=asset.content, media_type=asset.media_type, headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": 'inline; filename="voice-note"',
+            "X-Content-Type-Options": "nosniff",
+        })
+    assert asset.path is not None
     return FileResponse(
         asset.path,
         media_type=asset.media_type,
@@ -2048,7 +2074,7 @@ async def sync_automations(
     profile_name: str = Query(alias="profileName"),
     _: AuthSession = Depends(require_csrf),
     __: str = Depends(require_idempotency),
-    user: User = Depends(current_admin),
+    user: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> list[Automation]:
     return await AutomationService(services(request)).sync(
@@ -2242,9 +2268,17 @@ def bind_owned_realtime_event(
     user_id: str,
     payload: dict[str, Any],
     email_reference_key: bytes | None = None,
+    cloud_mode: bool = False,
 ) -> dict[str, Any] | None:
     """Bind an upstream event only when every supplied route identity agrees."""
 
+    if cloud_mode:
+        with session_factory() as db:
+            if db.scalar(select(Gateway.id).where(
+                Gateway.id == payload.get("gatewayId"), Gateway.owner_id == user_id,
+                Gateway.enabled.is_(True),
+            )) is None:
+                return None
     stored_id = payload.get("storedSessionId")
     runtime_id = payload.get("runtimeSessionId")
     runtime_generation = payload.get("_runtimeGeneration")
@@ -2468,6 +2502,7 @@ async def realtime_socket(websocket: WebSocket) -> None:
             user_id=row.user_id,
             payload=payload,
             email_reference_key=websocket.app.state.services.vault.key,
+            cloud_mode=settings.deployment_mode == "cloud",
         )
 
     def auth_session_is_active() -> bool:

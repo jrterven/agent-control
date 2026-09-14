@@ -16,6 +16,7 @@ import {
   savePreference,
 } from "./lib/db";
 import { useAppStore } from "./store/appStore";
+import { isCloudProfileOffline, useCloudConfigurationStore } from "./lib/cloud";
 import i18n, { getCurrentLanguage } from "./i18n";
 import { subscribeToMediaQuery } from "./lib/mediaQuery";
 import { recordSessionCompletion } from "./lib/chatNotifications";
@@ -523,11 +524,24 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   const messageId = (operationId ? state.pendingOperations[operationId] : undefined)
     ?? (routeSessionId ? state.streamingBySession[routeSessionId] : undefined);
 
+  const cloud = useCloudConfigurationStore.getState().methods?.mode === "cloud";
+  if (cloud && event.type === "control.reconcile" && event.gatewayId) {
+    window.dispatchEvent(new CustomEvent("hermes-control:connector-refresh", { detail: { gatewayId: event.gatewayId } }));
+    return true;
+  }
+
   if (event.type === "control.connection") {
     const selectedProfile = state.profiles.find((profile) => profile.id === state.selectedProfileId);
     const matchesSelectedRoute = event.gatewayId === state.selectedGatewayId
       && event.profileName === selectedProfile?.technicalName;
     const connectionState = data.state;
+    const eventProfile = state.profiles.find((profile) => profile.gatewayId === event.gatewayId && profile.technicalName === event.profileName);
+    if (cloud && event.gatewayId && connectionState === "connected" && (
+      !eventProfile || eventProfile.status === "offline"
+      || state.gateways.find((gateway) => gateway.id === event.gatewayId)?.status !== "connected"
+    )) {
+      window.dispatchEvent(new CustomEvent("hermes-control:connector-refresh", { detail: { gatewayId: event.gatewayId } }));
+    }
     if (matchesSelectedRoute && (
       connectionState === "connected"
       || connectionState === "reconnecting"
@@ -1305,19 +1319,19 @@ export function useBootstrapData() {
       }
     };
 
-    const synchronizeUpstream = async () => {
+    const synchronizeUpstream = async (gatewayId?: string) => {
       if (!active || synchronizing) return;
       synchronizing = true;
       try {
         const initial = useAppStore.getState();
         await Promise.allSettled(
-          initial.gateways.map((gateway) => api.refreshProfiles(gateway.id, initial.csrfToken)),
+          initial.gateways.filter((gateway) => !gatewayId || gateway.id === gatewayId).map((gateway) => api.refreshProfiles(gateway.id, initial.csrfToken)),
         );
         if (!active) return;
         const refreshed = await api.bootstrap();
         if (!active) return;
         await Promise.allSettled(
-          refreshed.profiles.map((profile) => api.syncSessions(
+          refreshed.profiles.filter((profile) => !gatewayId || profile.gatewayId === gatewayId).map((profile) => api.syncSessions(
             profile.gatewayId,
             profile.technicalName,
             useAppStore.getState().csrfToken,
@@ -1325,7 +1339,7 @@ export function useBootstrapData() {
         );
         await Promise.allSettled(
           refreshed.profiles
-            .filter((profile) => profile.capabilities?.cron)
+            .filter((profile) => profile.capabilities?.cron && (!gatewayId || profile.gatewayId === gatewayId))
             .map((profile) => api.syncAutomations(
               profile.gatewayId,
               profile.technicalName,
@@ -1347,12 +1361,24 @@ export function useBootstrapData() {
       const selectedSessionId = useAppStore.getState().selectedSessionId;
       if (selectedSessionId) void rehydrateSession(selectedSessionId);
     };
+    const refreshConnector = (event: Event) => {
+      const gatewayId = (event as CustomEvent<{ gatewayId?: string }>).detail?.gatewayId;
+      if (!gatewayId || useCloudConfigurationStore.getState().methods?.mode !== "cloud") return;
+      // A paired connector initially has offline capability rows. Discover the
+      // verified local contracts before enabling chats; a reconnect also recovers
+      // authoritative session state without resubmitting pending prompts.
+      void synchronizeUpstream(gatewayId);
+      const current = useAppStore.getState();
+      const session = current.sessions.find((item) => item.id === current.selectedSessionId);
+      if (session?.gatewayId === gatewayId) void rehydrateSession(session.id);
+    };
     void synchronizeUpstream();
     const interval = window.setInterval(() => void refreshProjection(), 30_000);
     window.addEventListener("focus", refreshWhenVisible);
     window.addEventListener("online", refreshWhenVisible);
     window.addEventListener("pageshow", refreshWhenVisible);
     window.addEventListener("agent-control:resume", refreshWhenVisible);
+    window.addEventListener("hermes-control:connector-refresh", refreshConnector);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       active = false;
@@ -1361,6 +1387,7 @@ export function useBootstrapData() {
       window.removeEventListener("online", refreshWhenVisible);
       window.removeEventListener("pageshow", refreshWhenVisible);
       window.removeEventListener("agent-control:resume", refreshWhenVisible);
+      window.removeEventListener("hermes-control:connector-refresh", refreshConnector);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, [authState, bootstrapLoaded, demoMode, hydrateBootstrap, setConnection]);
@@ -1393,6 +1420,7 @@ export async function createChatForCurrentContext() {
     state.authState !== "authenticated"
     || !profile?.mutable
     || !profile.capabilities?.sessions
+    || isCloudProfileOffline(profile, state.gateways, state.connection)
   ) return undefined;
 
   try {
@@ -1558,6 +1586,7 @@ async function reconcileAmbiguousPrompt(sessionId: string, operationId: string, 
 
 export async function submitPrompt(content: string, attachments: File[] = []) {
   const state = useAppStore.getState();
+  if (isCloudProfileOffline(state.profiles.find((profile) => profile.id === state.selectedProfileId), state.gateways, state.connection)) return;
   if ((!content.trim() && !attachments.length) || state.streamingBySession[state.selectedSessionId] || !state.selectedSessionId) return;
   const now = new Date();
   const userMessage: ChatMessage = {

@@ -2,7 +2,7 @@
 
 bootstrap:
 	python3 -m venv .venv
-	.venv/bin/python -m pip install -e packages/hermes-client -e 'apps/api[test]' -e 'apps/mock-hermes[test]'
+	.venv/bin/python -m pip install -e packages/hermes-client -e 'apps/api[test]' -e 'apps/mock-hermes[test]' -e packages/connector
 	npm install
 
 dev:
@@ -21,7 +21,7 @@ tunnels:
 	scripts/tunnels/hermes-tunnels.sh run
 
 test:
-	.venv/bin/python -m pytest tests/backend tests/mock
+	.venv/bin/python -m pytest tests/backend tests/mock tests/connector
 	npm test
 	npm run prototype:check
 

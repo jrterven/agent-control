@@ -19,6 +19,8 @@ import type { AgentActivityItem, ApprovalRequest, ChatMessage, ClarificationQues
 import { ProfileAvatar } from "./ProfileAvatar";
 import { EmailReferences } from "./EmailReferences";
 import { LiveTranscript } from "./LiveTranscript";
+import { isCloudProfileOffline, useCloudConfigurationStore } from "../lib/cloud";
+import { CloudEmptyState } from "../screens/CloudScreens";
 
 const emptyApprovals: ApprovalRequest[] = [];
 const emptyClarifications: ClarificationRequest[] = [];
@@ -858,6 +860,8 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
 
 export function ChatView() {
   const { t } = useTranslation();
+  const cloud = useCloudConfigurationStore((state) => state.methods?.mode === "cloud");
+  const connection = useAppStore((state) => state.connection);
   const sessionId = useAppStore((state) => state.selectedSessionId);
   const profileId = useAppStore((state) => state.selectedProfileId);
   const streamingMessageId = useAppStore((state) => state.streamingBySession[sessionId]);
@@ -867,6 +871,7 @@ export function ChatView() {
   const authState = useAppStore((state) => state.authState);
   const demoMode = useAppStore((state) => state.demoMode);
   const profiles = useAppStore((state) => state.profiles);
+  const gateways = useAppStore((state) => state.gateways);
   const sessions = useAppStore((state) => state.sessions);
   const profile = profiles.find((item) => item.id === profileId) ?? profiles[0];
   // An empty selection is meaningful: the active profile has no conversation
@@ -901,8 +906,8 @@ export function ChatView() {
     csrfToken,
     streamingMessage,
   });
-  const offline = authState === "offline";
-  const canMutate = demoMode || (authState === "authenticated" && profile?.mutable === true);
+  const offline = authState === "offline" || isCloudProfileOffline(profile, gateways, connection);
+  const canMutate = demoMode || (authState === "authenticated" && !offline && profile?.mutable === true);
   const canPrompt = canMutate && Boolean(profile?.capabilities?.prompts);
   const liveConfigured = useAppStore((state) => state.features?.live?.available === true);
   const live = useOpenAILive({ enabled: liveConfigured && canPrompt && authState === "authenticated" && Boolean(session), sessionId, profileId, csrfToken });
@@ -925,6 +930,7 @@ export function ChatView() {
     demoMode
     || (
       authState === "authenticated"
+      && !offline
       && profile?.mutable === true
       && profile.capabilities?.sessions === true
     )
@@ -951,6 +957,8 @@ export function ChatView() {
       viewport.scrollTo({ top: viewport.scrollHeight, behavior: streamingMessageId || live.active ? "auto" : "smooth" });
     }
   }, [approvals, clarifications, messages, sessionId, streamingMessageId, live.transcripts.calls, live.active]);
+
+  if (cloud && !profiles.length) return <CloudEmptyState />;
 
   return (
     <section className="conversation" aria-labelledby="conversation-title">

@@ -20,6 +20,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from .api import router
+from .cloud_auth import router as cloud_auth_router
+from .api.connector_routes import router as connector_router
+from .remote_provider import ConnectorRegistry
+from .cloud_operations import CloudMetrics, CloudOperationsMiddleware, router as cloud_operations_router
 from .config import Settings, get_settings
 from .database import Base, build_engine, build_session_factory
 from .email_reference_cache import purge_expired as purge_expired_email_reference_cache
@@ -53,6 +57,7 @@ from .services import (
 
 _LOG_SECRET = re.compile(
     r"(?i)authorization\s*[:=]\s*Bearer\s+[A-Za-z0-9._~+/=-]+"
+    r"|[?&](?:code|state|device_code|deviceCode|user_code)=[^\s&#]+"
     r"|Bearer\s+[A-Za-z0-9._~+/=-]+"
     r"|(authorization|api[_-]?key|token|ticket|secret|password)\s*[:=]\s*[^\s,;&]+"
     r"|(?<![A-Za-z0-9._~-])(?:sk[-_][A-Za-z0-9][A-Za-z0-9._~-]{11,}"
@@ -187,6 +192,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     async def durable_event_sink(event) -> None:
+        recipient_user_id = None
+        if settings.deployment_mode == "cloud":
+            with session_factory() as db:
+                recipient_user_id = db.scalar(select(Gateway.owner_id).where(
+                    Gateway.id == event.gateway_id, Gateway.enabled.is_(True),
+                ))
+            if recipient_user_id is None:
+                return
         completion = persist_normalized_event(
             session_factory,
             event,
@@ -197,10 +210,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Do not retain them in replay/correlation memory or browser fanout.
         event.private_data.clear()
         event_hub.remember_correlation(event)
-        await event_hub.publish(event)
+        await event_hub.publish(event, recipient_user_id=recipient_user_id)
         push_notification_service.schedule(completion)
 
-    provider_pool = build_provider_pool(settings, durable_event_sink)
+    connector_registry = ConnectorRegistry(durable_event_sink)
+    provider_pool = build_provider_pool(settings, durable_event_sink, connector_registry=connector_registry)
     service_container = AppServices(
         settings=settings,
         vault=vault,
@@ -358,6 +372,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 with contextlib.suppress(asyncio.CancelledError):
                     await watcher
             await push_notification_service.close()
+            await connector_registry.close()
             await provider_pool.close()
             engine.dispose()
 
@@ -370,6 +385,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.engine = engine
+    app.state.settings = settings
+    app.state.connector_registry = connector_registry
+    app.state.cloud_draining = False
+    app.state.cloud_metrics = CloudMetrics()
     app.state.session_factory = session_factory
     app.state.services = service_container
     app.state.push_notification_service = push_notification_service
@@ -388,6 +407,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.automation_route_health = automation_route_health
     app.state.capability_refresh_health = capability_refresh_health
     app.add_middleware(IdempotencyMiddleware)
+    if settings.deployment_mode == "cloud":
+        app.add_middleware(CloudOperationsMiddleware, state=app.state, metrics=app.state.cloud_metrics)
     app.add_middleware(SecurityBoundaryMiddleware, settings=settings)
     app.add_middleware(
         CORSMiddleware,
@@ -402,6 +423,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         attachment_max_bytes=settings.prompt_attachment_request_max_bytes,
     )
     app.include_router(router)
+    app.include_router(cloud_auth_router)
+    app.include_router(connector_router)
+    app.include_router(cloud_operations_router)
 
     @app.exception_handler(NotFoundError)
     async def not_found(request: Request, exc: NotFoundError):

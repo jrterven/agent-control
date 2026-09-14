@@ -171,6 +171,7 @@ export async function installMockApi(
     const path = url.pathname;
     const method = request.method();
 
+    if (path === "/api/v1/auth/methods") return json(route, { mode: "private", googleEnabled: false });
     if (path === "/api/v1/auth/me") {
       return authenticated
         ? json(route, { id: "admin-e2e", name: "Admin E2E", csrfToken: "csrf-e2e" })

@@ -1,7 +1,8 @@
 # Known limitations
 
-- The first release supports one administrator. Database ownership fields exist
-  for future multi-user authorization, but sharing is not implemented.
+- Private mode supports one administrator. The separate cloud beta supports up
+  to 20 invited Google accounts with isolated personal connectors; sharing,
+  organizations, billing and managed Hermes runtimes are not implemented.
 - Uvicorn runs one worker because realtime tickets and event subscriptions are
   process-local. Horizontal scaling needs a shared ticket/event backend.
 - SQLite is appropriate for one always-on node. It is not a multi-writer cluster

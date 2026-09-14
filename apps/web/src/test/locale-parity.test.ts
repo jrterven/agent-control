@@ -11,6 +11,7 @@ import { integrationResources } from "../locales/integrations";
 import { speechResources } from "../locales/speech";
 import { updateResources } from "../locales/updates";
 import { liveVoiceResources } from "../locales/liveVoice";
+import { cloudResources } from "../locales/cloud";
 
 function leaves(value: unknown, prefix = ""): string[] {
   if (typeof value === "string") {
@@ -24,7 +25,7 @@ function leaves(value: unknown, prefix = ""): string[] {
 
 describe("locale catalogs", () => {
   it("keeps identical, non-empty key sets in every supported language", () => {
-    const catalogs = [baseTranslations, navigationResources, chatResources, emailResources, adminResources, dictationResources, integrationResources, speechResources, screenResources, runtimeResources, updateResources, liveVoiceResources];
+    const catalogs = [baseTranslations, navigationResources, chatResources, emailResources, adminResources, dictationResources, integrationResources, speechResources, screenResources, runtimeResources, updateResources, liveVoiceResources, cloudResources];
     for (const catalog of catalogs) {
       const reference = leaves(catalog.es).sort();
       for (const language of ["en", "fr", "de", "pt"] as const) {

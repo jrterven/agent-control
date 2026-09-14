@@ -63,6 +63,11 @@ def resolve_session(db: Session, token: str | None) -> AuthSession | None:
 
 def get_db(request: Request):
     with request.app.state.session_factory() as db:
+        if request.app.state.services.settings.deployment_mode == "cloud":
+            from .ownership import scope_cloud_session
+            auth = resolve_session(db, request.cookies.get(SESSION_COOKIE))
+            if auth is not None:
+                scope_cloud_session(db, auth.user_id)
         yield db
 
 
@@ -100,3 +105,10 @@ def require_idempotency(request: Request) -> str:
     if not value or len(value) > 200:
         raise HTTPException(status_code=400, detail="A valid Idempotency-Key is required")
     return value
+
+
+def current_agent_admin(request: Request, user: User = Depends(current_user)) -> User:
+    """Cloud owners manage their own agents; private admin policy is retained."""
+    if request.app.state.services.settings.deployment_mode == "cloud":
+        return user
+    return current_admin(user)
