@@ -79,6 +79,8 @@ test("ofrece instaladores publicados y conserva la opción de conectar Hermes ex
   await page.screenshot({ path: `test-results/managed-onboarding-${test.info().project.name}.png`, fullPage: true });
   await page.getByRole("link", { name: "Descargar para Mac (.dmg)" }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: `test-results/managed-downloads-${test.info().project.name}.png` });
+  await page.getByRole("heading", { name: "2. Vincula este equipo", exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `test-results/managed-pairing-step-${test.info().project.name}.png` });
   await page.getByRole("radio", { name: /Conectar mi Hermes existente/ }).check();
   await expect(page.locator(".connector-command")).toContainText("https://control.example/connector/install.sh");
 });

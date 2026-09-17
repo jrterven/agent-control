@@ -10,6 +10,7 @@ import { ConnectionBanner } from "./ConnectionBanner";
 import { LeftSidebar } from "./LeftSidebar";
 import { NotificationMenu } from "./NotificationMenu";
 import { TopBar } from "./TopBar";
+import { PwaInstallInvitation } from "./PwaInstallInvitation";
 
 export function AppShell({ children, conversation = false }: { children: ReactNode; conversation?: boolean }) {
   const { t } = useTranslation();
@@ -44,6 +45,7 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
       <NotificationMenu />
       <BottomNav />
       <CommandPalette />
+      <PwaInstallInvitation />
     </div>
   );
 }

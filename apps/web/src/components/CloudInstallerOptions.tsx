@@ -39,7 +39,7 @@ export function CloudInstallerOptions({ existingCommand, loading, initialExistin
   const linuxCommand = downloads ? managedInstallCommand(downloads) : undefined;
   return <Panel className="settings-section connector-installation">
     <fieldset className="connector-installation-choices">
-      <legend>{t("onboarding.installChoice")}</legend>
+      <legend className="connector-step-heading">{t("onboarding.installChoice")}</legend>
       {(["managed", "existing"] as const).map((option) => <label className={kind === option ? "is-selected" : ""} key={option}>
         <input type="radio" name="installation-kind" value={option} checked={kind === option} onChange={() => setKind(option)} />
         <span><strong>{t(`onboarding.${option}Title`)}</strong><small>{t(`onboarding.${option}Description`)}</small></span>

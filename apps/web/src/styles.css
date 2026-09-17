@@ -1148,7 +1148,7 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .connector-revoke { display: flex; flex-wrap: wrap; gap: 12px; }
 .connector-revoke p { flex-basis: 100%; }
 .connector-installation-choices { border: 0; padding: 0; margin: 0; display: grid; gap: 12px; min-width: 0; }
-.connector-installation-choices legend { font-size: 18px; font-weight: 700; margin-bottom: 12px; }
+.connector-step-heading { font-size: 18px; font-weight: 700; line-height: 1.4; margin: 0 0 12px; }
 .connector-installation-choices label { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; cursor: pointer; }
 .connector-installation-choices label.is-selected { border-color: var(--accent); background: var(--surface-2); }
 .connector-installation-choices input { margin-top: 3px; width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--accent); }

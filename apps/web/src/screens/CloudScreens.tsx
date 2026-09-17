@@ -94,7 +94,7 @@ export function ConnectorPairingForm({ initialCode = "" }: { initialCode?: strin
   if (connected) return <ConnectorReadiness computer={connected} />;
 
   return <Panel className="settings-section connector-pairing">
-    <h2>{t("cloud.codeTitle")}</h2><p>{t("cloud.codeDescription")}</p>
+    <h2 className="connector-step-heading">{t("cloud.codeTitle")}</h2><p>{t("cloud.codeDescription")}</p>
     <form onSubmit={(event) => { event.preventDefault(); void inspect(); }}>
       <Field label={t("cloud.code")} value={code} maxLength={20} autoComplete="off" autoCapitalize="characters" spellCheck={false} disabled={Boolean(busy)} onChange={(event) => { setCode(event.target.value); setPairing(null); setError(""); }} />
       <Button type="submit" disabled={!code.trim() || Boolean(busy) || offline}>{t(busy === "inspect" ? "cloud.reviewing" : "cloud.inspect")}</Button>

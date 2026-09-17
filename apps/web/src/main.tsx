@@ -5,6 +5,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import "@hermes-control/ui/styles.css";
 import { initializeLanguagePreference } from "./i18n";
 import { initializePwaUpdates, restorePwaUpdateContext } from "./lib/pwaUpdate";
+import { initializePwaInstall } from "./lib/pwaInstall";
 import "./styles.css";
 import { router } from "./router";
 
@@ -51,6 +52,7 @@ function MountedSignal() {
 }
 
 async function mountApplication() {
+  initializePwaInstall();
   restorePwaUpdateContext();
   initializePwaUpdates();
 

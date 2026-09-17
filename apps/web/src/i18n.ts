@@ -16,6 +16,7 @@ import { speechResources } from "./locales/speech";
 import { liveVoiceResources } from "./locales/liveVoice";
 import { cloudResources } from "./locales/cloud";
 import { onboardingResources } from "./locales/onboarding";
+import { pwaInstallResources } from "./locales/pwaInstall";
 
 export const SUPPORTED_LANGUAGES = ["en", "es", "fr", "de", "pt"] as const;
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
@@ -88,6 +89,7 @@ const i18nInitialization = i18n.use(initReactI18next).init({
       asResource(liveVoiceResources[language]),
       asResource(cloudResources[language]),
       asResource(onboardingResources[language]),
+      asResource(pwaInstallResources[language]),
     ) }]),
   ),
 });
