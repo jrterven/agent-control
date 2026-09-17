@@ -12,6 +12,9 @@ export interface ConnectorView {
   version: string | null;
   lastSeenAt: string | null;
   profiles: string[];
+  gatewayId?: string | null;
+  installationKind?: "managed" | "existing" | null;
+  hermesVersion?: string | null;
 }
 
 export interface ConnectorList {

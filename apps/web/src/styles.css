@@ -1147,3 +1147,16 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .connector-profiles { display: flex; flex-wrap: wrap; gap: 8px; }
 .connector-revoke { display: flex; flex-wrap: wrap; gap: 12px; }
 .connector-revoke p { flex-basis: 100%; }
+.connector-installation-choices { border: 0; padding: 0; margin: 0; display: grid; gap: 12px; min-width: 0; }
+.connector-installation-choices legend { font-size: 18px; font-weight: 700; margin-bottom: 12px; }
+.connector-installation-choices label { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; cursor: pointer; }
+.connector-installation-choices label.is-selected { border-color: var(--accent); background: var(--surface-2); }
+.connector-installation-choices input { margin-top: 3px; width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--accent); }
+.connector-installation-choices span { display: grid; gap: 7px; min-width: 0; }
+.connector-installation-choices small { color: var(--text-soft); line-height: 1.5; }
+.connector-downloads { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); margin: 20px 0; }
+.connector-downloads section { min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: 12px; }
+.connector-downloads h3, .connector-provider-info h3 { margin-top: 0; }
+.connector-provider-info { border-top: 1px solid var(--border); padding-top: 20px; }
+.connector-provider-info li { color: var(--text-soft); line-height: 1.6; margin: 10px 0; }
+.connector-readiness .hc-field { max-width: 420px; }

@@ -69,6 +69,20 @@ def test_pairing_one_use_profile_selection_and_trusted_anchor(setup):
     assert "accessToken" not in str(listing)
 
 
+def test_managed_metadata_is_optional_diagnostic_and_owner_scoped(setup):
+    app, client, headers, other = setup
+    response = client.post("/api/v1/connectors/device/authorize", json={"name": "Managed Mac",
+        "profiles": ["selected"], "version": "0.1.0", "sourceSha": HERMES_0212_SHA,
+        "installationKind": "managed", "hermesVersion": "0.21.2"})
+    assert response.status_code == 200
+    connector = approve(client, headers, response.json())
+    assert connector["installationKind"] == "managed"
+    assert connector["hermesVersion"] == "0.21.2"
+    assert connector["gatewayId"]
+    client.cookies.set("hc_session", other[0])
+    assert client.get("/api/v1/connectors").json()["items"] == []
+
+
 def test_pair_requires_same_browser_session_and_csrf(setup):
     _, client, headers, (other_token, other_headers) = setup
     authorization = authorize(client)

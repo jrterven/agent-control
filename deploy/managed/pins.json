@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "hermesRepository": "https://github.com/NousResearch/hermes-agent.git",
+  "hermesSourceSha": "939e45c91d751fadd94dcd1b873ac3cb44846213",
+  "hermesVersion": "0.21.2",
+  "pythonVersion": "3.12.14",
+  "uvVersion": "0.12.15",
+  "baseExtras": ["anthropic"],
+  "python": {
+    "linux-x86_64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "sha256": "72748da13197c1fb161e3afeef20a6a385ff24f2165e6e2758e47008e7faba4c"
+    },
+    "linux-arm64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "sha256": "577b4bec0793ad1ff0cbff9adbd0df078eddde38a4c41bf5d83ad381a85ee39d"
+    },
+    "macos-arm64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "sha256": "81a359f1cfadd4da11766534c5913791cea55f26e1bb902cacd2a531bb1e4b2b"
+    }
+  }
+}

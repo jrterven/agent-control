@@ -7,6 +7,7 @@ import secrets
 import shlex
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -31,6 +32,8 @@ class DeviceRequest(BaseModel):
     profiles: list[str] = Field(min_length=1, max_length=64)
     version: str = Field(max_length=80)
     sourceSha: str = Field(pattern=r"^[a-f0-9]{40}$")
+    installationKind: Literal["managed", "existing"] | None = None
+    hermesVersion: str | None = Field(default=None, max_length=80)
 
     @field_validator("profiles")
     @classmethod
@@ -82,7 +85,8 @@ def authorize(payload: DeviceRequest, request: Request):
             raise HTTPException(429, "Connector pairing is temporarily busy")
         row = DeviceAuthorization(device_code_hash=token_hash(device_code), user_code_hash=token_hash(user_code),
                                   name=payload.name, profiles=payload.profiles, version=payload.version,
-                                  source_sha=payload.sourceSha, expires_at=now + timedelta(minutes=10))
+                                  source_sha=payload.sourceSha, expires_at=now + timedelta(minutes=10),
+                                  installation_kind=payload.installationKind, hermes_version=payload.hermesVersion)
         db.add(row)
         db.commit()
     display_code = user_code[:4] + "-" + user_code[4:]
@@ -164,7 +168,8 @@ def approve_pair(payload: ApproveRequest, request: Request, response: Response,
     db.add(GatewayCredential(gateway_id=gateway.id,
         trusted_source_sha_ciphertext=request.app.state.services.vault.encrypt(row.source_sha, aad=f"gateway:{gateway.id}:source-sha")))
     connector = Connector(owner_id=auth.user_id, gateway_id=gateway_id, name=row.name,
-                          profiles=payload.profiles, version=row.version, token_hash=token_hash(random_token()))
+                          profiles=payload.profiles, version=row.version, token_hash=token_hash(random_token()),
+                          installation_kind=row.installation_kind, hermes_version=row.hermes_version)
     db.add(connector)
     db.flush()
     row.connector_id = connector.id

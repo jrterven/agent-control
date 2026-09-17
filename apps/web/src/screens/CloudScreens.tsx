@@ -1,13 +1,15 @@
-import { ArrowClockwise, ArrowRight, CheckCircle, Copy, Desktop, ShieldCheck, WarningCircle } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowRight, Desktop, ShieldCheck, WarningCircle } from "@phosphor-icons/react";
 import { Badge, Button, Field, Panel, StatusDot } from "@hermes-control/ui";
 import { Link } from "@tanstack/react-router";
-import type { ConnectorList, ConnectorPairing } from "@hermes-control/shared-types";
+import type { ConnectorList, ConnectorPairing, ConnectorView } from "@hermes-control/shared-types";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, ApiError } from "../lib/api";
 import { formatConversationTimestamp } from "../lib/dateTime";
 import { useCloudConfigurationStore } from "../lib/cloud";
 import { useAppStore } from "../store/appStore";
+import { CloudInstallerOptions } from "../components/CloudInstallerOptions";
+import { ConnectorReadiness } from "../components/ConnectorReadiness";
 
 async function refreshAccountBootstrap(csrfToken?: string) {
   const projection = await api.bootstrap();
@@ -56,7 +58,7 @@ export function ConnectorPairingForm({ initialCode = "" }: { initialCode?: strin
   const [profiles, setProfiles] = useState<string[]>([]);
   const [busy, setBusy] = useState<"inspect" | "approve" | null>(null);
   const [error, setError] = useState("");
-  const [connected, setConnected] = useState(false);
+  const [connected, setConnected] = useState<ConnectorView | null>(null);
   const [now, setNow] = useState(Date.now());
   const expiresAt = pairing ? Date.parse(pairing.expiresAt) : Infinity;
   const expired = pairing !== null && (!Number.isFinite(expiresAt) || expiresAt <= now);
@@ -81,19 +83,15 @@ export function ConnectorPairingForm({ initialCode = "" }: { initialCode?: strin
     if (!profiles.length) { setError("cloud.selectProfile"); return; }
     setBusy("approve"); setError("");
     try {
-      await api.approveConnectorPairing(pairing.code, profiles, csrfToken);
-      setConnected(true); setPairing(null); setCode("");
-      await refreshAccountBootstrap(csrfToken).catch(() => undefined);
+      const result = await api.approveConnectorPairing(pairing.code, profiles, csrfToken);
+      const current = useAppStore.getState();
+      if (current.authState !== "authenticated" || current.csrfToken !== csrfToken) return;
+      setConnected(result); setPairing(null); setCode("");
     } catch (cause) { setError(pairingErrorKey(cause)); }
     finally { setBusy(null); }
   };
 
-  if (connected) return <Panel className="settings-section" role="status">
-    <CheckCircle size={30} aria-hidden="true" /><h2>{t("cloud.connected")}</h2>
-    <p>{t("cloud.offlineHint")}</p>
-    <Link to="/chats" className="hc-button hc-button--primary hc-button--md">{t("cloud.openChats")}</Link>
-    <Link to="/computers" className="hc-button hc-button--ghost hc-button--md">{t("cloud.title")}</Link>
-  </Panel>;
+  if (connected) return <ConnectorReadiness computer={connected} />;
 
   return <Panel className="settings-section connector-pairing">
     <h2>{t("cloud.codeTitle")}</h2><p>{t("cloud.codeDescription")}</p>
@@ -129,8 +127,6 @@ export function ConnectorsScreen({ pairing = false }: { pairing?: boolean }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
-  const [copied, setCopied] = useState(false);
-  const [copyError, setCopyError] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
   const [revoking, setRevoking] = useState(false);
   const initialCode = new URLSearchParams(window.location.search).get("code") ?? "";
@@ -164,11 +160,6 @@ export function ConnectorsScreen({ pairing = false }: { pairing?: boolean }) {
     } catch { setError("cloud.revokeError"); }
     finally { setRevoking(false); }
   };
-  const copy = async () => {
-    setCopyError(false);
-    try { await navigator.clipboard.writeText(data?.installCommand ?? ""); setCopied(true); }
-    catch { setCopyError(true); }
-  };
   if (!cloud) return <div className="page-wrap"><p>{t("cloud.privateOnly")}</p></div>;
   return <div className="page-wrap cloud-page">
     <header className="page-header"><div><span className="eyebrow">{t("cloud.beta")}</span><h1>{t(pairing ? "cloud.connect" : "cloud.title")}</h1><p>{t("cloud.description")}</p></div>
@@ -179,10 +170,7 @@ export function ConnectorsScreen({ pairing = false }: { pairing?: boolean }) {
     {error ? <p className="form-error" role="alert"><WarningCircle aria-hidden="true" /> {t(error)} <Button size="sm" variant="ghost" onClick={() => setRevision((value) => value + 1)} disabled={offline}>{t("cloud.retry")}</Button></p> : null}
     {loading ? <p role="status">{t("cloud.loading")}</p> : null}
     {pairing ? <div className="settings-layout">
-      <Panel className="settings-section">
-        <h2>{t("cloud.installTitle")}</h2><p>{t("cloud.installDescription")}</p>
-        {data?.installCommand ? <><pre className="connector-command"><code>{data.installCommand}</code></pre><Button leadingIcon={<Copy aria-hidden="true" />} onClick={() => void copy()}>{t(copied ? "cloud.copied" : "cloud.copy")}</Button>{copyError ? <p role="status">{t("cloud.copyError")}</p> : null}</> : !loading ? <p>{t("cloud.installUnavailable")}</p> : null}
-      </Panel>
+      <CloudInstallerOptions existingCommand={data?.installCommand} loading={loading} initialExisting={Boolean(initialCode)} />
       <ConnectorPairingForm initialCode={initialCode} />
       <Panel className="settings-section"><h2>{t("cloud.installPwa")}</h2><p>{t("cloud.installPwaDescription")}</p></Panel>
     </div> : <>
@@ -191,6 +179,10 @@ export function ConnectorsScreen({ pairing = false }: { pairing?: boolean }) {
       <div className="connector-grid">{data?.items.map((item) => <Panel className="settings-section connector-card" key={item.id}>
         <header><Desktop aria-hidden="true" /><div><strong>{item.name}</strong><p><StatusDot tone={item.status === "online" ? "positive" : "warning"} /> {t(`cloud.${item.status}`)}</p></div></header>
         <dl><div><dt>{t("cloud.version")}</dt><dd>{item.version ?? t("cloud.unknown")}</dd></div><div><dt>{t("cloud.lastSeen")}</dt><dd>{item.lastSeenAt ? formatConversationTimestamp(item.lastSeenAt, i18n.resolvedLanguage ?? i18n.language, timeZone) : t("cloud.neverSeen")}</dd></div></dl>
+        {item.installationKind || item.hermesVersion ? <dl>
+          {item.installationKind === "managed" || item.installationKind === "existing" ? <div><dt>{t("onboarding.installationKind")}</dt><dd>{t(item.installationKind === "managed" ? "onboarding.kindManaged" : "onboarding.kindExisting")}</dd></div> : null}
+          {item.hermesVersion ? <div><dt>{t("onboarding.hermesVersion")}</dt><dd>{item.hermesVersion}</dd></div> : null}
+        </dl> : null}
         <div className="connector-profiles">{item.profiles.map((profile) => <Badge key={profile}>{profile}</Badge>)}</div>
         {item.status !== "revoked" ? revokeId === item.id ? <div className="connector-revoke"><p>{t("cloud.revokeConfirm", { name: item.name })}</p><Button variant="danger" disabled={revoking || offline} onClick={() => void revoke()}>{t("cloud.confirmRevoke")}</Button><Button variant="ghost" disabled={revoking} onClick={() => setRevokeId(null)}>{t("cloud.cancel")}</Button></div> : <Button variant="ghost" disabled={revoking || offline} onClick={() => setRevokeId(item.id)}>{t("cloud.revoke")}</Button> : null}
       </Panel>)}</div>

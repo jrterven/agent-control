@@ -1489,10 +1489,15 @@ export async function createChatForCurrentContext() {
       state.selectedWorkspaceId || undefined,
       state.csrfToken,
     );
-    useAppStore.getState().addSession(session);
+    const current = useAppStore.getState();
+    // A request can finish after logout or an account switch. Its session must
+    // never be projected into the new account's sidebar or selected for it.
+    if (current.authState !== "authenticated" || current.userId !== state.userId || current.csrfToken !== state.csrfToken) return undefined;
+    current.addSession(session);
     return session;
   } catch (error) {
-    useAppStore.getState().setConnection("degraded");
+    const current = useAppStore.getState();
+    if (current.authState === "authenticated" && current.userId === state.userId && current.csrfToken === state.csrfToken) current.setConnection("degraded");
     throw error;
   }
 }

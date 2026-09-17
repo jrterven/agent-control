@@ -169,6 +169,13 @@ esac
         fake_bin / "python3",
         f"""#!/usr/bin/env bash
 set -eu
+if [[ "${{1:-}}" == "-" && "${{2:-}}" =~ ^[0-9]+$ && "$#" == 2 ]]; then
+  # This is a simulated host; never inspect listeners on the developer's Mac.
+  # Keep the collision path exercisable without stopping a real Hermes service.
+  cat >/dev/null
+  [[ "${{FAKE_LISTENING_PORT:-}}" == "$2" ]] && exit 0
+  exit 1
+fi
 if [[ "${{1:-}}" == "-m" && "${{2:-}}" == "venv" ]]; then
   target="${{3}}"
   mkdir -p "$target/bin"

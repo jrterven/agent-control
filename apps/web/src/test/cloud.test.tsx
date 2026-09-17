@@ -27,6 +27,7 @@ beforeEach(async () => {
   useCloudConfigurationStore.setState({ methods: { mode: "cloud", googleEnabled: true }, loading: false, error: false });
   useAppStore.setState({ authState: "authenticated", csrfToken: "csrf-test", gateways: [], profiles: [], sessions: [], messages: [], demoMode: false, streamingBySession: {}, selectedSessionId: "", selectedProfileId: "" });
   vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrap);
+  vi.spyOn(api, "connectors").mockResolvedValue({ items: [connector], installCommand: "" });
 });
 
 afterEach(async () => {
@@ -147,8 +148,10 @@ describe("my computers", () => {
   });
 
   it("shows the installation command and phone instructions", async () => {
+    const user = userEvent.setup();
     vi.spyOn(api, "connectors").mockResolvedValue({ items: [], installCommand: "curl https://control.example/connector/install.sh | sh" });
     render(<ConnectorsScreen pairing />);
+    await user.click(screen.getByRole("radio", { name: /Connect my existing Hermes/ }));
     expect(await screen.findByText("curl https://control.example/connector/install.sh | sh")).toBeInTheDocument();
     expect(screen.getByText(/On iPhone, open this site in Safari/)).toBeInTheDocument();
   });

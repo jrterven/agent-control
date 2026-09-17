@@ -15,6 +15,8 @@ class Connector(Base, Timestamped):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     profiles: Mapped[list] = mapped_column(JSON)
     version: Mapped[str | None] = mapped_column(String(80))
+    installation_kind: Mapped[str | None] = mapped_column(String(16))
+    hermes_version: Mapped[str | None] = mapped_column(String(80))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -28,6 +30,8 @@ class DeviceAuthorization(Base):
     profiles: Mapped[list] = mapped_column(JSON)
     version: Mapped[str | None] = mapped_column(String(80))
     source_sha: Mapped[str] = mapped_column(String(40))
+    installation_kind: Mapped[str | None] = mapped_column(String(16))
+    hermes_version: Mapped[str | None] = mapped_column(String(80))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     approved_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     connector_id: Mapped[str | None] = mapped_column(ForeignKey("connectors.id", ondelete="CASCADE"))

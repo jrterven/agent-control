@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "components": {
+    "node": "22.23.2",
+    "agentBrowser": "0.26.0",
+    "chromium": "153.0.8010.47"
+  },
+  "agentBrowser": {
+    "url": "https://registry.npmjs.org/agent-browser/-/agent-browser-0.26.0.tgz",
+    "sha256": "8a48cf4110d7dc2c12c1c4d6d25e0babdfa31604b537f05df0dc835fe2f854bf",
+    "size": 32616331,
+    "integrity": "sha512-pdqSfjwbFSp+qnwlb2g23e9wXveIOfMi19xpPA9xZUbzEAUp6W4YBZj6Ybj8z4M7WkcbGDDYc+oDIHDt9R3EDQ=="
+  },
+  "platforms": {
+    "linux-x86_64": {
+      "node": {
+        "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.gz",
+        "sha256": "b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a",
+        "size": 56851233
+      },
+      "chromium": {
+        "url": "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.47/linux64/chrome-linux64.zip",
+        "sha256": "89778cbf7a852726b6f51649b2586b894c00737e81f8031733721560d21bbea7",
+        "size": 195709628
+      },
+      "nativeName": "agent-browser-linux-x64"
+    },
+    "linux-arm64": {
+      "node": {
+        "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-arm64.tar.gz",
+        "sha256": "013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30",
+        "size": 56749972
+      },
+      "chromium": {
+        "url": "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.47/linux-arm64/chrome-linux-arm64.zip",
+        "sha256": "ef3d2fea85e675ba8e9a7894c0be4595e5130659a9ac95e04c6064ed09f411da",
+        "size": 195919275
+      },
+      "nativeName": "agent-browser-linux-arm64"
+    },
+    "macos-arm64": {
+      "node": {
+        "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-darwin-arm64.tar.gz",
+        "sha256": "61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6",
+        "size": 50068815
+      },
+      "chromium": {
+        "url": "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.47/mac-arm64/chrome-mac-arm64.zip",
+        "sha256": "939ef9dc3aa74240c929d793e123edab0fda89c5a9cfeb029686c34141d2ed58",
+        "size": 190878359
+      },
+      "nativeName": "agent-browser-darwin-arm64"
+    }
+  }
+}

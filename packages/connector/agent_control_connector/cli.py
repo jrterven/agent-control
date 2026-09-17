@@ -56,6 +56,10 @@ def detect_revision(hermes_home: Path, source: str | None) -> tuple[str, Path]:
         resolved = Path(binary).resolve()
         candidates.extend([resolved.parent.parent, resolved.parent])
     for candidate in candidates:
+        if candidate.name == "hermes" and (candidate.parent / "runtime-manifest.json").exists():
+            from .managed_manifest import verify_runtime
+            manifest = verify_runtime(candidate.parent)
+            return manifest["hermesSourceSha"], candidate.resolve()
         try:
             result = subprocess.run(["git", "-C", str(candidate), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5)
             if result.returncode or result.stdout.strip() not in AUDITED_REVISIONS:
@@ -98,7 +102,7 @@ def hermes_token(args, hermes_home: Path) -> str:
                     break
             except (OSError, ValueError):
                 continue
-    if not token:
+    if not token and not getattr(args, "no_prompt", False):
         try:
             # A buffered read/write stream seeks when changing direction; a TTY
             # cannot seek. getpass opens its own TTY for input, so this stream is

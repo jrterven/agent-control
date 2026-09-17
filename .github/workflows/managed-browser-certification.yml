@@ -1,0 +1,34 @@
+name: Managed browser certification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-extra:
+    # This separate release gate reports every failure. Uncertified platforms
+    # produce no archive and must be absent from signed availability catalogs.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            platform: linux-x86_64
+          - runner: ubuntu-22.04-arm
+            platform: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build pinned browser and verify native sandboxed blank page
+        run: python deploy/managed/extras/build.py --revision "$GITHUB_SHA" --platform '${{ matrix.platform }}' --output dist/browser --cache "$RUNNER_TEMP/browser-cache"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-extra-${{ matrix.platform }}
+          path: dist/browser/agent-control-browser-*.tar.gz
+          if-no-files-found: error

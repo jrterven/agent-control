@@ -9,6 +9,12 @@
         header Cache-Control "no-cache"
         file_server
     }
+    handle_path /downloads/agent-control/* {
+        root * /srv/downloads/agent-control
+        header X-Content-Type-Options nosniff
+        header Cache-Control "no-cache"
+        file_server
+    }
     handle {
         reverse_proxy control:8000 {
             stream_close_delay 5m

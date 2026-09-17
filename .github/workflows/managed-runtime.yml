@@ -1,0 +1,67 @@
+name: Managed Hermes runtime
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            platform: linux-x86_64
+          - runner: ubuntu-22.04-arm
+            platform: linux-arm64
+          - runner: macos-14
+            platform: macos-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned build tools
+        run: python -m pip --isolated install --index-url https://pypi.org/simple uv==0.12.15 setuptools==83.0.0 wheel==0.45.1
+      - name: Build, lock dependencies and test relocation
+        run: python deploy/managed/build.py --revision "$GITHUB_SHA" --platform '${{ matrix.platform }}' --output dist/managed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: managed-${{ matrix.platform }}
+          path: dist/managed/*
+          if-no-files-found: error
+
+  linux-acceptance:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-22.04-arm]
+        container: ['ubuntu:22.04', 'ubuntu:24.04', 'debian:12-slim', 'debian:13-slim']
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: managed-linux-*
+          path: dist/managed
+          merge-multiple: true
+      - name: Validate runtime on clean supported distributions
+        env:
+          CONTAINER: ${{ matrix.container }}
+        run: |
+          arch=$(uname -m)
+          if [ "$arch" = aarch64 ]; then arch=arm64; fi
+          mkdir -p "$RUNNER_TEMP/runtime"
+          tar -xzf "dist/managed/agent-control-runtime-linux-$arch.tar.gz" -C "$RUNNER_TEMP/runtime"
+          docker run --rm --network none \
+            -v "$RUNNER_TEMP/runtime:/opt/runtime:ro" \
+            -v "$GITHUB_WORKSPACE/deploy/managed/smoke.py:/opt/smoke.py:ro" \
+            -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONNOUSERSITE=1 \
+            -e PYTHONPATH=/opt/runtime/agent-control-runtime/hermes:/opt/runtime/agent-control-runtime/connector \
+            -e HERMES_HOME=/tmp/hermes-home "$CONTAINER" \
+            /opt/runtime/agent-control-runtime/python/bin/python3 -B /opt/smoke.py \
+            --root /opt/runtime/agent-control-runtime --work /tmp/runtime-smoke
