@@ -133,7 +133,17 @@ native package without requiring Node, Python installation or compilation.
 The connector detects a clean, audited Hermes checkout and an authenticated
 loopback dashboard on port 9119. An existing Hermes token is read from local
 configuration or requested through a hidden terminal prompt; it never goes to
-cloud. Nonstandard installations can use the runtime `connect --help` flags.
+cloud. On Linux, detection includes the private installer's
+`~/.hermes/control-services/hermes-serve.env` and the earlier private preview's
+`~/.config/hermes-control-preview/hermes-serve.env`; macOS also checks its dashboard
+Keychain item. The prompt uses the controlling terminal even when installing
+with `curl | sh`, and aborts if input cannot be hidden. For unattended pairing,
+add `--token-file /PRIVATE/PATH` to the installer command; this mode-0600 file
+must contain only the existing dashboard token. An environment variable must
+be exported for the `sh` process, not just for `curl`.
+After fixing a failed pairing, rerun the same installer command. It reuses the
+staged release only if all files still match the freshly verified download.
+Nonstandard installations can use the runtime `connect --help` flags.
 The connector does not install Hermes or silently trust a different revision.
 
 After browser review, only selected profiles are shared. Explicit creation of a

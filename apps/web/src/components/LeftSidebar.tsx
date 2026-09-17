@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Archive, CaretDown, ChatTeardropText, DotsThree, DotsThreeVertical, FolderSimple, GearSix, Lightning, MagnifyingGlass, PencilSimple, Plus, PushPinSimple, PushPinSimpleSlash, Robot, Trash, WarningCircle, X } from "@phosphor-icons/react";
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { Badge, Button, IconButton, StatusDot, cx } from "@hermes-control/ui";
 import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
@@ -17,6 +17,7 @@ export function LeftSidebar() {
   const { t, i18n } = useTranslation();
   const cloud = useCloudConfigurationStore((state) => state.methods?.mode === "cloud");
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const navigate = useNavigate();
   const open = useAppStore((state) => state.leftDrawerOpen);
   const close = useAppStore((state) => state.setLeftDrawerOpen);
   const selectedGatewayId = useAppStore((state) => state.selectedGatewayId);
@@ -70,6 +71,12 @@ export function LeftSidebar() {
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [sessionAnnouncement, setSessionAnnouncement] = useState("");
+  const [creatingSession, setCreatingSession] = useState(false);
+  const [createChatError, setCreateChatError] = useState("");
+  const creatingSessionRef = useRef(false);
+  const gatewaySelectorRef = useRef<HTMLDivElement>(null);
+  const gatewayMenuRef = useRef<HTMLDivElement>(null);
+  const gatewayTriggerRef = useRef<HTMLButtonElement>(null);
   const sessionMenuRef = useRef<HTMLDivElement>(null);
   const sessionMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const gateway = gateways.find((item) => item.id === selectedGatewayId) ?? gateways[0];
@@ -109,6 +116,45 @@ export function LeftSidebar() {
   const renameDialog = useOverlayDialog<HTMLDivElement>({ open: Boolean(renameTarget), onClose: closeRenameDialog, mediaQuery: "(min-width: 0px)" });
   const moveDialog = useOverlayDialog<HTMLDivElement>({ open: Boolean(moveTarget), onClose: closeMoveDialog, mediaQuery: "(min-width: 0px)" });
   const deleteDialog = useOverlayDialog<HTMLDivElement>({ open: Boolean(deleteTarget), onClose: closeDeleteDialog, mediaQuery: "(min-width: 0px)" });
+
+  useEffect(() => {
+    if (!gatewayMenuOpen) return;
+    (gatewayMenuRef.current?.querySelector<HTMLElement>("[aria-checked='true']")
+      ?? gatewayMenuRef.current?.querySelector<HTMLElement>("[role^='menuitem']"))?.focus();
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!gatewaySelectorRef.current?.contains(event.target as Node)) setGatewayMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [gatewayMenuOpen, setGatewayMenuOpen]);
+
+  useEffect(() => { setGatewayMenuOpen(false); }, [pathname, setGatewayMenuOpen]);
+
+  const closeGatewayMenu = (restoreFocus = false) => {
+    setGatewayMenuOpen(false);
+    if (restoreFocus) gatewayTriggerRef.current?.focus();
+  };
+
+  const createChat = async () => {
+    if (!canCreateSession || creatingSessionRef.current) return;
+    creatingSessionRef.current = true;
+    setCreatingSession(true);
+    setCreateChatError("");
+    try {
+      const session = await createChatForCurrentContext();
+      if (!session) {
+        setCreateChatError(t("sidebar.createChatError"));
+        return;
+      }
+      selectSession(session.id);
+      await navigate({ to: "/chats" });
+    } catch {
+      setCreateChatError(t("sidebar.createChatError"));
+    } finally {
+      creatingSessionRef.current = false;
+      setCreatingSession(false);
+    }
+  };
 
   useEffect(() => {
     if (!sessionMenuId) return;
@@ -350,16 +396,40 @@ export function LeftSidebar() {
           <IconButton className="sidebar-close" label={t("nav.closeNavigation")} icon={<X size={20} />} onClick={() => close(false)} />
         </div>
 
-        <button className="gateway-select" type="button" aria-expanded={gatewayMenuOpen} onClick={() => setGatewayMenuOpen(!gatewayMenuOpen)}>
-          <span className="gateway-select__main"><StatusDot tone={gateway?.status === "connected" ? "positive" : "warning"} /><span><strong>{gateway?.name ?? t("sidebar.noGateway")}</strong><small>{gateway?.location ?? t("sidebar.configureConnection")}</small></span></span>
-          <CaretDown size={16} />
-        </button>
-        {gatewayMenuOpen ? (
-          <div className="gateway-popover">
-            {gateways.map((item) => <button type="button" key={item.id} onClick={() => useAppStore.getState().selectGateway(item.id)}><StatusDot tone={item.status === "connected" ? "positive" : "warning"} /><span><strong>{item.name}</strong><small>{item.latencyMs} ms · {item.version}</small></span></button>)}
-            <Link to={cloud ? "/computers" : "/gateways"}><Plus size={16} /> {t(cloud ? "cloud.title" : "sidebar.manageGateways")}</Link>
-          </div>
-        ) : null}
+        <div
+          ref={gatewaySelectorRef}
+          className="gateway-selector"
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) closeGatewayMenu();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && gatewayMenuOpen) {
+              event.preventDefault();
+              event.stopPropagation();
+              closeGatewayMenu(true);
+            }
+          }}
+        >
+          <button ref={gatewayTriggerRef} id="gateway-select-trigger" className="gateway-select" type="button" aria-haspopup="menu" aria-controls="gateway-menu" aria-expanded={gatewayMenuOpen} onClick={() => setGatewayMenuOpen(!gatewayMenuOpen)} onKeyDown={(event) => {
+            if (event.key === "ArrowDown") { event.preventDefault(); setGatewayMenuOpen(true); }
+          }}>
+            <span className="gateway-select__main"><StatusDot tone={gateway?.status === "connected" ? "positive" : "warning"} /><span><strong>{gateway?.name ?? t("sidebar.noGateway")}</strong><small>{gateway?.location ?? t("sidebar.configureConnection")}</small></span></span>
+            <CaretDown size={16} />
+          </button>
+          {gatewayMenuOpen ? (
+            <div ref={gatewayMenuRef} id="gateway-menu" className="gateway-popover" role="menu" aria-labelledby="gateway-select-trigger" onKeyDown={(event) => {
+              if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+              event.preventDefault();
+              const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[role^='menuitem']"));
+              const current = items.indexOf(document.activeElement as HTMLElement);
+              const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+              items[next]?.focus();
+            }}>
+              {gateways.map((item) => <button type="button" role="menuitemradio" aria-checked={item.id === gateway?.id} key={item.id} onClick={() => { useAppStore.getState().selectGateway(item.id); closeGatewayMenu(true); }}><StatusDot tone={item.status === "connected" ? "positive" : "warning"} /><span><strong>{item.name}</strong><small>{item.latencyMs} ms · {item.version}</small></span></button>)}
+              <Link role="menuitem" to={cloud ? "/computers" : "/gateways"} onClick={() => { closeGatewayMenu(); close(false); }}><Plus size={16} /> {t(cloud ? "cloud.title" : "sidebar.manageGateways")}</Link>
+            </div>
+          ) : null}
+        </div>
 
         <button className="command-trigger" type="button" onClick={() => setCommandOpen(true)}>
           <MagnifyingGlass size={17} /><span>{t("sidebar.searchAll")}</span><kbd>⌘ K</kbd>
@@ -426,7 +496,8 @@ export function LeftSidebar() {
         </div>
 
         <div className="sidebar-footer">
-          {canCreateSession ? <Button variant="primary" leadingIcon={<Plus size={18} />} onClick={() => void createChatForCurrentContext().catch(() => undefined)}>{t("sidebar.newChat")}</Button> : null}
+          {canCreateSession ? <Button variant="primary" leadingIcon={<Plus size={18} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat()}>{t(creatingSession ? "chat.creating" : "sidebar.newChat")}</Button> : null}
+          {createChatError ? <p className="form-error" role="alert">{createChatError}</p> : null}
           <div>
             <Link to="/chats" className={pathname === "/chats" ? "is-active" : ""}><Archive size={19} /> {t("nav.chats")}</Link>
             <Link to="/settings" className={pathname === "/settings" ? "is-active" : ""}><GearSix size={19} /> {t("nav.settings")}</Link>

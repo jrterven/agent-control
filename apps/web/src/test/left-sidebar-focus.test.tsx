@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../i18n";
 
 vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => vi.fn(),
   useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) => select({ location: { pathname: "/chats" } }),
   Link: ({ to, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { to: string }) => <a href={to} {...props}>{children}</a>,
 }));
@@ -53,5 +54,20 @@ describe("mobile navigation focus management", () => {
     expect(useAppStore.getState().leftDrawerOpen).toBe(false);
     expect(trigger).toHaveFocus();
     expect(sidebar).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("dismisses the equipment menu before closing the mobile drawer", async () => {
+    const user = userEvent.setup();
+    render(<SidebarHarness />);
+    await user.click(screen.getByRole("button", { name: "Abrir navegación de prueba" }));
+    const trigger = screen.getByRole("button", { name: /gx10-58f9 Tailscale/ });
+    await user.click(trigger);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(useAppStore.getState().leftDrawerOpen).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(useAppStore.getState().leftDrawerOpen).toBe(false);
   });
 });

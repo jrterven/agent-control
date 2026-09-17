@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { bootstrapData, expect, test } from "./fixtures";
 
 test.describe("shell responsive con estado autenticado determinista", () => {
   test.beforeEach(async ({ page }) => {
@@ -61,5 +61,47 @@ test.describe("shell responsive con estado autenticado determinista", () => {
       const columns = await page.locator(".app-shell").evaluate((element) => getComputedStyle(element).gridTemplateColumns);
       expect(columns.split(" ")).toHaveLength(3);
     }
+  });
+
+  test("limita el menú del equipo al selector y permite cerrarlo fuera y con Escape", async ({ page }) => {
+    const sidebar = page.locator("#left-sidebar");
+    if (page.viewportSize()!.width < 780) await page.getByRole("button", { name: "Abrir navegación" }).click();
+    const trigger = sidebar.locator(".gateway-select");
+    await trigger.click();
+    const menu = sidebar.getByRole("menu");
+    await expect(menu).toBeVisible();
+    const selectorBox = (await trigger.boundingBox())!;
+    const menuBox = (await menu.boundingBox())!;
+    expect(Math.abs(menuBox.x - selectorBox.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(menuBox.width - selectorBox.width)).toBeLessThanOrEqual(1);
+    expect(menuBox.y).toBeGreaterThanOrEqual(selectorBox.y + selectorBox.height);
+    expect(menuBox.x + menuBox.width).toBeLessThan(page.viewportSize()!.width);
+    await page.screenshot({ path: `test-results/equipment-menu-${test.info().project.name}.png` });
+    await sidebar.locator(".sidebar-brand").click();
+    await expect(menu).toBeHidden();
+    await trigger.click();
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+    await expect(trigger).toBeFocused();
+    await expect(sidebar).toBeVisible();
+  });
+
+  test("abre un chat vacío desde Ajustes con el mismo agente y espacio de trabajo", async ({ page }) => {
+    let createCount = 0;
+    await page.route("**/api/v1/sessions", async (route) => {
+      expect(route.request().method()).toBe("POST");
+      expect(route.request().postDataJSON()).toEqual({ profileId: "profile-newton-e2e", workspaceId: "workspace-e2e" });
+      createCount += 1;
+      await route.fulfill({ json: { ...bootstrapData.sessions[0], id: "session-new-e2e", storedSessionId: "stored-new", title: "Nueva conversación", status: "ready" } });
+    });
+    await page.route("**/api/v1/sessions/session-new-e2e/messages", (route) => route.fulfill({ json: { items: [] } }));
+    await page.goto("/settings");
+    if (page.viewportSize()!.width < 780) await page.getByRole("button", { name: "Abrir navegación" }).click();
+    await page.locator("#left-sidebar").getByRole("button", { name: "Nuevo chat", exact: true }).click();
+    await expect(page).toHaveURL(/\/chats$/);
+    await expect(page.getByRole("heading", { name: "Inicia una conversación con Newton" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Mensaje a Newton…" })).toBeEmpty();
+    await expect(page.getByText("La sesión está aislada y lista para continuar.")).toHaveCount(0);
+    expect(createCount).toBe(1);
   });
 });

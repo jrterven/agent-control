@@ -46,7 +46,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install ./packages/hermes-client ./packages/connector pyinstaller==6.22.3 'pytest>=8.3,<9' 'cryptography>=44,<47'
-      - run: python -m pytest -q tests/connector/test_native_lifecycle.py tests/connector/test_management.py tests/connector/test_storage.py
+      - run: python -m pytest -q tests/connector/test_native_lifecycle.py tests/connector/test_management.py tests/connector/test_storage.py tests/connector/test_pairing_credentials.py
       - run: python deploy/connector/build.py --output dist/native --revision "$GITHUB_SHA"
       - name: Verify the bundled native lifecycle
         env:

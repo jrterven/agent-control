@@ -13,8 +13,10 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
+import warnings
 from urllib.parse import urlsplit
 
 import httpx
@@ -71,37 +73,62 @@ def hermes_token(args, hermes_home: Path) -> str:
     token = os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN") or os.environ.get("HERMES_CONTROL_HERMES_DASHBOARD_TOKEN")
     if not token and args.token_file:
         path = Path(args.token_file).expanduser()
-        if path.stat().st_size > 1024 or path.stat().st_mode & 0o077:
-            raise ValueError("The token file must be private and at most 1 KB")
-        token = path.read_text().strip()
+        token = read_token_file(path, maximum=1024, permissions=0o077).strip()
     if not token and sys.platform == "darwin":
         result = subprocess.run(["/usr/bin/security", "find-generic-password", "-a", getpass.getuser(),
                                  "-s", "com.agent-control.hermes-dashboard", "-w"], capture_output=True, text=True)
         if result.returncode == 0:
             token = result.stdout.strip()
     if not token:
-        for path in [hermes_home / ".env", Path.home() / ".config" / "hermes" / "serve.env", Path("/etc/hermes/serve.env")]:
+        candidates = [
+            (hermes_home / "control-services" / "hermes-serve.env", 0o077),
+            (Path.home() / ".config" / "hermes-control-preview" / "hermes-serve.env", 0o077),
+            (hermes_home / ".env", 0o007),
+            (Path.home() / ".config" / "hermes" / "serve.env", 0o077),
+            (Path("/etc/hermes/serve.env"), 0o007),
+        ]
+        for path, permissions in candidates:
             try:
-                if path.stat().st_size > 64 * 1024 or path.stat().st_mode & 0o007:
-                    continue
-                for line in path.read_text().splitlines():
+                for line in read_token_file(path, maximum=64 * 1024, permissions=permissions).splitlines():
                     key, _, value = line.partition("=")
                     if key.strip() == "HERMES_DASHBOARD_SESSION_TOKEN":
                         token = value.strip().strip("\"'")
                         break
                 if token:
                     break
-            except OSError:
+            except (OSError, ValueError):
                 continue
     if not token:
         try:
-            with open("/dev/tty", "r+") as terminal:
+            # A buffered read/write stream seeks when changing direction; a TTY
+            # cannot seek. getpass opens its own TTY for input, so this stream is
+            # only for the prompt. Never fall back to echoed or piped stdin.
+            with open("/dev/tty", "w") as terminal, warnings.catch_warnings():
+                warnings.simplefilter("error", getpass.GetPassWarning)
                 token = getpass.getpass("Hermes dashboard token (kept only on this computer): ", stream=terminal)
-        except OSError:
+        except (OSError, EOFError, getpass.GetPassWarning):
             pass
     if not token or not re.fullmatch(r"[A-Za-z0-9._~-]{32,512}", token):
-        raise ValueError("A private Hermes dashboard token is required. Set HERMES_DASHBOARD_SESSION_TOKEN or use --token-file PATH")
+        raise ValueError("A private Hermes dashboard token is required. Use the token configured for your running Hermes dashboard; the connector does not start or change Hermes. Retry from an interactive terminal, set HERMES_DASHBOARD_SESSION_TOKEN, or add --token-file PATH to the installer (a private file containing only the token).")
     return token
+
+
+def read_token_file(path: Path, *, maximum: int, permissions: int) -> str:
+    # Read only bounded regular files owned by this user or the administrator.
+    # O_NONBLOCK prevents a replaced candidate FIFO from hanging setup.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "r") as stream:
+        metadata = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid not in {os.getuid(), 0}
+            or metadata.st_mode & permissions or metadata.st_size > maximum):
+            raise ValueError("The token file must be a private, size-limited regular file owned by this user or root")
+        try:
+            value = stream.read(maximum + 1)
+        except UnicodeError:
+            raise ValueError("The token file must contain UTF-8 text") from None
+        if len(value.encode("utf-8")) > maximum:
+            raise ValueError("The token file exceeds its size limit")
+        return value
 
 
 async def pair(args):

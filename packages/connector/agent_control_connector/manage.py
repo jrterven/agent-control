@@ -292,7 +292,7 @@ def restore_service(home: Path) -> None:
     wait_for_connection(home, started_at)
     print("Connector service started and connection verified.")
 
-def install(home: Path, source: Path, release: str, server: str) -> None:
+def install(home: Path, source: Path, release: str, server: str, *, token_file: str | None = None) -> None:
     if not RELEASE_ID.fullmatch(release):
         raise ValueError("Invalid release identifier")
     if (home / "current").exists() or (home / "current").is_symlink():
@@ -302,7 +302,7 @@ def install(home: Path, source: Path, release: str, server: str) -> None:
         if current.parent != (home / "releases").resolve():
             raise ValueError("Current release is outside installed releases")
         validate_release(current, current.name)
-        result = subprocess.run([str(current / "agent-control-connector"), "connect", "--server", server, "--data-dir", str(home)])
+        result = subprocess.run(pairing_command(current, home, server, token_file))
         if result.returncode:
             raise ValueError("Pairing failed; existing release was preserved")
         restore_service(home)
@@ -319,12 +319,17 @@ def install(home: Path, source: Path, release: str, server: str) -> None:
     private_dir(releases)
     destination = releases / release
     if destination.exists():
-        raise ValueError("This release is already staged; inspect the previous install failure")
-    shutil.copytree(source, destination, symlinks=False)
+        # A failed pairing intentionally retains its release. Resume only when
+        # it still matches the newly downloaded, verified immutable bundle.
+        validate_release(destination, release)
+        if release_contents(destination) != release_contents(source):
+            raise ValueError("The staged release differs from the verified download; inspect the previous install failure")
+    else:
+        shutil.copytree(source, destination, symlinks=False)
     atomic_link(home, "current", destination)
     binary = destination / "agent-control-connector"
     # Pair interactively before registering any background service.
-    result = subprocess.run([str(binary), "connect", "--server", server, "--data-dir", str(home)])
+    result = subprocess.run(pairing_command(destination, home, server, token_file))
     if result.returncode:
         (home / "current").unlink()
         raise ValueError("Pairing failed; staged release retained for diagnosis")
@@ -341,6 +346,32 @@ def install(home: Path, source: Path, release: str, server: str) -> None:
         link.symlink_to(home / "current/agent-control-connector")
     wait_for_connection(home, started_at)
     print(f"Connector installed and connection verified. Command: {link}. Hermes remains managed separately.")
+
+
+def pairing_command(release: Path, home: Path, server: str, token_file: str | None) -> list[str]:
+    command = [str(release / "agent-control-connector"), "connect", "--server", server, "--data-dir", str(home)]
+    if token_file:
+        command.extend(["--token-file", token_file])
+    return command
+
+
+def release_contents(root: Path) -> dict[str, tuple[str, int, str]]:
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("Staged release must be a real directory")
+    result = {}
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("Staged release contains an unsupported link")
+        relative = path.relative_to(root).as_posix()
+        if path.is_dir():
+            result[relative] = ("directory", 0, "")
+        elif path.is_file():
+            with path.open("rb") as contents:
+                digest = hashlib.file_digest(contents, "sha256").hexdigest()
+            result[relative] = ("file", path.stat().st_mode & 0o111, digest)
+        else:
+            raise ValueError("Staged release contains an unsupported special file")
+    return result
 
 
 def wait_for_connection(home: Path, started_at: datetime, *, timeout: float = 60) -> None:
@@ -424,6 +455,7 @@ def management_main(argv: list[str]) -> int:
     parser.add_argument("--source")
     parser.add_argument("--release")
     parser.add_argument("--server")
+    parser.add_argument("--token-file", help="Private file containing the existing Hermes dashboard token (installation only)")
     parser.add_argument("--forget", action="store_true", help="Remove local pairing credentials after uninstall; deduplication ledger is retained")
     args = parser.parse_args(argv)
     try:
@@ -442,13 +474,15 @@ def execute_management(args, home: Path) -> int:
     try:
         if args.command != "uninstall" and args.forget:
             raise ValueError("--forget is only supported with uninstall")
+        if args.token_file and (args.command != "install-service" or not args.server):
+            raise ValueError("--token-file is only supported when installing and pairing a connector")
         if args.command == "install-service":
             if not any((args.source, args.release, args.server)):
                 restore_service(home)
             else:
                 if not args.source or not args.release or not args.server:
                     raise ValueError("Install requires source, release and server")
-                install(home, Path(args.source), args.release, args.server)
+                install(home, Path(args.source), args.release, args.server, token_file=args.token_file)
         elif args.command == "update":
             private_dir(home / "releases")
             if not args.release:

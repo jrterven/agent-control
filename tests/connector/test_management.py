@@ -253,6 +253,63 @@ def test_install_does_not_report_success_before_service_connects(tmp_path, monke
     assert "installed and connection verified" not in capsys.readouterr().out
 
 
+def test_failed_pairing_can_retry_same_verified_release_with_token_file(tmp_path, monkeypatch):
+    fake_user = tmp_path / "user"
+    fake_user.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_user))
+    source = bundle(tmp_path / "source")
+    home = tmp_path / "connector"
+    home.mkdir()
+    commands = []
+    def pair(args, **kwargs):
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 1 if len(commands) == 1 else 0)
+    monkeypatch.setattr(manage.subprocess, "run", pair)
+    monkeypatch.setattr(manage, "run", lambda *a, **k: None)
+    services = []
+    monkeypatch.setattr(manage, "service", services.append)
+    monkeypatch.setattr(manage, "wait_for_connection", lambda *a, **k: None)
+    with pytest.raises(ValueError, match="Pairing failed"):
+        manage.install(home, source, "r1", "https://control.test")
+    assert not (home / "current").exists()
+    assert not manage.service_path().exists()
+    assert services == []
+    assert (home / "releases/r1").is_dir()
+    token_file = str(tmp_path / "private token.txt")
+    result = manage.management_main(["install-service", "--data-dir", str(home), "--source", str(source),
+        "--release", "r1", "--server", "https://control.test", "--token-file", token_file])
+    assert result == 0
+    assert commands[-1][-2:] == ["--token-file", token_file]
+    assert (home / "current").resolve() == home / "releases/r1"
+    assert services == ["start"]
+
+
+@pytest.mark.parametrize("change", ["contents", "extra", "mode", "symlink"])
+def test_pairing_retry_rejects_staged_files_different_from_verified_download(tmp_path, monkeypatch, change):
+    fake_user = tmp_path / "user"
+    fake_user.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_user))
+    source = bundle(tmp_path / "source")
+    (source / "library").write_text("verified bytes")
+    home = tmp_path / "connector"
+    staged = home / "releases/r1"
+    shutil.copytree(source, staged)
+    if change == "contents":
+        (staged / "library").write_text("changed")
+    elif change == "extra":
+        (staged / "extra").write_text("unexpected")
+    elif change == "mode":
+        (staged / "library").chmod(0o755)
+    else:
+        (staged / "library").unlink()
+        (staged / "library").symlink_to(source / "library")
+    monkeypatch.setattr(manage.subprocess, "run", lambda *a, **k: pytest.fail("Cannot execute a mismatched staged release"))
+    with pytest.raises(ValueError, match="differs|unsupported link"):
+        manage.install(home, source, "r1", "https://control.test")
+    assert not (home / "current").exists()
+    assert not manage.service_path().exists()
+
+
 def test_management_lock_prevents_overlapping_updates(tmp_path):
     with manage.management_lock(tmp_path):
         with pytest.raises(ValueError, match="Another"):
@@ -300,7 +357,7 @@ def test_prepare_release_materializes_native_links_and_publishes_signed_set(tmp_
     assert not (unpublished / "connector/releases/r2").exists()
 
 
-@pytest.mark.parametrize("args", [["--server"], ["--server","https://control.test/path"], ["--server","https://control.test\nunsafe"]])
+@pytest.mark.parametrize("args", [["--server"], ["--token-file"], ["--server","https://control.test/path"], ["--server","https://control.test\nunsafe"]])
 def test_installer_rejects_invalid_origin_before_network(args):
     result = subprocess.run(["sh",str(REPO / "deploy/connector/install.sh"),*args], capture_output=True, text=True)
     assert result.returncode == 2

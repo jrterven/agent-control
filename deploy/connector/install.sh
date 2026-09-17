@@ -5,11 +5,13 @@ umask 077
 
 server=
 version=
+token_file=
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --server) [ "$#" -ge 2 ] || { echo "--server requires a value" >&2; exit 2; }; server=$2; shift 2 ;;
         --version) [ "$#" -ge 2 ] || { echo "--version requires a value" >&2; exit 2; }; version=$2; shift 2 ;;
-        -h|--help) echo 'Usage: install.sh --server https://control.example.com [--version RELEASE]'; exit 0 ;;
+        --token-file) [ "$#" -ge 2 ] || { echo "--token-file requires a value" >&2; exit 2; }; token_file=$2; shift 2 ;;
+        -h|--help) echo 'Usage: install.sh --server https://control.example.com [--version RELEASE] [--token-file PATH]'; exit 0 ;;
         *) echo 'Unknown installer argument' >&2; exit 2 ;;
     esac
 done
@@ -62,4 +64,6 @@ tar -xzf "$stage/$archive" -C "$stage"
 binary="$stage/agent-control-connector/agent-control-connector"
 [ -x "$binary" ] || { echo 'Release executable missing' >&2; exit 2; }
 # The signed runtime performs safe filesystem/service setup and pairing.
-"$binary" install-service --data-dir "$connector_home" --source "$stage/agent-control-connector" --release "$version" --server "$server"
+set -- install-service --data-dir "$connector_home" --source "$stage/agent-control-connector" --release "$version" --server "$server"
+if [ -n "$token_file" ]; then set -- "$@" --token-file "$token_file"; fi
+"$binary" "$@"
