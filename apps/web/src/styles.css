@@ -305,7 +305,7 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 }
 
 .connection-banner { min-height: 36px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px 14px; color: var(--warning-text); border-bottom: 1px solid var(--warning-border); background: var(--warning-surface); font-size: 12px; }
-.connection-banner--demo { color: var(--muted-strong); border-color: var(--border); background: var(--surface-1); }
+.connection-banner--demo, .connection-banner--setup { color: var(--muted-strong); border-color: var(--border); background: var(--surface-1); }
 .connection-banner--danger { color: var(--danger-text); border-color: var(--danger-border); background: var(--danger-surface); }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
