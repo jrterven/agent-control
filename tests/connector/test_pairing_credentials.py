@@ -134,8 +134,6 @@ print("HIDDEN_TOKEN_ACCEPTED", flush=True)
     try:
         process = subprocess.Popen([sys.executable, "-c", script, os.ttyname(slave), str(tmp_path)],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-        os.close(slave)
-        slave = None
         deadline = time.monotonic() + 15
         while b"Hermes dashboard token" not in captured and time.monotonic() < deadline:
             if select.select([master], [], [], 0.1)[0]:
@@ -143,6 +141,10 @@ print("HIDDEN_TOKEN_ACCEPTED", flush=True)
             if process.poll() is not None:
                 pytest.fail("Prompt process exited before asking: " + process.stderr.read().decode())
         assert b"Hermes dashboard token" in captured, "The secure prompt never appeared"
+        # Keep one slave open until the child has opened its controlling TTY.
+        # On Linux, the master reports EIO while there are no open slaves.
+        os.close(slave)
+        slave = None
         os.write(master, (token + "\n").encode())
         process.stdin.write(b"installer script, not a credential\n")
         process.stdin.close()
