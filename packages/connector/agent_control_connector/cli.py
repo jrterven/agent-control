@@ -5,6 +5,7 @@ import asyncio
 from datetime import datetime, timezone
 import fcntl
 import getpass
+import hashlib
 import ipaddress
 import json
 import os
@@ -147,7 +148,7 @@ async def pair(args):
             atomic_json(directory / "config.json", {"server": server, "connectorId": paired["connectorId"],
                 "gatewayId": paired["gatewayId"], "profiles": paired["profiles"], "restUrl": rest, "wsUrl": ws,
                 "hermesHome": str(hermes_home), "hermesSource": str(source), "sourceSha": revision})
-            print("Computer connected. Install the background service with: agent-control-connector install-service", flush=True)
+            print("Computer paired. Start and verify its connection with: agent-control-connector install-service", flush=True)
             return
     raise RuntimeError("Pairing code expired; run connect again")
 
@@ -185,6 +186,31 @@ def run(directory):
         asyncio.run(ConnectorRuntime(directory, config, SecretStore(directory).load()).run())
 
 
+def check_credentials(directory: Path) -> None:
+    """Read the existing identity without starting a runtime or touching its state."""
+    try:
+        if directory.is_symlink() or not directory.is_dir() or directory.stat().st_uid != os.getuid():
+            raise ValueError("Invalid connector directory")
+        read_json(directory / "config.json")
+        if sys.platform == "darwin":
+            from .keychain import MacKeychain
+            # SecretStore's constructor creates/chmods its directory. A foreground
+            # permission check must not change a running connector's local state.
+            service = "com.agent-control.connector." + hashlib.sha256(str(directory.resolve()).encode()).hexdigest()[:24]
+            secrets = json.loads(MacKeychain().load(service, str(os.getuid())))
+        else:
+            secrets = read_json(directory / "secrets.json")
+        if not isinstance(secrets, dict) or not all(
+            isinstance(secrets.get(key), str) and 0 < len(secrets[key]) <= 4096
+            for key in ("accessToken", "hermesToken")
+        ):
+            raise ValueError("Invalid connector credentials")
+    except Exception:
+        # Neither Keychain errors nor malformed stored values may expose secrets.
+        raise RuntimeError("Cannot access existing connector credentials. On macOS, allow this connector to use its Keychain item, then try again.") from None
+    print("Existing connector credentials are accessible.", flush=True)
+
+
 def main(argv=None):
     values = list(sys.argv[1:] if argv is None else argv)
     if values and values[0] in {"install-service", "update", "rollback", "uninstall"}:
@@ -202,7 +228,8 @@ def main(argv=None):
     pairing.add_argument("--rest-url", default="http://127.0.0.1:9119")
     pairing.add_argument("--ws-url")
     pairing.add_argument("--profiles")
-    for command in (pairing, commands.add_parser("run"), commands.add_parser("status"), commands.add_parser("doctor")):
+    credential_check = commands.add_parser("check-credentials", help="Check access to existing credentials without starting or changing the connector")
+    for command in (pairing, commands.add_parser("run"), commands.add_parser("status"), commands.add_parser("doctor"), credential_check):
         command.add_argument("--data-dir")
     args = parser.parse_args(values)
     directory = data_directory(args.data_dir)
@@ -211,6 +238,8 @@ def main(argv=None):
             asyncio.run(pair(args))
         elif args.command == "run":
             run(directory)
+        elif args.command == "check-credentials":
+            check_credentials(directory)
         else:
             result = status(directory)
             if args.command == "doctor":

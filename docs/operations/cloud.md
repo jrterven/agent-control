@@ -57,8 +57,8 @@ accounts and measure capacity before increasing scope. One API worker is require
 ## Signed connector downloads
 
 CI builds four unsigned native archives and the cloud image; it does not receive
-the release signing key. Download all four `connector-*` artifacts from the
-successful run and sign them on the operator's trusted computer. Keep the PEM
+the RSA release signing key or Apple's private key. Download all four `connector-*` artifacts from the
+successful run and sign them on the operator's trusted Mac. Keep the PEM
 RSA private key at `~/.config/agent-control-release/connector-signing.pem` with
 mode 0600 and retain its offline backup outside the repository and DB backups.
 No signing key is generated or committed by the build scripts.
@@ -69,20 +69,58 @@ python3 deploy/connector/prepare_release.py \
   --artifacts /ABSOLUTE_RELEASE_DIR/native \
   --output /ABSOLUTE_RELEASE_DIR/downloads \
   --revision COMMITTED_REVISION \
-  --private-key ~/.config/agent-control-release/connector-signing.pem
+  --private-key ~/.config/agent-control-release/connector-signing.pem \
+  --apple-identity DEVELOPER_ID_APPLICATION_CERTIFICATE_SHA1 \
+  --apple-team-id APPLE_TEAM_ID \
+  --notary-profile agent-control-notary
 ```
 
 Use the exact Git revision from that successful workflow run. The local signing
-command requires Python 3.12 or later and OpenSSL. It inserts the public key into
+command requires Python 3.12 or later, OpenSSL, Xcode tools, a Developer ID
+Application identity with its private key in Keychain, and a validated
+`notarytool store-credentials` Keychain profile. Obtain the certificate SHA-1
+with `security find-identity -v -p codesigning`; never export the Apple private
+key to CI. It inserts the public key into
 the installer and each immutable native archive, verifies all four signed
 archives and refuses an incomplete or overwritten release. The private key
 stays on the signing computer.
 
-Copy the resulting `downloads` directory contents into the configured server
+For macOS, the publisher finalizes the regular-file PyInstaller layout, removes
+redundant framework copies only after checking their contents and loader
+dependencies, and signs every Mach-O with the same Developer ID team, hardened
+runtime and timestamp. The main identifier remains
+`com.jemailabs.agent-control.connector` across architectures and releases.
+Do not change this identity or add entitlement exceptions casually: Keychain
+uses the executable's designated requirement to recognize updates.
+
+The exact final signed tree is submitted as ZIP to Apple. Both architectures
+must be accepted, their ticket hashes must cover every delivered code file,
+and `codesign --check-notarization` must pass before RSA checksums are published.
+A pending submission exits 75 without changing `VERSION`. Repeat the **same
+command and output directory** to resume; `.apple-signing` retains signed
+bytes, upload IDs and logs. Never re-sign or resubmit a pending release. An
+interrupted upload with uncertain outcome requires inspecting Apple's history.
+Do not publish an unsigned fallback. Keep `.apple-signing` private and backed
+up until publication is complete; only `downloads/connector` is public.
+Bare CLI executables and ZIP files cannot be stapled, so initial Gatekeeper
+verification can require access to Apple's servers; offline first launch is
+not guaranteed. Run the frozen lifecycle smoke tests on the final signed
+archives on both Mac architectures before uploading them.
+
+For those native checks, create a temporary **draft** GitHub release targeted at
+the exact commit, attach the two prepared macOS archives, and dispatch
+`signed-connector-smoke.yml` with its `draft_release_tag`, `expected_revision`
+and `expected_team_id`. This read-only workflow verifies all notarized code and
+runs the frozen CLI/lifecycle tests on Apple Silicon and Intel. Require both
+jobs to pass and compare the reports' archive SHA-256 values with the files
+being uploaded. Delete the temporary draft after retaining the reports; do not
+publish it. This workflow receives no Apple signing or notarization credentials.
+
+Copy only the resulting `downloads/connector` directory into the configured server
 downloads directory, preserving `connector/releases/<revision>`.
 Publish the immutable release directory first, then atomically replace the
 installer and `VERSION` pointer. Never publish the installer template containing
-`__CONNECTOR_RELEASE_PUBLIC_KEY__`. Caddy serves these at
+`__CONNECTOR_RELEASE_PUBLIC_KEY__`. The configured reverse proxy serves these at
 `/downloads/connector/`; it does not list directories.
 
 The web's **Connect a computer** command downloads and verifies the correct
@@ -114,7 +152,24 @@ agent-control-connector uninstall
 
 Lifecycle commands refuse active or uncertain work. Updates verify signed
 metadata, retain previous releases and restore the previous binary if the new
-connection fails readiness. Uninstall removes the connector service while
+connection fails readiness. macOS checks the target executable's Keychain
+access in the foreground **before** requesting maintenance or stopping the
+working service, allowing five minutes for an OS permission prompt. Denial or
+timeout leaves the existing service running. The first migration from an
+ad-hoc signed release can require one approval; choose Always Allow only for
+the expected connector. Subsequent releases preserve its Developer ID identity.
+An already installed legacy executable still runs its old updater. For that
+first migration, download and RSA-verify the new release, stage it in its final
+`~/.agent-control-connector/releases/<revision>` directory, and run that exact
+target's `check-credentials --data-dir ~/.agent-control-connector` before
+activating the staged release with `agent-control-connector rollback --release
+<revision>` (this command selects an already installed release). The automatic preflight applies once this version
+has been installed; never stop the old service to wait for a permission prompt.
+An explicit rollback to a legacy release without the preflight command warns
+that permission may instead be requested during startup; automatic recovery
+still restores the previous binary if startup fails. Installation and service
+restoration report success only after observing a fresh connected status.
+Uninstall removes the connector service while
 preserving configuration and Hermes data; revoke its cloud entry separately.
 Run `agent-control-connector install-service` to restore a previously removed
 service with its existing pairing. To pair a revoked computer again, run

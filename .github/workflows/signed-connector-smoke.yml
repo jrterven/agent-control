@@ -1,0 +1,107 @@
+name: Signed macOS connector verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft_release_tag:
+        description: Temporary draft release containing the signed macOS archives
+        required: true
+        type: string
+      expected_revision:
+        description: Full lowercase commit SHA used to build the release
+        required: true
+        type: string
+      expected_team_id:
+        description: Ten-character Apple Developer Team ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Signed connector (${{ matrix.architecture }})
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            architecture: x86_64
+          - runner: macos-14
+            architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      EXPECTED_REVISION: ${{ inputs.expected_revision }}
+      EXPECTED_TEAM_ID: ${{ inputs.expected_team_id }}
+      DRAFT_RELEASE_TAG: ${{ inputs.draft_release_tag }}
+      AGENT_CONTROL_CONNECTOR_ARCHIVE: ${{ runner.temp }}/signed-connector/agent-control-connector-macos-${{ matrix.architecture }}.tar.gz
+    steps:
+      - name: Validate dispatch inputs
+        shell: bash
+        run: |
+          [[ "$EXPECTED_REVISION" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$EXPECTED_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || exit 1
+          [[ "$DRAFT_RELEASE_TAG" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$ ]] || exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_revision }}
+          persist-credentials: false
+      - name: Confirm exact source revision
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_REVISION"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download the unpublished signed archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/signed-connector"
+          gh release view "$DRAFT_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName > "$RUNNER_TEMP/signed-connector/draft.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          release = json.loads((Path(os.environ['RUNNER_TEMP']) / 'signed-connector/draft.json').read_text())
+          assert release['isDraft'] is True, 'Refusing to verify a published release through this staging workflow'
+          assert release['tagName'] == os.environ['DRAFT_RELEASE_TAG'], 'Unexpected release tag'
+          PY
+          gh release download "$DRAFT_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "agent-control-connector-macos-$ARCHITECTURE.tar.gz" \
+            --dir "$RUNNER_TEMP/signed-connector"
+      - name: Verify every delivered code signature and Apple notarization
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          python deploy/connector/verify_macos_archive.py \
+            --archive "$AGENT_CONTROL_CONNECTOR_ARCHIVE" \
+            --revision "$EXPECTED_REVISION" --team "$EXPECTED_TEAM_ID" \
+            --architecture "$ARCHITECTURE" \
+            --report "$RUNNER_TEMP/signed-connector/signature-verification.json"
+      - name: Install test dependencies from the exact release revision
+        run: python -m pip install ./packages/hermes-client ./packages/connector 'pytest>=8.3,<9' 'cryptography>=44,<47'
+      - name: Run isolated native lifecycle checks on the signed archive
+        # Tests use temporary unpaired data directories and a stand-in worker;
+        # they never register launchctl services, start Hermes or access real credentials.
+        run: |
+          python -m pytest -q tests/connector/test_native_lifecycle.py \
+            --junitxml "$RUNNER_TEMP/signed-connector/native-lifecycle.xml"
+      - name: Confirm the tested archive still matches its verification report
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'signed-connector'
+          report = json.loads((root / 'signature-verification.json').read_text())
+          with Path(os.environ['AGENT_CONTROL_CONNECTOR_ARCHIVE']).open('rb') as archive:
+              assert hashlib.file_digest(archive, 'sha256').hexdigest() == report['sha256'], 'Archive changed during tests'
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: signed-connector-verification-${{ matrix.architecture }}
+          path: |
+            ${{ runner.temp }}/signed-connector/signature-verification.json
+            ${{ runner.temp }}/signed-connector/native-lifecycle.xml
+          if-no-files-found: warn

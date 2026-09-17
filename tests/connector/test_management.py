@@ -22,7 +22,7 @@ from agent_control_connector import manage
 def bundle(path: Path, version="r1", *, system=None, architecture=None):
     path.mkdir(parents=True)
     binary = path / "agent-control-connector"
-    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.write_text('#!/bin/sh\nif [ "$1" = "--help" ]; then echo "{connect,check-credentials,run,status}"; fi\nexit 0\n')
     binary.chmod(0o755)
     (path / "release.json").write_text(json.dumps({"revision":version, "protocol":1,
         "system":system or platform.system(), "architecture":architecture or platform.machine()}))
@@ -155,6 +155,104 @@ def test_switch_rolls_back_atomically_when_new_service_fails(tmp_path, monkeypat
     assert (tmp_path / "config.json").read_text() == '{"paired":true}'
 
 
+@pytest.mark.parametrize("failure", ["denied", "timeout"])
+def test_macos_preflight_failure_never_drains_or_stops_working_service(tmp_path, monkeypatch, capsys, failure):
+    monkeypatch.setattr(manage.sys, "platform", "darwin")
+    old = bundle(tmp_path / "releases/r1", "r1", system="Darwin")
+    new = bundle(tmp_path / "releases/r2", "r2", system="Darwin")
+    (tmp_path / "current").symlink_to(old)
+    calls = []
+    def invoke(args, **kwargs):
+        calls.append((args, kwargs))
+        if args[-1] == "--help":
+            return subprocess.CompletedProcess(args, 0, "{run,check-credentials}", "")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, 300, output="secret-placeholder")
+        return subprocess.CompletedProcess(args, 1, "secret-placeholder", "secret-placeholder")
+    monkeypatch.setattr(manage.subprocess, "run", invoke)
+    monkeypatch.setattr(manage, "drain", lambda _: pytest.fail("preflight must finish before requesting maintenance"))
+    monkeypatch.setattr(manage, "service", lambda _: pytest.fail("working service must stay running"))
+    with pytest.raises(ValueError, match="left unchanged") as error:
+        manage.switch(tmp_path, new)
+    assert calls[1][0] == [str(new / "agent-control-connector"), "check-credentials", "--data-dir", str(tmp_path)]
+    assert calls[1][1]["timeout"] == 300
+    assert "secret-placeholder" not in str(error.value) + capsys.readouterr().out
+    assert (tmp_path / "current").resolve() == old
+    assert not (tmp_path / "previous").exists()
+    assert not (tmp_path / "maintenance.request").exists()
+
+
+def test_macos_preflight_completes_before_maintenance(tmp_path, monkeypatch):
+    monkeypatch.setattr(manage.sys, "platform", "darwin")
+    old = bundle(tmp_path / "releases/r1", "r1", system="Darwin")
+    new = bundle(tmp_path / "releases/r2", "r2", system="Darwin")
+    (tmp_path / "current").symlink_to(old)
+    actions = []
+    def invoke(args, **kwargs):
+        actions.append(args[1])
+        assert (tmp_path / "current").resolve() == old
+        return subprocess.CompletedProcess(args, 0, "{check-credentials,run}", "")
+    monkeypatch.setattr(manage.subprocess, "run", invoke)
+    monkeypatch.setattr(manage, "drain", lambda _: actions.append("drain"))
+    monkeypatch.setattr(manage, "service", actions.append)
+    monkeypatch.setattr(manage, "wait_for_connection", lambda *args, **kwargs: actions.append("ready"))
+    manage.switch(tmp_path, new)
+    assert actions == ["--help", "check-credentials", "drain", "stop", "start", "ready"]
+    assert (tmp_path / "current").resolve() == new
+
+
+def test_macos_legacy_preflight_is_only_permitted_for_explicit_rollback(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(manage.sys, "platform", "darwin")
+    calls = []
+    def invoke(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, "{connect,run,status,doctor}", "")
+    monkeypatch.setattr(manage.subprocess, "run", invoke)
+    with pytest.raises(ValueError, match="cannot check Keychain"):
+        manage.credential_preflight(tmp_path, tmp_path / "legacy")
+    manage.credential_preflight(tmp_path, tmp_path / "legacy", allow_legacy=True)
+    assert "older rollback release" in capsys.readouterr().out
+    assert all(args[-1] == "--help" for args in calls)
+
+
+def test_failed_help_is_not_treated_as_legacy_rollback(tmp_path, monkeypatch):
+    monkeypatch.setattr(manage.sys, "platform", "darwin")
+    monkeypatch.setattr(manage.subprocess, "run", lambda args, **kwargs: subprocess.CompletedProcess(args, 1, "", ""))
+    with pytest.raises(ValueError, match="left unchanged"):
+        manage.credential_preflight(tmp_path, tmp_path / "legacy", allow_legacy=True)
+
+
+def test_startup_requires_connection_observed_after_start(tmp_path, monkeypatch):
+    started = datetime.now(timezone.utc)
+    observations = [
+        {"connected": True, "observedAt": (started - timedelta(seconds=1)).isoformat()},
+        {"connected": False, "observedAt": started.isoformat()},
+        {"connected": True, "observedAt": started.isoformat()},
+    ]
+    monkeypatch.setattr(manage, "status", lambda _: observations.pop(0))
+    monkeypatch.setattr(manage.time, "sleep", lambda _: None)
+    manage.wait_for_connection(tmp_path, started)
+    assert observations == []
+
+
+def test_install_does_not_report_success_before_service_connects(tmp_path, monkeypatch, capsys):
+    fake_user = tmp_path / "user"
+    fake_user.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_user))
+    source = bundle(tmp_path / "source")
+    home = tmp_path / "connector"
+    home.mkdir()
+    monkeypatch.setattr(manage, "run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(manage, "service", lambda _: None)
+    monkeypatch.setattr(manage, "status", lambda _: {"connected": False, "observedAt": datetime.now(timezone.utc).isoformat()})
+    ticks = iter([0, 0, 61])
+    monkeypatch.setattr(manage.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(manage.time, "sleep", lambda _: None)
+    with pytest.raises(ValueError, match="connection was not verified"):
+        manage.install(home, source, "r1", "https://control.test")
+    assert "installed and connection verified" not in capsys.readouterr().out
+
+
 def test_management_lock_prevents_overlapping_updates(tmp_path):
     with manage.management_lock(tmp_path):
         with pytest.raises(ValueError, match="Another"):
@@ -176,7 +274,12 @@ def test_prepare_release_materializes_native_links_and_publishes_signed_set(tmp_
         with tarfile.open(artifacts / f"agent-control-connector-{target}.tar.gz", "w:gz") as archive:
             archive.add(source, arcname="agent-control-connector")
     output = tmp_path / "output"
-    module.prepare(artifacts, output, "r2", signing_key[0])
+    approved = []
+    def apple_signer(bundle_path, platform):
+        assert (bundle_path / "release-public-key.pem").is_file()
+        approved.append(platform)
+    module.prepare(artifacts, output, "r2", signing_key[0], apple_signer=apple_signer)
+    assert approved == ["macos-x86_64", "macos-arm64"]
     release = output / "connector/releases/r2"
     assert (output / "connector/VERSION").read_text() == "r2\n"
     assert "__CONNECTOR_RELEASE_PUBLIC_KEY__" not in (output / "connector/install.sh").read_text()
@@ -186,7 +289,15 @@ def test_prepare_release_materializes_native_links_and_publishes_signed_set(tmp_
             assert archive.extractfile("agent-control-connector/lib-link").read() == b"framework"
     subprocess.run(["openssl","dgst","-sha256","-verify",str(signing_key[1]),"-signature",str(release / "SHA256SUMS.sig"),str(release / "SHA256SUMS")],check=True)
     with pytest.raises(ValueError, match="Immutable"):
-        module.prepare(artifacts, output, "r2", signing_key[0])
+        module.prepare(artifacts, output, "r2", signing_key[0], apple_signer=apple_signer)
+    from deploy.connector.macos_signing import NotarizationPending
+    def pending(bundle_path, platform):
+        raise NotarizationPending(platform)
+    unpublished = tmp_path / "pending"
+    with pytest.raises(NotarizationPending):
+        module.prepare(artifacts, unpublished, "r2", signing_key[0], apple_signer=pending)
+    assert not (unpublished / "connector/VERSION").exists()
+    assert not (unpublished / "connector/releases/r2").exists()
 
 
 @pytest.mark.parametrize("args", [["--server"], ["--server","https://control.test/path"], ["--server","https://control.test\nunsafe"]])

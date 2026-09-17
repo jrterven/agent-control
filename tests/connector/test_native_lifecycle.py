@@ -51,6 +51,8 @@ def test_native_cli_version_status_and_failure_exit_codes(native_command,tmp_pat
     doctor=invoke("doctor","--data-dir",str(tmp_path/"unpaired"))
     assert doctor.returncode == 0 and json.loads(doctor.stdout)["paired"] is False
     assert not (tmp_path/"unpaired").exists()
+    assert invoke("check-credentials", "--data-dir", str(tmp_path/"unpaired")).returncode == 1
+    assert not (tmp_path/"unpaired").exists()
     assert invoke("invalid-command").returncode == 2
     assert invoke("run","--data-dir",str(tmp_path/"unpaired")).returncode == 1
 
@@ -66,6 +68,10 @@ if sys.argv[1] == "connect":
     target=home/"config.json"
     target.write_text(json.dumps({{"server":sys.argv[sys.argv.index("--server")+1]}}))
     target.chmod(0o600)
+elif sys.argv[1] == "--help":
+    print("{{connect,check-credentials,run,status}}")
+elif sys.argv[1] == "check-credentials":
+    print("Existing connector credentials are accessible.")
 ''')
     binary.chmod(0o755)
     (path/"release.json").write_text(json.dumps({"revision":version,"protocol":1,"system":platform.system(),"architecture":platform.machine()}))

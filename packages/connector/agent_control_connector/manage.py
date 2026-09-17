@@ -284,10 +284,13 @@ def restore_service(home: Path) -> None:
     write_service(home)
     if sys.platform != "darwin":
         run("loginctl", "enable-linger", getpass.getuser())
+    started_at = datetime.now(timezone.utc)
     service("start")
     link.parent.mkdir(parents=True, exist_ok=True)
     if not link.is_symlink():
         link.symlink_to(home / "current/agent-control-connector")
+    wait_for_connection(home, started_at)
+    print("Connector service started and connection verified.")
 
 def install(home: Path, source: Path, release: str, server: str) -> None:
     if not RELEASE_ID.fullmatch(release):
@@ -328,6 +331,7 @@ def install(home: Path, source: Path, release: str, server: str) -> None:
     write_service(home)
     if sys.platform != "darwin":
         run("loginctl", "enable-linger", getpass.getuser())
+    started_at = datetime.now(timezone.utc)
     service("start")
     bindir.mkdir(parents=True, exist_ok=True)
     if link.exists() or link.is_symlink():
@@ -335,10 +339,52 @@ def install(home: Path, source: Path, release: str, server: str) -> None:
             raise ValueError("An unrelated executable already occupies ~/.local/bin/agent-control-connector")
     else:
         link.symlink_to(home / "current/agent-control-connector")
-    print(f"Connector installed. Command: {link}. Hermes remains managed separately.")
+    wait_for_connection(home, started_at)
+    print(f"Connector installed and connection verified. Command: {link}. Hermes remains managed separately.")
 
 
-def switch(home: Path, destination: Path) -> None:
+def wait_for_connection(home: Path, started_at: datetime, *, timeout: float = 60) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            value = status(home)
+            observed = datetime.fromisoformat(value["observedAt"].replace("Z", "+00:00"))
+            if observed >= started_at and value.get("connected") is True:
+                return
+        except (ValueError, OSError, KeyError, TypeError):
+            pass
+        time.sleep(0.5)
+    raise ValueError("Connector connection was not verified after service startup. Run agent-control-connector doctor to check its status.")
+
+
+def credential_preflight(home: Path, destination: Path, *, allow_legacy: bool = False) -> None:
+    if sys.platform != "darwin":
+        return
+    binary = str(destination / "agent-control-connector")
+    try:
+        help_result = subprocess.run([binary, "--help"], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        raise ValueError("Cannot check the target connector's capabilities; the running service was left unchanged.") from None
+    if help_result.returncode != 0:
+        raise ValueError("Cannot check the target connector's capabilities; the running service was left unchanged.")
+    if not re.search(r"(?:[{},\s])check-credentials(?=[{},\s])", help_result.stdout):
+        if allow_legacy:
+            print("This older rollback release cannot check Keychain access before startup. It may request permission after restarting; a failed startup restores the current release.", flush=True)
+            return
+        raise ValueError("This release cannot check Keychain access before updating; the running service was left unchanged. Install a newer release that supports check-credentials.")
+    print("Checking the new connector's Keychain access before stopping the current service. If macOS asks, choose Always Allow for the Agent Control connector. Waiting up to five minutes.", flush=True)
+    try:
+        result = subprocess.run([binary, "check-credentials", "--data-dir", str(home)],
+                                capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        raise ValueError("Keychain permission check timed out; the running service was left unchanged. Retry and approve the macOS Keychain prompt.") from None
+    except (OSError, subprocess.SubprocessError):
+        raise ValueError("Keychain permission check failed; the running service was left unchanged.") from None
+    if result.returncode != 0:
+        raise ValueError("The new connector could not access its Keychain credentials; the running service was left unchanged. Retry and approve the macOS Keychain prompt.")
+
+
+def switch(home: Path, destination: Path, *, allow_legacy: bool = False) -> None:
     private_dir(home / "releases")
     releases = (home / "releases").resolve()
     destination = destination.resolve()
@@ -349,6 +395,7 @@ def switch(home: Path, destination: Path) -> None:
     if previous.parent != releases:
         raise ValueError("Current release is outside the installed releases")
     validate_release(previous, previous.name)
+    credential_preflight(home, destination, allow_legacy=allow_legacy)
     drain(home)
     try:
         service("stop")
@@ -356,17 +403,10 @@ def switch(home: Path, destination: Path) -> None:
         atomic_link(home, "current", destination)
         (home / "maintenance.request").unlink(missing_ok=True)
         (home / "status.json").unlink(missing_ok=True)
+        started_at = datetime.now(timezone.utc)
         service("start")
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            try:
-                if status(home).get("connected") is True:
-                    print("Connector release activated and connection verified.")
-                    return
-            except (ValueError, KeyError, FileNotFoundError):
-                pass
-            time.sleep(0.5)
-        raise ValueError("Updated connector did not become ready")
+        wait_for_connection(home, started_at, timeout=30)
+        print("Connector release activated and connection verified.")
     except Exception:
         service("stop")
         atomic_link(home, "current", previous)
@@ -424,7 +464,7 @@ def execute_management(args, home: Path) -> int:
             if args.release and not RELEASE_ID.fullmatch(args.release):
                 raise ValueError("Invalid release identifier")
             destination = home / "releases" / args.release if args.release else home / "previous"
-            switch(home, destination)
+            switch(home, destination, allow_legacy=True)
         else:
             validate_service_target()
             if runtime_running(home):
