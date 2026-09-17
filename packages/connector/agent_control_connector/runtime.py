@@ -10,10 +10,12 @@ import inspect
 from pathlib import Path
 import random
 import re
+import ssl
 from typing import Any
 from uuid import uuid4
 
 from websockets.asyncio.client import connect
+from websockets.exceptions import InvalidStatus
 from hermes_client import HermesGatewayProvider, ProviderConnection
 from hermes_client.connector_protocol import (FrameReader, MAX_FRAME_BYTES, OPERATIONS, VERSION, WRITE_OPERATIONS,
                                              ProtocolError, decode_message, encode_message, send_message, validate_arguments)
@@ -22,9 +24,25 @@ from hermes_client.types import CapabilitySet, NormalizedEvent, PromptAttachment
 from . import __version__
 from .media import project_media, read_media
 from .storage import OperationLedger, atomic_json
+from .tls import cloud_ssl_context
 
 ACTIVE = {"pending", "queued", "accepted", "starting", "streaming", "running", "working", "waiting"}
 SAFE_PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$")
+
+
+def connection_error_code(error: Exception) -> str:
+    """Report actionable transport failures without exception text or secrets."""
+    if isinstance(error, ssl.SSLCertVerificationError):
+        return "CLOUD_TLS_CERTIFICATE_INVALID"
+    if isinstance(error, ssl.SSLError):
+        return "CLOUD_TLS_FAILED"
+    if isinstance(error, InvalidStatus):
+        return "CLOUD_ACCESS_REJECTED" if error.response.status_code in {401, 403} else "CLOUD_HANDSHAKE_FAILED"
+    if isinstance(error, ProtocolError):
+        return "CLOUD_PROTOCOL_MISMATCH"
+    if isinstance(error, TimeoutError):
+        return "CLOUD_CONNECTION_TIMEOUT"
+    return "CLOUD_CONNECTION_FAILED"
 
 
 class ConnectorRuntime:
@@ -52,6 +70,7 @@ class ConnectorRuntime:
         self.tasks: set[asyncio.Task] = set()
         self.closed = False
         self.active_work: bool | None = None
+        self.connection_error: str | None = None
 
     async def on_event(self, event: NormalizedEvent):
         if event.profile_name not in self.providers:
@@ -119,6 +138,7 @@ class ConnectorRuntime:
             self.active_work = active
             atomic_json(self.directory / "status.json", {"activeWork": active, "fresh": True,
                 "observedAt": datetime.now(timezone.utc).isoformat(), "connected": self.websocket is not None,
+                "connectionError": self.connection_error,
                 "version": __version__, "maintenance": maintenance_request_id is not None,
                 "maintenanceRequestId": maintenance_request_id})
             await asyncio.sleep(3)
@@ -223,7 +243,8 @@ class ConnectorRuntime:
         url = self.config["server"].replace("https://", "wss://", 1) + "/api/v1/connectors/ws"
         async with connect(url, additional_headers={"Authorization": "Bearer " + self.secrets["accessToken"]},
                            max_size=MAX_FRAME_BYTES, max_queue=8, ping_interval=15, ping_timeout=30,
-                           open_timeout=15, close_timeout=5, compression=None, proxy=None) as websocket:
+                           open_timeout=15, close_timeout=5, compression=None, proxy=None,
+                           ssl=cloud_ssl_context()) as websocket:
             reader = FrameReader()
             welcome = None
             while welcome is None:
@@ -231,6 +252,7 @@ class ConnectorRuntime:
             if welcome.get("type") != "welcome" or welcome.get("gatewayId") != self.gateway_id or not set(self.providers) <= set(welcome.get("profiles", [])):
                 raise ProtocolError("Cloud identity or approved profiles changed; pair again")
             self.websocket = websocket
+            self.connection_error = None
             # New cloud process may have lost its replay cursor; always request an
             # authoritative reconciliation after reconnect, then replay bounded events.
             for name, provider in self.providers.items():
@@ -269,10 +291,12 @@ class ConnectorRuntime:
             while not self.closed:
                 try:
                     await self._connection()
+                    self.connection_error = "CLOUD_DISCONNECTED"
                     attempt = 0
                 except asyncio.CancelledError:
                     raise
-                except Exception:
+                except Exception as exc:
+                    self.connection_error = connection_error_code(exc)
                     attempt += 1
                 await asyncio.sleep(min(2 ** min(attempt, 5), 30) + random.random())
         finally:
@@ -286,4 +310,5 @@ class ConnectorRuntime:
                 await provider.close()
             self.ledger.close()
             atomic_json(self.directory / "status.json", {"activeWork": None, "fresh": False,
-                "observedAt": datetime.now(timezone.utc).isoformat(), "connected": False, "version": __version__, "maintenance": False})
+                "observedAt": datetime.now(timezone.utc).isoformat(), "connected": False,
+                "connectionError": self.connection_error, "version": __version__, "maintenance": False})

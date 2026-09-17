@@ -22,6 +22,8 @@ import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 
+from .tls import cloud_ssl_context
+
 LABEL = "com.agent-control.connector"
 RELEASE_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}\Z")
 
@@ -215,7 +217,8 @@ def download(url: str, destination: Path, maximum: int) -> None:
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
             raise ValueError("Release redirects are not allowed")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect,
+                                         urllib.request.HTTPSHandler(context=cloud_ssl_context()))
     with opener.open(url, timeout=60) as response, destination.open("xb") as output:
         total = 0
         while chunk := response.read(262_144):
