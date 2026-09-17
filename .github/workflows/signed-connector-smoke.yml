@@ -36,7 +36,7 @@ jobs:
       EXPECTED_REVISION: ${{ inputs.expected_revision }}
       EXPECTED_TEAM_ID: ${{ inputs.expected_team_id }}
       DRAFT_RELEASE_TAG: ${{ inputs.draft_release_tag }}
-      AGENT_CONTROL_CONNECTOR_ARCHIVE: ${{ runner.temp }}/signed-connector/agent-control-connector-macos-${{ matrix.architecture }}.tar.gz
+      ARCHITECTURE: ${{ matrix.architecture }}
     steps:
       - name: Validate dispatch inputs
         shell: bash
@@ -44,6 +44,7 @@ jobs:
           [[ "$EXPECTED_REVISION" =~ ^[a-f0-9]{40}$ ]] || exit 1
           [[ "$EXPECTED_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || exit 1
           [[ "$DRAFT_RELEASE_TAG" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$ ]] || exit 1
+          printf 'AGENT_CONTROL_CONNECTOR_ARCHIVE=%s/signed-connector/agent-control-connector-macos-%s.tar.gz\n' "$RUNNER_TEMP" "$ARCHITECTURE" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.expected_revision }}
