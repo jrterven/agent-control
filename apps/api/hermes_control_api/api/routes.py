@@ -44,6 +44,7 @@ from ..realtime import terminal_status
 from ..openai_live import OPENAI_LIVE_MODEL_ID, OpenAIIntegrationService, voice_provider
 from ..models import AuditEvent, Automation, AutomationRun, AuthSession, Gateway, GatewayCredential, IdempotencyOperation, ProfileRef, PushSubscription, RealtimeTicket, SessionLink, User, Workspace
 from ..notifications import encrypted_subscription, endpoint_hash, push_endpoint_allowed
+from ..ownership import active_gateway_filter
 from ..schemas import (
     AuthView,
     ApprovalResponseRequest,
@@ -605,8 +606,11 @@ def bootstrap(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Mobile-shell projection; canonical resources remain independently addressable."""
-    gateways = list(db.scalars(select(Gateway).order_by(Gateway.created_at)).all())
     app_services = services(request)
+    visibility = {"cloud": app_services.settings.deployment_mode == "cloud", "owner_id": user.id}
+    gateways = list(db.scalars(select(Gateway).where(
+        active_gateway_filter(Gateway.id, **visibility)
+    ).order_by(Gateway.created_at)).all())
     integration_service = UserIntegrationService(app_services.vault)
     integration_configuration = integration_service.configuration(db, user)
     mutable_profiles = app_services.settings.mutable_profiles
@@ -620,7 +624,9 @@ def bootstrap(
         gateway_id: source_sha is not None
         for gateway_id, source_sha in trusted_gateway_shas.items()
     }
-    profiles = list(db.scalars(select(ProfileRef).order_by(ProfileRef.display_name)).all())
+    profiles = list(db.scalars(select(ProfileRef).where(
+        active_gateway_filter(ProfileRef.gateway_id, **visibility)
+    ).order_by(ProfileRef.display_name)).all())
     profile_speech_configurations = integration_service.profile_configurations(
         db,
         user,
@@ -645,6 +651,7 @@ def bootstrap(
         db.scalars(
             select(SessionLink)
             .where(SessionLink.owner_id == user.id, SessionLink.archived_at.is_(None))
+            .where(active_gateway_filter(SessionLink.gateway_id, **visibility))
             .order_by(SessionLink.last_activity_at.desc())
         ).all()
     )
@@ -652,6 +659,7 @@ def bootstrap(
         db.scalars(
             select(Automation)
             .where(Automation.owner_id == user.id)
+            .where(active_gateway_filter(Automation.gateway_id, **visibility))
             .order_by(Automation.updated_at.desc())
         ).all()
     )
@@ -831,7 +839,8 @@ def bootstrap(
                 "description": row.description or "",
                 "sessionCount": db.scalar(
                     select(func.count(SessionLink.id)).where(
-                        SessionLink.workspace_id == row.id, SessionLink.archived_at.is_(None)
+                        SessionLink.workspace_id == row.id, SessionLink.archived_at.is_(None),
+                        active_gateway_filter(SessionLink.gateway_id, **visibility),
                     )
                 )
                 or 0,
@@ -944,11 +953,13 @@ def public_capability_flags(
 @router.get("/gateways", response_model=list[GatewayView])
 def list_gateways(
     request: Request,
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[GatewayView]:
-    rows = db.scalars(select(Gateway).order_by(Gateway.created_at)).all()
     app_services = services(request)
+    rows = db.scalars(select(Gateway).where(active_gateway_filter(
+        Gateway.id, cloud=app_services.settings.deployment_mode == "cloud", owner_id=user.id,
+    )).order_by(Gateway.created_at)).all()
     return [gateway_view(db, row, app_services) for row in rows]
 
 
@@ -1073,12 +1084,15 @@ async def read_capabilities(
 async def list_profiles(
     request: Request,
     gateway_id: str = Query(alias="gatewayId"),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[ProfileView]:
     rows = db.scalars(
         select(ProfileRef)
         .where(ProfileRef.gateway_id == gateway_id)
+        .where(active_gateway_filter(
+            ProfileRef.gateway_id, cloud=services(request).settings.deployment_mode == "cloud", owner_id=user.id,
+        ))
         .order_by(ProfileRef.display_name)
     ).all()
     app_services = services(request)

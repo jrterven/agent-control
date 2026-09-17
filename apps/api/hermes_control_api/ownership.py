@@ -3,10 +3,25 @@
 Background workers deliberately use unscoped sessions; they must route using
 stored ownership. HTTP sessions get this policy before loading product rows.
 """
-from sqlalchemy import event, select
+from sqlalchemy import event, select, true
 from sqlalchemy.orm import Session, with_loader_criteria
 
 from . import models as m
+from .connector_models import Connector
+
+
+def active_gateway_filter(gateway_column, *, cloud: bool, owner_id: str):
+    """Omit revoked routes from active lists without deleting their owned data.
+
+    This is a projection filter, not an ownership policy. Offline computers stay
+    visible and canonical historical records remain independently addressable.
+    """
+    if not cloud:
+        return true()
+    revoked = select(Connector.gateway_id).where(
+        Connector.owner_id == owner_id, Connector.revoked_at.is_not(None),
+    )
+    return gateway_column.not_in(revoked)
 
 
 def scope_cloud_session(db: Session, owner_id: str) -> None:

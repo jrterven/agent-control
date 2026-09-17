@@ -54,6 +54,7 @@ from .email_reference_cache import (
 )
 from .eventing import EventHub
 from .gateway_health import aggregate_profile_health
+from .ownership import active_gateway_filter
 from .models import (
     AuditEvent,
     Automation,
@@ -2635,10 +2636,12 @@ class SearchService:
     ) -> dict[str, Any]:
         needle = " ".join(query.split()).casefold()
         safe_limit = max(1, min(int(limit), 100))
+        visibility = {"cloud": self.services.settings.deployment_mode == "cloud", "owner_id": actor.id}
         owned_sessions = list(
             db.scalars(
                 select(SessionLink)
                 .where(SessionLink.owner_id == actor.id)
+                .where(active_gateway_filter(SessionLink.gateway_id, **visibility))
                 .order_by(SessionLink.updated_at.desc())
             ).all()
         )
@@ -2701,6 +2704,7 @@ class SearchService:
             automations = db.scalars(
                 select(Automation)
                 .where(Automation.owner_id == actor.id)
+                .where(active_gateway_filter(Automation.gateway_id, **visibility))
                 .order_by(Automation.updated_at.desc())
             ).all()
             for row in automations:

@@ -339,7 +339,7 @@ export function LeftSidebar() {
     const updatedAt = formatConversationTimestamp(session.updatedAt, language, timeZone);
     return (
       <div className={cx("session-list__row", session.id === selectedSessionId && "is-active")} key={session.id} role={pinnedSection ? "listitem" : undefined}>
-        <button type="button" className="session-list__select" onClick={() => selectSession(session.id)}>
+        <button type="button" className="session-list__select" onClick={() => { selectSession(session.id); void navigate({ to: "/chats" }); }}>
           <span className="session-list__body"><strong>{session.title}</strong><small>{context}</small></span>
           <span className="session-list__meta" title={formatConversationTimestampLong(session.updatedAt, language, timeZone)}>{pinnedSection ? <PushPinSimple size={12} weight="fill" aria-hidden="true" /> : null}{session.unread ? <i /> : null}{updatedAt}</span>
         </button>

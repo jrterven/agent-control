@@ -5,6 +5,7 @@ import { LeftSidebar } from "../components/LeftSidebar";
 import { gateways, profiles, sessions, workspaces } from "../data";
 import { api } from "../lib/api";
 import { useCloudConfigurationStore } from "../lib/cloud";
+import { db } from "../lib/db";
 import { useAppStore } from "../store/appStore";
 import type { SessionSummary } from "../types";
 
@@ -128,5 +129,48 @@ describe("new chat navigation", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Comprueba la conexión");
     expect(create).not.toHaveBeenCalled();
     expect(navigation.navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe("existing conversation navigation", () => {
+  it.each(["/agents", "/computers", "/settings", "/automations", "/chats"])("opens the selected conversation directly from %s", async (pathname) => {
+    navigation.pathname = pathname;
+    const user = userEvent.setup();
+    const create = vi.spyOn(api, "createSession");
+    render(<LeftSidebar />);
+
+    await user.click(screen.getByRole("button", { name: /^Memoria de agentes · agosto/ }));
+
+    expect(navigation.navigate).toHaveBeenCalledExactlyOnceWith({ to: "/chats" });
+    expect(useAppStore.getState()).toMatchObject({
+      selectedSessionId: "session-papers", selectedProfileId: "profile-newton",
+      selectedGatewayId: "gateway-home", selectedWorkspaceId: "workspace-papers", leftDrawerOpen: false,
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("opens a pinned conversation by keyboard, restoring its computer and context without clearing drafts", async () => {
+    navigation.pathname = "/agents";
+    const user = userEvent.setup();
+    const profile = { ...profiles[1], id: "profile-other-computer", gatewayId: "gateway-mock" };
+    const pinned: SessionSummary = {
+      ...sessions[1], id: "session-pinned", profileId: profile.id, workspaceId: undefined,
+      title: "Conversación fijada", pinnedAt: "2026-09-17T10:00:00Z",
+    };
+    const draft = { sessionId: "session-papers", content: "Borrador sin enviar", updatedAt: 1 };
+    await db.drafts.put(draft);
+    useAppStore.setState({ profiles: [...profiles, profile], sessions: [...sessions, pinned] });
+    render(<LeftSidebar />);
+
+    screen.getByRole("button", { name: /^Conversación fijada/ }).focus();
+    await user.keyboard("{Enter}");
+
+    expect(navigation.navigate).toHaveBeenCalledExactlyOnceWith({ to: "/chats" });
+    expect(useAppStore.getState()).toMatchObject({
+      selectedSessionId: pinned.id, selectedProfileId: profile.id,
+      selectedGatewayId: "gateway-mock", selectedWorkspaceId: "", leftDrawerOpen: false,
+    });
+    expect(await db.drafts.get(draft.sessionId)).toEqual(draft);
+    await db.drafts.delete(draft.sessionId);
   });
 });

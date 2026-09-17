@@ -202,6 +202,13 @@ installed connector predates the guided reconnect option. The old cloud entry
 stays revoked; the new entry receives a different credential and needs fresh
 browser approval. Hermes-managed app installations use their own supervisor;
 the standalone installer refuses to replace those identities or services.
+Revoked computers remain marked in **My computers**, but their gateways, agents,
+conversations and automations are omitted from the active shell and search.
+Existing metadata is retained, and Hermes data is never deleted by revocation.
+The new approved connection discovers its selected profiles and Hermes history
+under its new identity. Computers are not merged by hostname or profile name;
+Control-only organization attached to the previous identity is not reassigned.
+Temporarily offline computers remain visible.
 For an intentional local identity removal, `agent-control-connector uninstall --forget`
 remains available before repeating the guided installer.
 The explicit `--forget` removes the local device credential and pairing after
