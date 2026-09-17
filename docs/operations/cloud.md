@@ -115,6 +115,11 @@ runs the frozen CLI/lifecycle tests on Apple Silicon and Intel. Require both
 jobs to pass and compare the reports' archive SHA-256 values with the files
 being uploaded. Delete the temporary draft after retaining the reports; do not
 publish it. This workflow receives no Apple signing or notarization credentials.
+GitHub requires push access to list draft releases, so an isolated download-only
+job has a repository-scoped, short-lived `contents: write` token. It checks that
+the release is still a draft, performs only reads, and passes the two archives
+through Actions artifacts. Native test jobs have `contents: read` and receive
+no write token; the download job never checks out or executes release code.
 
 Copy only the resulting `downloads/connector` directory into the configured server
 downloads directory, preserving `connector/releases/<revision>`.

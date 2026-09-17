@@ -20,8 +20,56 @@ permissions:
   contents: read
 
 jobs:
+  download:
+    name: Read signed archives from the draft release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # GitHub requires push access to read a draft release. Keep that token in
+    # this download-only job; no repository or downloaded code is executed here.
+    permissions:
+      contents: write
+    env:
+      EXPECTED_REVISION: ${{ inputs.expected_revision }}
+      EXPECTED_TEAM_ID: ${{ inputs.expected_team_id }}
+      DRAFT_RELEASE_TAG: ${{ inputs.draft_release_tag }}
+    steps:
+      - name: Validate dispatch inputs
+        shell: bash
+        run: |
+          [[ "$EXPECTED_REVISION" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$EXPECTED_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || exit 1
+          [[ "$DRAFT_RELEASE_TAG" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$ ]] || exit 1
+      - name: Download both unpublished signed archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/signed-connector"
+          gh release view "$DRAFT_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName > "$RUNNER_TEMP/signed-connector/draft.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          release = json.loads((Path(os.environ['RUNNER_TEMP']) / 'signed-connector/draft.json').read_text())
+          assert release['isDraft'] is True, 'Refusing to verify a published release through this staging workflow'
+          assert release['tagName'] == os.environ['DRAFT_RELEASE_TAG'], 'Unexpected release tag'
+          PY
+          for architecture in arm64 x86_64; do
+            gh release download "$DRAFT_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "agent-control-connector-macos-$architecture.tar.gz" \
+              --dir "$RUNNER_TEMP/signed-connector"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-connector-inputs
+          path: |
+            ${{ runner.temp }}/signed-connector/agent-control-connector-macos-arm64.tar.gz
+            ${{ runner.temp }}/signed-connector/agent-control-connector-macos-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 3
   verify:
     name: Signed connector (${{ matrix.architecture }})
+    needs: download
+    permissions:
+      contents: read
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -54,23 +102,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Download the unpublished signed archive
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARCHITECTURE: ${{ matrix.architecture }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/signed-connector"
-          gh release view "$DRAFT_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName > "$RUNNER_TEMP/signed-connector/draft.json"
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          release = json.loads((Path(os.environ['RUNNER_TEMP']) / 'signed-connector/draft.json').read_text())
-          assert release['isDraft'] is True, 'Refusing to verify a published release through this staging workflow'
-          assert release['tagName'] == os.environ['DRAFT_RELEASE_TAG'], 'Unexpected release tag'
-          PY
-          gh release download "$DRAFT_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern "agent-control-connector-macos-$ARCHITECTURE.tar.gz" \
-            --dir "$RUNNER_TEMP/signed-connector"
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-connector-inputs
+          path: ${{ runner.temp }}/signed-connector
       - name: Verify every delivered code signature and Apple notarization
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
