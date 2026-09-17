@@ -16,6 +16,7 @@ from agent_control_connector import setup_extras
 from agent_control_connector.storage import atomic_json, read_json
 from deploy.managed.macos.build_app import APP_ID, SERVICE_ID, app_plist, service_plist
 from deploy.managed.macos import notarize_dmg
+from deploy.managed.macos import build_app
 from deploy.connector.macos_signing import NotarizationPending
 
 OLD, NEW = "a" * 40, "b" * 40
@@ -286,3 +287,21 @@ def test_notarization_acceptance_requires_exact_apple_log_hash(tmp_path, monkeyp
     monkeypatch.setattr(notarize_dmg, "invoke", invoke)
     with pytest.raises(ValueError, match="exact bytes"):
         notarize_dmg.notarize(artifact, tmp_path, "app", "test-profile")
+
+
+@pytest.mark.parametrize("dirty,untracked,runtime_revision,platform", [
+    (" M apps/macos-installer/Package.swift", "", OLD, "macos-arm64"),
+    ("", "apps/macos-installer/Sources/AgentControl/untracked.swift", OLD, "macos-arm64"),
+    ("", "", NEW, "macos-arm64"),
+    ("", "", OLD, "linux-arm64"),
+])
+def test_app_builder_refuses_mixed_or_uncommitted_release_inputs(tmp_path, monkeypatch, dirty, untracked, runtime_revision, platform):
+    (tmp_path / "build-provenance.json").write_text(json.dumps({"release": runtime_revision, "platform": platform}))
+    def invoke(*args):
+        if "rev-parse" in args: return OLD
+        if "status" in args: return dirty
+        if "ls-files" in args: return untracked
+        pytest.fail("No build or signing command should run during source verification")
+    monkeypatch.setattr(build_app, "invoke", invoke)
+    with pytest.raises(ValueError, match="source|provenance"):
+        build_app.verify_build_inputs(tmp_path, OLD)

@@ -113,6 +113,8 @@ def test_api_key_validation_precedes_local_write_and_confirms_catalog_model(engi
             return {"providers": [{"slug": "openai", "models": ["available-model"]}]}
         if path == "/api/model/recommended-default":
             return {"model": "available-model"}
+        if path == "/api/model/set":
+            return {"ok": True}
         return {}
     monkeypatch.setattr(engine, "local", local)
     result = engine.configure_provider("openai", apiKey="private-key")
@@ -122,6 +124,90 @@ def test_api_key_validation_precedes_local_write_and_confirms_catalog_model(engi
         engine.configure_provider("openai", model="unavailable-model")
     assert ("POST", "/api/model/set") not in writes
     assert engine.configure_provider("openai", model="available-model")["providerReady"]
+
+
+def test_model_warning_requires_explicit_confirmation_before_readiness(engine, monkeypatch):
+    assignments = []
+    def local(method, path, **kwargs):
+        if path == "/api/model/options":
+            return {"providers": [{"slug": "openai", "models": ["expensive-model"]}]}
+        if path == "/api/model/recommended-default":
+            return {"model": "expensive-model"}
+        assert path == "/api/model/set"
+        assignments.append(kwargs["json"])
+        if not kwargs["json"].get("confirm_expensive_model"):
+            # Real Hermes returns HTTP 200 here but performs no assignment.
+            return {"ok": False, "confirm_required": True, "confirm_message": "raw provider output must not be exposed"}
+        return {"ok": True, "provider": "openai", "model": "expensive-model"}
+    monkeypatch.setattr(engine, "local", local)
+    proposed = engine.configure_provider("openai", model="expensive-model")
+    assert proposed["confirmRequired"] and not proposed["providerReady"]
+    assert "raw provider output" not in proposed["confirmMessage"]
+    assert not read_json(engine.directory / "setup.json")["providerReady"]
+    with pytest.raises(ValueError, match="confirma un modelo"):
+        engine.pair_start()
+    # Declining performs no second assignment or state mutation.
+    assert len(assignments) == 1
+    accepted = engine.configure_provider("openai", model="expensive-model", confirmModel=True)
+    assert accepted["providerReady"]
+    assert assignments[-1]["confirm_expensive_model"] is True
+    assert read_json(engine.directory / "setup.json")["model"] == "expensive-model"
+
+
+@pytest.mark.parametrize("response", [{}, {"ok": False}, {"ok": "true"}])
+def test_failed_model_assignment_never_marks_provider_ready(engine, monkeypatch, response):
+    def local(method, path, **kwargs):
+        if path == "/api/model/options": return {"providers": [{"slug": "openai", "models": ["model"]}]}
+        if path == "/api/model/recommended-default": return {"model": "model"}
+        return response
+    monkeypatch.setattr(engine, "local", local)
+    with pytest.raises(ValueError, match="no confirmó"):
+        engine.configure_provider("openai", model="model")
+    assert not read_json(engine.directory / "setup.json")["providerReady"]
+
+
+def test_model_confirmation_does_not_accept_truthy_strings(engine):
+    with pytest.raises(ValueError, match="explícita"):
+        engine.configure_provider("openai", model="model", confirmModel="false")
+
+
+@pytest.mark.parametrize("accept", [False, True])
+def test_terminal_wizard_only_pairs_after_real_model_warning_acceptance(engine, monkeypatch, accept):
+    monkeypatch.setattr(engine, "detect", lambda: {"alreadyPaired": False, "existing": []})
+    monkeypatch.setattr(engine, "install", lambda **_: None)
+    monkeypatch.setattr(engine, "install_service", lambda: None)
+    monkeypatch.setattr(setup, "validate_key", lambda *_: None)
+    monkeypatch.setattr(setup.getpass, "getpass", lambda *args, **kwargs: "fake-test-key")
+    writes, pairs = [], []
+    def local(method, path, **kwargs):
+        if path == "/api/model/options": return {"providers": [{"slug": "openai", "models": ["model"]}]}
+        if path == "/api/model/recommended-default": return {"model": "model"}
+        if path == "/api/model/set":
+            writes.append(kwargs["json"])
+            return {"ok": True} if kwargs["json"].get("confirm_expensive_model") else {"ok": False, "confirm_required": True}
+        return {"ok": True}
+    monkeypatch.setattr(engine, "local", local)
+    def pair():
+        assert engine.state["providerReady"]
+        pairs.append(True)
+        return {"verificationUrl": "https://control.test/connect", "userCode": "TEST", "flowId": "test"}
+    monkeypatch.setattr(engine, "pair_start", pair)
+    monkeypatch.setattr(engine, "pair_poll", lambda _: {"status": "complete"})
+    terminal_input = io.StringIO("3\n\n" + ("s\n" if accept else "n\n"))
+    terminal_output = io.StringIO()
+    real_open = open
+    def tty(path, mode="r", *args, **kwargs):
+        if path == "/dev/tty": return terminal_input if mode == "r" else terminal_output
+        return real_open(path, mode, *args, **kwargs)
+    monkeypatch.setattr("builtins.open", tty)
+    if accept:
+        setup.wizard(engine)
+    else:
+        with pytest.raises(ValueError, match="sin confirmar"):
+            setup.wizard(engine)
+    assert bool(pairs) is accept
+    assert len(writes) == (2 if accept else 1)
+    assert read_json(engine.directory / "setup.json")["providerReady"] is accept
 
 
 def test_existing_hermes_provider_configuration_is_not_modified(engine):

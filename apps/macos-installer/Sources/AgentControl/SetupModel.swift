@@ -31,6 +31,8 @@ final class SetupModel: ObservableObject {
     @Published var availableModels: [String] = []
     @Published var providerConfigured = false
     @Published var needsProvider = true
+    @Published var confirmModelRequired = false
+    @Published var confirmModelMessage = ""
     @Published var secret = ""
     @Published var authURL: URL?
     @Published var authFlow = ""
@@ -48,6 +50,7 @@ final class SetupModel: ObservableObject {
     private var flowTask: Task<Void, Never>?
     private var updateProcess: Process?
     private var updateBuffer = Data()
+    private var pendingModelConfirmation: (provider: String, model: String)?
 
     init() {
         engine.onProgress = { [weak self] event, data in
@@ -107,17 +110,42 @@ final class SetupModel: ObservableObject {
         }
     }
 
-    func saveProvider() {
+    func saveProvider(confirmModel: Bool = false) {
+        let selectedProvider = provider
+        let selectedModel = providerConfigured ? model : ""
+        if confirmModel {
+            guard pendingModelConfirmation?.provider == selectedProvider,
+                  pendingModelConfirmation?.model == selectedModel, !selectedModel.isEmpty else {
+                error = "La selección cambió. Elige de nuevo el modelo antes de confirmarlo."
+                return
+            }
+        }
         let credential = secret
         secret = ""
         perform("Comprobando el proveedor…") {
-            var params: [String: Any] = ["provider": self.provider]
+            var params: [String: Any] = ["provider": selectedProvider]
             if !credential.isEmpty { params["apiKey"] = credential }
-            if self.providerConfigured && !self.model.isEmpty { params["model"] = self.model }
+            if !selectedModel.isEmpty { params["model"] = selectedModel }
+            if confirmModel { params["confirmModel"] = true }
             let result = try await self.engine.request("configure-provider", params)
-            if params["model"] != nil { self.page = .connection }
+            if result["confirmRequired"] as? Bool == true {
+                self.pendingModelConfirmation = (selectedProvider, selectedModel)
+                self.confirmModelMessage = EngineClient.safeMessage(result["confirmMessage"] as? String)
+                self.confirmModelRequired = true
+            } else if params["model"] != nil {
+                guard result["providerReady"] as? Bool == true else {
+                    throw SetupFailure(message: "Hermes no confirmó el modelo. Revisa la selección y vuelve a intentarlo.")
+                }
+                self.pendingModelConfirmation = nil
+                self.page = .connection
+            }
             else { self.applyModels(result) }
         }
+    }
+
+    func cancelModelConfirmation() {
+        pendingModelConfirmation = nil
+        confirmModelRequired = false
     }
 
     func startOAuth() {
@@ -142,7 +170,9 @@ final class SetupModel: ObservableObject {
                 do {
                     try await Task.sleep(nanoseconds: 5_000_000_000)
                     guard !Task.isCancelled, authFlow == flow else { return }
-                    let result = try await engine.request("oauth-poll", ["flowId": flow], timeout: 30)
+                    // Approval also refreshes Hermes' model catalog. Allow
+                    // both bounded local requests to finish before timing out.
+                    let result = try await engine.request("oauth-poll", ["flowId": flow], timeout: 120)
                     if ["complete", "authorized", "connected"].contains(result["status"] as? String ?? "") {
                         authURL = nil; authFlow = ""; applyModels(result); return
                     }

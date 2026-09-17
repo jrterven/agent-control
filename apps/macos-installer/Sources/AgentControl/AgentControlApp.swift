@@ -159,8 +159,8 @@ struct SetupView: View {
                 if !setup.availableModels.isEmpty {
                     Picker("Modelo", selection: $setup.model) {
                         ForEach(setup.availableModels, id: \.self) { Text($0).tag($0) }
-                    }
-                } else { TextField("Identificador del modelo", text: $setup.model) }
+                    }.disabled(setup.busy)
+                } else { TextField("Identificador del modelo", text: $setup.model).disabled(setup.busy) }
                 Button("Usar este modelo") { setup.saveProvider() }
                     .buttonStyle(.borderedProminent).disabled(setup.busy || setup.model.isEmpty)
             } else if setup.provider != "chatgpt" {
@@ -180,6 +180,10 @@ struct SetupView: View {
                 }
             }
         }.textFieldStyle(.roundedBorder)
+        .confirmationDialog("Confirmar el uso de \(setup.model)", isPresented: $setup.confirmModelRequired, titleVisibility: .visible) {
+            Button("Aceptar condiciones y usar este modelo") { setup.saveProvider(confirmModel: true) }
+            Button("Elegir otro modelo", role: .cancel) { setup.cancelModelConfirmation() }
+        } message: { Text(setup.confirmModelMessage) }
     }
 
     private var connectionPage: some View {

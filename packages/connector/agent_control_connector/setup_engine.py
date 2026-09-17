@@ -155,9 +155,11 @@ class SetupEngine:
             self.install_service()
         return {**self.status(), "serviceRequired": sys.platform == "darwin"}
 
-    def configure_provider(self, provider, apiKey=None, model=None, **_):
+    def configure_provider(self, provider, apiKey=None, model=None, confirmModel=False, **_):
         if self.state.get("mode") != "managed":
             raise ValueError("Configura los proveedores de una instalación existente desde Hermes.")
+        if type(confirmModel) is not bool:
+            raise ValueError("La confirmación del modelo debe ser explícita.")
         provider = "openai-codex" if provider == "chatgpt" else provider
         if provider not in {*PROVIDERS, "openai-codex"}:
             raise ValueError("Proveedor no compatible.")
@@ -173,7 +175,14 @@ class SetupEngine:
         if model:
             if model not in models:
                 raise ValueError("Selecciona un modelo del catálogo disponible.")
-            self.local("POST", "/api/model/set", json={"scope": "main", "provider": provider, "model": model})
+            saved = self.local("POST", "/api/model/set", json={"scope": "main", "provider": provider,
+                "model": model, "confirm_expensive_model": confirmModel})
+            if saved.get("confirm_required") is True:
+                return {"provider": provider, "models": models, "recommendedModel": recommended if recommended in models else None,
+                        "providerReady": False, "confirmRequired": True,
+                        "confirmMessage": "Hermes advierte que este modelo puede tener un costo elevado o condiciones de uso de datos para entrenamiento. Revisa sus tarifas y política de datos antes de aceptarlo; también puedes elegir otro modelo."}
+            if saved.get("ok") is not True:
+                raise ValueError("Hermes no confirmó que el modelo se haya guardado. Selecciona otro modelo o vuelve a intentar.")
             self.state.update(providerReady=True, provider=provider, model=model)
             self.save()
         return {"provider": provider, "models": models, "recommendedModel": recommended if recommended in models else None,
@@ -393,7 +402,14 @@ def wizard(engine):
                 selected = recommended
             if selected not in result["models"]:
                 raise ValueError("Selección no válida. Vuelve a ejecutar el instalador para retomar.")
-            engine.configure_provider(provider, model=selected)
+            result = engine.configure_provider(provider, model=selected)
+            if result.get("confirmRequired"):
+                say(result["confirmMessage"])
+                if ask(f"¿Aceptas estas condiciones para {selected}? [s/N]").lower() not in {"s", "si", "sí"}:
+                    raise ValueError("Modelo sin confirmar. No se vinculó el equipo; vuelve a ejecutar el instalador para elegir otro modelo.")
+                result = engine.configure_provider(provider, model=selected, confirmModel=True)
+            if not result.get("providerReady") or result.get("confirmRequired"):
+                raise ValueError("Hermes no confirmó el modelo. Vuelve a ejecutar el instalador para retomar.")
         flow = engine.pair_start()
         say(flow["verificationUrl"] + "\nCódigo: " + flow["userCode"])
         while engine.pair_poll(flow["flowId"])["status"] != "complete":

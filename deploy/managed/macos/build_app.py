@@ -34,6 +34,18 @@ def invoke(*args: object) -> str:
     return result.stdout + result.stderr
 
 
+def verify_build_inputs(runtime: Path, revision: str) -> None:
+    head = invoke("git", "-C", REPO, "rev-parse", "HEAD").strip()
+    dirty = invoke("git", "-C", REPO, "status", "--porcelain", "--untracked-files=no").strip()
+    untracked_app = invoke("git", "-C", REPO, "ls-files", "--others", "--exclude-standard", "--",
+                           "apps/macos-installer", "deploy/managed/macos").strip()
+    if head != revision or dirty or untracked_app:
+        raise ValueError("Build requires the exact clean committed app source; do not mix release revisions")
+    provenance = json.loads((runtime / "build-provenance.json").read_text())
+    if provenance.get("release") != revision or provenance.get("platform") != "macos-arm64":
+        raise ValueError("Managed runtime provenance does not match this app revision and platform")
+
+
 def app_plist(revision: str, version: str, build_number: str) -> dict:
     if not re.fullmatch(r"[a-f0-9]{40}", revision):
         raise ValueError("A full source commit SHA is required")
@@ -92,6 +104,7 @@ def verify_code(path: Path, team: str, identifier: str, *, notarized: bool = Fal
 
 def smoke_runtime(runtime: Path, home: Path) -> None:
     """Run only help/import diagnostics, with an isolated disposable home."""
+    runtime, home = runtime.resolve(), home.resolve()
     home.mkdir(mode=0o700)
     env = {"HOME": str(home), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
            "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1",
@@ -118,11 +131,16 @@ def make_icon(resources: Path, scratch: Path) -> None:
 
 def build(runtime: Path, output: Path, revision: str, identity: str, team: str, key: Path,
           *, version: str = "0.1.0", build_number: str = "1", extras_catalog: Path | None = None) -> Path:
+    if key.is_symlink():
+        raise ValueError("Signing key must be a private regular file")
+    runtime, output, key = runtime.resolve(), output.resolve(), key.resolve()
+    extras_catalog = extras_catalog.resolve() if extras_catalog is not None else None
     if sys.platform != "darwin" or platform.machine() != "arm64":
         raise ValueError("Build this app on a trusted Apple Silicon macOS signing host")
     if not re.fullmatch(r"[A-Fa-f0-9]{40}", identity) or not re.fullmatch(r"[A-Z0-9]{10}", team):
         raise ValueError("Expected the Developer ID certificate SHA-1 and Apple Team ID")
     metadata = app_plist(revision, version, build_number)
+    verify_build_inputs(runtime, revision)
     inventory = file_inventory(runtime)
     if "python/bin/python3" not in inventory or "connector/agent_control_connector/setup_engine.py" not in inventory:
         raise ValueError("The runtime must include portable Python and the managed setup engine")

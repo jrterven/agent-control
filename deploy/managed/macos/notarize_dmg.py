@@ -98,6 +98,9 @@ def notarize(artifact: Path, work: Path, label: str, profile: str) -> str:
 
 def prepare(app: Path, output: Path, work: Path, revision: str, identity: str, team: str,
             profile: str, public_key: Path) -> Path:
+    if app.is_symlink():
+        raise ValueError("Expected the built Agent Control.app directory")
+    app, output, work, public_key = app.resolve(), output.resolve(), work.resolve(), public_key.resolve()
     if sys.platform != "darwin":
         raise ValueError("Notarization verification requires macOS")
     if not re.fullmatch(r"[a-f0-9]{40}", revision) or not re.fullmatch(r"[A-Z0-9]{10}", team):
