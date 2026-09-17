@@ -135,15 +135,18 @@ def read_token_file(path: Path, *, maximum: int, permissions: int) -> str:
         return value
 
 
-async def pair(args):
+async def authorize_pairing(args, *, existing_config: dict | None = None, saved_token: str | None = None):
+    """Approve an identity without changing the currently installed identity."""
     directory = data_directory(args.data_dir)
     private_dir(directory)
-    if (directory / "config.json").exists():
-        raise ValueError("This connector is already paired; run uninstall --forget before pairing again")
+    if (directory / "config.json").exists() and existing_config is None:
+        raise ValueError("This connector is already paired; run the guided installer again and choose reconnect to preserve your Hermes settings")
     server = cloud_url(args.server)
     hermes_home = Path(args.hermes_home or "~/.hermes").expanduser().resolve()
     revision, source = detect_revision(hermes_home, args.hermes_source)
-    token = hermes_token(args, hermes_home)
+    token = saved_token if saved_token is not None else hermes_token(args, hermes_home)
+    if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9._~-]{32,512}", token):
+        raise ValueError("The saved Hermes dashboard token is invalid; provide a private --token-file")
     rest = local_endpoint(args.rest_url)
     ws = local_endpoint(args.ws_url or rest.replace("http", "ws", 1) + "/api/ws", websocket=True)
     provider = HermesGatewayProvider(ProviderConnection(gateway_id="pairing", profile_name="default", rest_url=rest,
@@ -175,13 +178,19 @@ async def pair(args):
             paired = response.json()
             if not set(paired["profiles"]) <= set(profiles):
                 raise ValueError("Cloud selected profiles outside the locally offered set")
-            SecretStore(directory).save({"accessToken": paired["accessToken"], "hermesToken": token})
-            atomic_json(directory / "config.json", {"server": server, "connectorId": paired["connectorId"],
+            config = {**(existing_config or {}), "server": server, "connectorId": paired["connectorId"],
                 "gatewayId": paired["gatewayId"], "profiles": paired["profiles"], "restUrl": rest, "wsUrl": ws,
-                "hermesHome": str(hermes_home), "hermesSource": str(source), "sourceSha": revision})
-            print("Computer paired. Start and verify its connection with: agent-control-connector install-service", flush=True)
-            return
+                "hermesHome": str(hermes_home), "hermesSource": str(source), "sourceSha": revision}
+            return config, {"accessToken": paired["accessToken"], "hermesToken": token}
     raise RuntimeError("Pairing code expired; run connect again")
+
+
+async def pair(args):
+    config, secrets = await authorize_pairing(args)
+    directory = data_directory(args.data_dir)
+    SecretStore(directory).save(secrets)
+    atomic_json(directory / "config.json", config)
+    print("Computer paired. Start and verify its connection with: agent-control-connector install-service", flush=True)
 
 
 def status(directory):

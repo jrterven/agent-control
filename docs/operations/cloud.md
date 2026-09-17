@@ -143,6 +143,14 @@ must contain only the existing dashboard token. An environment variable must
 be exported for the `sh` process, not just for `curl`.
 After fixing a failed pairing, rerun the same installer command. It reuses the
 staged release only if all files still match the freshly verified download.
+If a standalone connector is already paired, the installer offers to reconnect
+it. Confirm in the terminal to generate a fresh code, then review and approve
+the computer and profiles again in the web. With no controlling terminal, pass
+`--reconnect` explicitly. The signed setup engine preserves the existing Hermes
+home, source, loopback endpoints, local token, conversations and operation ledger;
+it does not update the installed release or revoke an old cloud record. Cancelled
+or expired authorization preserves the previous local pairing. Active or
+uncertain work prevents the reconnection from stopping the service.
 Nonstandard installations can use the runtime `connect --help` flags.
 The connector does not install Hermes or silently trust a different revision.
 
@@ -187,8 +195,15 @@ restoration report success only after observing a fresh connected status.
 Uninstall removes the connector service while
 preserving configuration and Hermes data; revoke its cloud entry separately.
 Run `agent-control-connector install-service` to restore a previously removed
-service with its existing pairing. To pair a revoked computer again, run
-`agent-control-connector uninstall --forget` and repeat the guided installer.
+service with its existing pairing. To pair a revoked computer again, repeat the
+guided installer and confirm **Reconnect this computer**. This downloads and
+verifies the setup engine before changing local state, including when the
+installed connector predates the guided reconnect option. The old cloud entry
+stays revoked; the new entry receives a different credential and needs fresh
+browser approval. Hermes-managed app installations use their own supervisor;
+the standalone installer refuses to replace those identities or services.
+For an intentional local identity removal, `agent-control-connector uninstall --forget`
+remains available before repeating the guided installer.
 The explicit `--forget` removes the local device credential and pairing after
 the runtime has stopped; it preserves Hermes data and operation deduplication.
 

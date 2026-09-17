@@ -54,6 +54,8 @@ def test_native_cli_version_status_and_failure_exit_codes(native_command,tmp_pat
     assert invoke("check-credentials", "--data-dir", str(tmp_path/"unpaired")).returncode == 1
     assert not (tmp_path/"unpaired").exists()
     assert invoke("invalid-command").returncode == 2
+    reconnect_help = invoke("install-service", "--help")
+    assert reconnect_help.returncode == 0 and "--reconnect" in reconnect_help.stdout
     assert invoke("run","--data-dir",str(tmp_path/"unpaired")).returncode == 1
 
 

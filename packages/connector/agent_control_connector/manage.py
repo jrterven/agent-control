@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from datetime import datetime, timezone
 import getpass
 import fcntl
@@ -21,6 +22,7 @@ import time
 import urllib.parse
 import urllib.request
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 from .tls import cloud_ssl_context
 
@@ -355,6 +357,78 @@ def pairing_command(release: Path, home: Path, server: str, token_file: str | No
     return command
 
 
+def reconnect(home: Path, server: str, *, token_file: str | None = None) -> None:
+    """Replace a standalone pairing only after a new web approval.
+
+    Called under management_lock. The existing release, Hermes settings and
+    operation ledger remain in place; no prompt or operation is replayed.
+    """
+    from .cli import authorize_pairing, cloud_url, local_endpoint, read_token_file
+    from .storage import SecretStore, atomic_json, read_json
+
+    config = read_json(home / "config.json")
+    if "installationKind" in config:
+        raise ValueError("This connection is managed by the Agent Control app or setup assistant. Reconnect through that installer; the standalone connector was left unchanged.")
+    server = cloud_url(server)
+    if cloud_url(config["server"]) != server:
+        raise ValueError("Reconnect must use the previously paired Agent Control server; configuration was preserved")
+    current = (home / "current").resolve()
+    if current.parent != (home / "releases").resolve() or not RELEASE_ID.fullmatch(current.name):
+        raise ValueError("Current release is not an installed connector release")
+    validate_release(current, current.name)
+    validate_service_target()
+    link = Path.home() / ".local/bin/agent-control-connector"
+    if (link.exists() or link.is_symlink()) and (not link.is_symlink() or link.resolve() != current / "agent-control-connector"):
+        raise ValueError("An unrelated executable occupies the connector command")
+    store = SecretStore(home)
+    original_secrets = store.load()
+    if not isinstance(original_secrets, dict) or not isinstance(original_secrets.get("accessToken"), str) or not original_secrets["accessToken"]:
+        raise ValueError("Existing connector credentials are invalid; the installed service was left unchanged")
+    token = (read_token_file(Path(token_file).expanduser(), maximum=1024, permissions=0o077).strip()
+             if token_file else original_secrets.get("hermesToken"))
+    if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9._~-]{32,512}", token):
+        raise ValueError("The saved Hermes dashboard token is invalid; provide a private --token-file")
+    args = SimpleNamespace(server=server, data_dir=str(home), name=None,
+        hermes_home=config["hermesHome"], hermes_source=config["hermesSource"],
+        rest_url=local_endpoint(config["restUrl"]), ws_url=local_endpoint(config["wsUrl"], websocket=True),
+        profiles=None, token_file=None)
+    was_running = runtime_running(home)
+    if was_running and not service_path().exists():
+        raise ValueError("Connector is running outside its installed service; stop that connector before reconnecting")
+    stop_attempted = False
+    approved = False
+    try:
+        if was_running:
+            drain(home)
+        if service_path().exists():
+            stop_attempted = True
+            service("stop")
+        with stopped_runtime(home):
+            # Keep both old files/Keychain credentials until approval succeeds.
+            replacement, secrets = asyncio.run(authorize_pairing(args, existing_config=config, saved_token=token))
+            try:
+                store.save(secrets)
+                atomic_json(home / "config.json", replacement)
+            except BaseException:
+                store.save(original_secrets)
+                atomic_json(home / "config.json", config)
+                raise
+            approved = True
+        (home / "maintenance.request").unlink(missing_ok=True)
+        (home / "status.json").unlink(missing_ok=True)
+        restore_service(home)
+    except BaseException:
+        # An approved new identity is durable even if startup fails. A repeat
+        # install-service can restore it without requesting another identity.
+        if not approved and stop_attempted and was_running and not runtime_running(home):
+            (home / "maintenance.request").unlink(missing_ok=True)
+            service("start")
+        raise
+    finally:
+        (home / "maintenance.request").unlink(missing_ok=True)
+    print("Computer reconnected and connection verified. Hermes settings, data and operation history were preserved.")
+
+
 def release_contents(root: Path) -> dict[str, tuple[str, int, str]]:
     if root.is_symlink() or not root.is_dir():
         raise ValueError("Staged release must be a real directory")
@@ -457,6 +531,7 @@ def management_main(argv: list[str]) -> int:
     parser.add_argument("--server")
     parser.add_argument("--token-file", help="Private file containing the existing Hermes dashboard token (installation only)")
     parser.add_argument("--forget", action="store_true", help="Remove local pairing credentials after uninstall; deduplication ledger is retained")
+    parser.add_argument("--reconnect", action="store_true", help="Approve a replacement pairing while preserving local Hermes settings (install-service only)")
     args = parser.parse_args(argv)
     try:
         home = Path(args.data_dir).expanduser().absolute()
@@ -465,6 +540,9 @@ def management_main(argv: list[str]) -> int:
         private_dir(home)
         with management_lock(home):
             return execute_management(args, home)
+    except KeyboardInterrupt:
+        print("Connector operation canceled.", file=sys.stderr)
+        return 130
     except (ValueError, RuntimeError, OSError, KeyError, TypeError, subprocess.SubprocessError) as exc:
         print(str(exc) if isinstance(exc, ValueError) else "Connector lifecycle operation failed; configuration was preserved.", file=sys.stderr)
         return 1
@@ -472,12 +550,25 @@ def management_main(argv: list[str]) -> int:
 
 def execute_management(args, home: Path) -> int:
     try:
+        if args.reconnect and (args.command != "install-service" or not args.server):
+            raise ValueError("--reconnect requires install-service and --server")
         if args.command != "uninstall" and args.forget:
             raise ValueError("--forget is only supported with uninstall")
         if args.token_file and (args.command != "install-service" or not args.server):
             raise ValueError("--token-file is only supported when installing and pairing a connector")
         if args.command == "install-service":
-            if not any((args.source, args.release, args.server)):
+            if args.reconnect:
+                if args.source or args.release:
+                    if not args.source or not args.release or not RELEASE_ID.fullmatch(args.release):
+                        raise ValueError("A reconnect source requires a valid release identity")
+                    validate_release(Path(args.source), args.release)
+                if (home / "config.json").exists():
+                    reconnect(home, args.server, token_file=args.token_file)
+                elif args.source and args.release:
+                    install(home, Path(args.source), args.release, args.server, token_file=args.token_file)
+                else:
+                    raise ValueError("No pairing is installed; run the installer to connect this computer")
+            elif not any((args.source, args.release, args.server)):
                 restore_service(home)
             else:
                 if not args.source or not args.release or not args.server:

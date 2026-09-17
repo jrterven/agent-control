@@ -6,12 +6,14 @@ umask 077
 server=
 version=
 token_file=
+reconnect=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --server) [ "$#" -ge 2 ] || { echo "--server requires a value" >&2; exit 2; }; server=$2; shift 2 ;;
         --version) [ "$#" -ge 2 ] || { echo "--version requires a value" >&2; exit 2; }; version=$2; shift 2 ;;
         --token-file) [ "$#" -ge 2 ] || { echo "--token-file requires a value" >&2; exit 2; }; token_file=$2; shift 2 ;;
-        -h|--help) echo 'Usage: install.sh --server https://control.example.com [--version RELEASE] [--token-file PATH]'; exit 0 ;;
+        --reconnect) reconnect=true; shift ;;
+        -h|--help) echo 'Usage: install.sh --server https://control.example.com [--version RELEASE] [--token-file PATH] [--reconnect]'; exit 0 ;;
         *) echo 'Unknown installer argument' >&2; exit 2 ;;
     esac
 done
@@ -25,9 +27,24 @@ for utility in curl openssl tar mktemp awk; do command -v "$utility" >/dev/null 
 case "$(uname -s)" in Linux) platform=linux ;; Darwin) platform=macos ;; *) echo 'Linux and macOS are supported' >&2; exit 2 ;; esac
 case "$(uname -m)" in x86_64) architecture=x86_64 ;; arm64|aarch64) architecture=arm64 ;; *) echo 'Unsupported CPU architecture' >&2; exit 2 ;; esac
 connector_home=${AGENT_CONTROL_CONNECTOR_HOME:-"$HOME/.agent-control-connector"}
-if [ -e "$connector_home/current" ] || [ -L "$connector_home/current" ]; then
-    echo 'Connector is already installed. Use agent-control-connector update.' >&2
-    exit 2
+if [ -e "$connector_home/config.json" ] || [ -L "$connector_home/config.json" ]; then
+    if [ "$reconnect" = false ]; then
+        echo 'Agent Control is already installed on this computer.' >&2
+        echo 'If you revoked it, you can link it again with a new code. Hermes, its configuration and conversations will be preserved.' >&2
+        echo 'This replaces the local pairing. It does not revoke the previous entry in Agent Control or update the installed connector.' >&2
+        # curl | sh owns stdin. Read the decision from the controlling terminal,
+        # never from the remaining script or a piped answer; default to cancel.
+        if ! ( : </dev/tty ) 2>/dev/null; then
+            echo 'No terminal available. To request a new pairing explicitly, repeat this installer with --reconnect.' >&2
+            exit 2
+        fi
+        printf 'Reconnect this computer? [y/N] ' >/dev/tty
+        answer=
+        IFS= read -r answer </dev/tty || answer=
+        case "$answer" in y|Y|yes|YES|s|S|si|SI) reconnect=true ;;
+            *) echo 'Cancelled. The existing installation is unchanged.'; exit 0 ;;
+        esac
+    fi
 fi
 stage=$(mktemp -d "${TMPDIR:-/tmp}/agent-control-install.XXXXXXXX")
 trap 'rm -rf -- "$stage"' EXIT HUP INT TERM
@@ -66,4 +83,5 @@ binary="$stage/agent-control-connector/agent-control-connector"
 # The signed runtime performs safe filesystem/service setup and pairing.
 set -- install-service --data-dir "$connector_home" --source "$stage/agent-control-connector" --release "$version" --server "$server"
 if [ -n "$token_file" ]; then set -- "$@" --token-file "$token_file"; fi
+if [ "$reconnect" = true ]; then set -- "$@" --reconnect; fi
 "$binary" "$@"

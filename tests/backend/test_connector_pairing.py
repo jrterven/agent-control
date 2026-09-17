@@ -134,3 +134,30 @@ def test_websocket_authentication_and_revocation_cut_existing_link(setup):
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect("/api/v1/connectors/ws",headers=bearer):
             pass
+
+
+def test_revoked_computer_can_pair_again_without_reactivating_old_credential(setup):
+    _, client, headers, _ = setup
+    original = authorize(client)
+    old_computer = approve(client, headers, original)
+    old_token = client.post("/api/v1/connectors/device/token", json={"deviceCode": original["deviceCode"]}).json()
+    assert client.delete(f"/api/v1/connectors/{old_computer['id']}", headers=headers).status_code == 200
+
+    replacement = authorize(client)
+    # The same hostname and profiles still require a new browser approval.
+    assert client.post("/api/v1/connectors/device/token", json={"deviceCode": replacement["deviceCode"]}).status_code == 428
+    new_computer = approve(client, headers, replacement)
+    new_token = client.post("/api/v1/connectors/device/token", json={"deviceCode": replacement["deviceCode"]}).json()
+    assert new_computer["id"] != old_computer["id"]
+    assert new_token["gatewayId"] != old_token["gatewayId"]
+    assert new_token["accessToken"] != old_token["accessToken"]
+    assert new_token["profiles"] == ["selected"]
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/api/v1/connectors/ws", headers={"Authorization": "Bearer " + old_token["accessToken"]}):
+            pass
+    with client.websocket_connect("/api/v1/connectors/ws", headers={"Authorization": "Bearer " + new_token["accessToken"]}) as websocket:
+        welcome = FrameReader().feed(websocket.receive_bytes())
+        assert welcome["gatewayId"] == new_token["gatewayId"]
+        listing = {item["id"]: item for item in client.get("/api/v1/connectors").json()["items"]}
+        assert listing[old_computer["id"]]["status"] == "revoked"
+        assert listing[new_computer["id"]]["status"] == "online"
