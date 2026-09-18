@@ -440,7 +440,11 @@ export function LeftSidebar() {
             <CaretDown size={16} />
           </button>
           {gatewayMenuOpen ? (
-            <div ref={gatewayMenuRef} id="gateway-menu" className="gateway-popover" role="menu" aria-labelledby="gateway-select-trigger" onKeyDown={(event) => {
+            <div ref={gatewayMenuRef} id="gateway-menu" className="gateway-popover" role="menu" aria-labelledby="gateway-select-trigger" onMouseDown={(event) => {
+              // Safari moves pointer focus to the drawer instead of its menu
+              // button, which would close the menu before the click arrives.
+              if (event.button === 0) event.preventDefault();
+            }} onKeyDown={(event) => {
               if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
               event.preventDefault();
               const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[role^='menuitem']"));

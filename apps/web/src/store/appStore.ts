@@ -16,6 +16,7 @@ import type {
 } from "../types";
 import { detectedTimeZone } from "../lib/dateTime";
 import { readDesktopSidebarOpen, saveDesktopSidebarOpen } from "../lib/sidebarPreference";
+import { readAgentPreference, saveAgentPreference } from "../lib/agentPreference";
 
 type AuthState = "checking" | "authenticated" | "offline" | "unauthenticated";
 
@@ -118,6 +119,18 @@ const emptyPrivateState = {
   streamingBySession: {} as Record<string, string>,
   messages: [] as ChatMessage[],
 };
+
+function agentPreferenceOwner(state: AppState) {
+  return !state.demoMode && (state.authState === "authenticated" || state.authState === "offline")
+    ? state.userId : undefined;
+}
+
+function rememberAgent(state: AppState, profile: Profile | undefined) {
+  const owner = agentPreferenceOwner(state);
+  if (owner && profile && state.gateways.some((gateway) => gateway.id === profile.gatewayId)) {
+    saveAgentPreference(owner, { gatewayId: profile.gatewayId, profileId: profile.id });
+  }
+}
 
 function withoutSessions(state: AppState, sessionIds: Set<string>): Partial<AppState> {
   if (!sessionIds.size) return {};
@@ -237,19 +250,23 @@ export const useAppStore = create<AppState>((set) => ({
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   setGatewayMenuOpen: (gatewayMenuOpen) => set({ gatewayMenuOpen }),
   selectGateway: (selectedGatewayId) => set((state) => {
-    const selectedProfileId = state.profiles.find((item) => item.gatewayId === selectedGatewayId)?.id ?? "";
+    const profile = state.profiles.find((item) => item.gatewayId === selectedGatewayId);
+    const selectedProfileId = profile?.id ?? "";
     const selectedSessionId = state.sessions.find((item) => item.profileId === selectedProfileId && (item.workspaceId ?? "") === state.selectedWorkspaceId)?.id ?? "";
+    rememberAgent(state, profile);
     return { selectedGatewayId, selectedProfileId, selectedSessionId, gatewayMenuOpen: false };
   }),
   selectProfile: (selectedProfileId) => set((state) => {
     const profile = state.profiles.find((item) => item.id === selectedProfileId);
     const selectedSessionId = state.sessions.find((item) => item.profileId === selectedProfileId && (item.workspaceId ?? "") === state.selectedWorkspaceId)?.id ?? "";
+    rememberAgent(state, profile);
     return { selectedProfileId, selectedGatewayId: profile?.gatewayId ?? state.selectedGatewayId, selectedSessionId };
   }),
   selectWorkspace: (selectedWorkspaceId) => set((state) => ({ selectedWorkspaceId, selectedSessionId: state.sessions.find((item) => (item.workspaceId ?? "") === selectedWorkspaceId && item.profileId === state.selectedProfileId)?.id ?? "" })),
   selectSession: (selectedSessionId) => set((state) => {
     const session = state.sessions.find((item) => item.id === selectedSessionId);
     const profile = session ? state.profiles.find((item) => item.id === session.profileId) : undefined;
+    rememberAgent(state, profile);
     return {
       selectedSessionId: session?.id ?? "",
       selectedProfileId: profile?.id ?? state.selectedProfileId,
@@ -265,8 +282,17 @@ export const useAppStore = create<AppState>((set) => ({
   setAdvancedMode: (advancedMode) => set({ advancedMode }),
   setOfflineCacheEnabled: (offlineCacheEnabled) => set({ offlineCacheEnabled }),
   hydrateBootstrap: (data) => set((state) => {
-    const selectedGatewayId = data.gateways.some((item) => item.id === state.selectedGatewayId) ? state.selectedGatewayId : data.gateways[0]?.id ?? "";
-    const selectedProfileId = data.profiles.some((item) => item.id === state.selectedProfileId && item.gatewayId === selectedGatewayId) ? state.selectedProfileId : data.profiles.find((item) => item.gatewayId === selectedGatewayId)?.id ?? data.profiles[0]?.id ?? "";
+    const owner = agentPreferenceOwner(state);
+    const remembered = !state.bootstrapLoaded && owner ? readAgentPreference(owner) : undefined;
+    const availableProfiles = data.profiles.filter((profile) => data.gateways.some((gateway) => gateway.id === profile.gatewayId));
+    // Keep a current selection (including the PWA update return context). Only
+    // a cold start may restore the account's last explicitly chosen agent.
+    const preferredProfile = availableProfiles.find((profile) => profile.id === state.selectedProfileId)
+      ?? availableProfiles.find((profile) => profile.id === remembered?.profileId && profile.gatewayId === remembered.gatewayId);
+    const fallbackGatewayId = data.gateways.some((item) => item.id === state.selectedGatewayId) ? state.selectedGatewayId : data.gateways[0]?.id ?? "";
+    const selectedProfile = preferredProfile ?? availableProfiles.find((item) => item.gatewayId === fallbackGatewayId) ?? availableProfiles[0];
+    const selectedGatewayId = selectedProfile?.gatewayId ?? fallbackGatewayId;
+    const selectedProfileId = selectedProfile?.id ?? "";
     // An empty workspace id is the explicit "Sin workspace" filter once the
     // app has loaded. Preserve it during background refreshes so sessions
     // opened from automation runs are not silently replaced by a session in

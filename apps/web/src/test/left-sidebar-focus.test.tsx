@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../i18n";
@@ -69,5 +69,44 @@ describe("mobile navigation focus management", () => {
     expect(useAppStore.getState().leftDrawerOpen).toBe(true);
     await user.keyboard("{Escape}");
     expect(useAppStore.getState().leftDrawerOpen).toBe(false);
+  });
+
+  it("prevents WebKit from moving focus to the drawer before the equipment click", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ profiles: [...profiles, { ...profiles[1], id: "profile-mock", gatewayId: "gateway-mock" }] });
+    render(<SidebarHarness />);
+    await user.click(screen.getByRole("button", { name: "Abrir navegación de prueba" }));
+    const trigger = screen.getByRole("button", { name: /gx10-58f9 Tailscale/ });
+    await user.click(trigger);
+    const current = screen.getByRole("menuitemradio", { name: /gx10-58f9/ });
+    const other = screen.getByRole("menuitemradio", { name: /Mock local/ });
+    expect(current).toHaveFocus();
+
+    // Safari's default mousedown moves focus to the tabindex=-1 drawer. The
+    // resulting blur would remove the menu before the second button's click.
+    await user.pointer({ target: other, keys: "[MouseLeft>]" });
+    expect(current).toHaveFocus();
+    expect(other).toBeInTheDocument();
+    await user.pointer({ keys: "[/MouseLeft]" });
+
+    expect(useAppStore.getState()).toMatchObject({ selectedGatewayId: "gateway-mock", selectedProfileId: "profile-mock" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("still dismisses the equipment menu when focus or a pointer moves outside its selector", async () => {
+    const user = userEvent.setup();
+    render(<SidebarHarness />);
+    await user.click(screen.getByRole("button", { name: "Abrir navegación de prueba" }));
+    const trigger = screen.getByRole("button", { name: /gx10-58f9 Tailscale/ });
+    await user.click(trigger);
+    await user.keyboard("{End}{Tab}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    await user.click(trigger);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByText("Agent", { exact: true }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(useAppStore.getState().leftDrawerOpen).toBe(true);
   });
 });
