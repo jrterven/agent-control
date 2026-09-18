@@ -6,6 +6,7 @@ import i18n from "../i18n";
 import { ChatView } from "../components/ChatView";
 import { automations, gateways, initialMessages, profiles, sessions, workspaces } from "../data";
 import { api } from "../lib/api";
+import { rehydrateSession } from "../hooks";
 import { textForSpeech } from "../hooks/useSpeechPlayback";
 import { useAppStore } from "../store/appStore";
 import type { Profile } from "../types";
@@ -93,6 +94,21 @@ describe("mobile-first chat", () => {
     expect(screen.getByText("Comparativa de memoria de agentes — Agosto 2026")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Herramientas · 2/i })).not.toBeInTheDocument();
     expect((await axe.run(container)).violations).toHaveLength(0);
+  });
+
+  it("shows one task response badge for the public reply and omits the projected internal notification marker", async () => {
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      items: [
+        { id: "background-marker", role: "system", content: "Resultado de una tarea en segundo plano.", controlTurnOrigin: { kind: "background_task", taskId: "task-fixture" } },
+        { id: "public-task-reply", role: "assistant", content: "Respuesta pública de la tarea.", controlTurnOrigin: { kind: "background_task", taskId: "task-fixture" } },
+      ],
+      sessionStatus: "ready", activeOperation: null, activeTurnId: null,
+    });
+    await rehydrateSession("session-papers");
+    render(<ChatView />);
+    expect(screen.queryByText("Resultado de una tarea en segundo plano.")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Respuesta de tarea · task-fix")).toHaveLength(1);
+    expect(screen.getByText("Respuesta pública de la tarea.")).toBeVisible();
   });
 
   it("opens the plus menu and sends selected images and files with the chat message", async () => {
@@ -195,6 +211,28 @@ describe("mobile-first chat", () => {
     await waitFor(() => expect(screen.getByText("Última comprobación")).toBeVisible());
     expect(log.scrollTop).toBe(120);
     expect((await axe.run(container)).violations).toHaveLength(0);
+  });
+
+  it("keeps typing available during a native coordinator turn and sends the draft only on an explicit action afterward", async () => {
+    useAppStore.setState({
+      demoMode: false,
+      profiles: profiles.map((profile) => ({ ...profile, mutable: true })),
+      runtimeTurnBySession: { "session-papers": "native-turn" },
+    });
+    const submit = vi.spyOn(api, "submitPrompt").mockResolvedValue({ operationId: "manual-followup", status: "streaming" });
+    const user = userEvent.setup();
+    render(<ChatView />);
+    const input = screen.getByRole("textbox", { name: "Mensaje a Newton…" });
+    await user.type(input, "Otra pregunta{Enter}");
+    expect(input).toHaveValue("Otra pregunta");
+    expect(input).toHaveAccessibleDescription("Newton está respondiendo; podrás enviar este borrador al terminar el turno.");
+    expect(submit).not.toHaveBeenCalled();
+    act(() => useAppStore.getState().setRuntimeTurn("session-papers"));
+    expect(input).toHaveValue("Otra pregunta");
+    expect(submit).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Enviar mensaje" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0][1]).toBe("Otra pregunta");
   });
 
   it("collapses streaming tool history by default and bounds it when expanded", async () => {

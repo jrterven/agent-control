@@ -1,0 +1,42 @@
+export const backgroundTaskResources = {
+  es: { backgroundTasks: {
+    title: "Tareas de esta conversación", task: "Tarea", active: "{{count}} en curso", total: "{{count}} tareas", pending: "{{count}} avisos pendientes", incomplete: "Estado parcial; puede haber más tareas en curso.", unavailable: "No se pudo actualizar el estado de las tareas.",
+    states: { queued: "En espera", running: "En curso", completed: "Completada", failed: "Falló", cancelled: "Cancelada", unknown: "Estado por confirmar" },
+    elapsed: "{{minutes}} min", result: "Ver respuesta", resultLabel: "Respuesta de una tarea", resultFor: "Respuesta de tarea · {{id}}", delivering: "Jarvis está preparando el aviso.", noResult: "La respuesta aparecerá en esta conversación.",
+    draft: "{{agent}} está respondiendo; podrás enviar este borrador al terminar el turno.",
+    stopAll: "Detener la respuesta y las tareas de esta conversación",
+    receivedQueued: "Recibido · en espera",
+  } },
+  en: { backgroundTasks: {
+    title: "Tasks in this conversation", task: "Task", active: "{{count}} active", total: "{{count}} tasks", pending: "{{count}} notifications pending", incomplete: "Partial status; more tasks may be running.", unavailable: "Task status could not be refreshed.",
+    states: { queued: "Queued", running: "Running", completed: "Completed", failed: "Failed", cancelled: "Cancelled", unknown: "Status unconfirmed" },
+    elapsed: "{{minutes}} min", result: "View response", resultLabel: "Task response", resultFor: "Task response · {{id}}", delivering: "Jarvis is preparing the notification.", noResult: "The response will appear in this conversation.",
+    draft: "{{agent}} is responding; you can send this draft when the turn ends.",
+    stopAll: "Stop the response and the tasks in this conversation",
+    receivedQueued: "Received · queued",
+  } },
+  fr: { backgroundTasks: {
+    title: "Tâches de cette conversation", task: "Tâche", active: "{{count}} en cours", total: "{{count}} tâches", pending: "{{count}} notifications en attente", incomplete: "État partiel ; d’autres tâches peuvent être en cours.", unavailable: "L’état des tâches n’a pas pu être actualisé.",
+    states: { queued: "En attente", running: "En cours", completed: "Terminée", failed: "Échec", cancelled: "Annulée", unknown: "État à confirmer" },
+    elapsed: "{{minutes}} min", result: "Voir la réponse", resultLabel: "Réponse d’une tâche", resultFor: "Réponse de tâche · {{id}}", delivering: "Jarvis prépare la notification.", noResult: "La réponse apparaîtra dans cette conversation.",
+    draft: "{{agent}} répond ; vous pourrez envoyer ce brouillon à la fin du tour.",
+    stopAll: "Arrêter la réponse et les tâches de cette conversation",
+    receivedQueued: "Reçu · en attente",
+  } },
+  de: { backgroundTasks: {
+    title: "Aufgaben in dieser Unterhaltung", task: "Aufgabe", active: "{{count}} aktiv", total: "{{count}} Aufgaben", pending: "{{count}} ausstehende Benachrichtigungen", incomplete: "Teilweiser Status; weitere Aufgaben können aktiv sein.", unavailable: "Der Aufgabenstatus konnte nicht aktualisiert werden.",
+    states: { queued: "In Warteschlange", running: "Läuft", completed: "Abgeschlossen", failed: "Fehlgeschlagen", cancelled: "Abgebrochen", unknown: "Status unbestätigt" },
+    elapsed: "{{minutes}} Min.", result: "Antwort ansehen", resultLabel: "Aufgabenantwort", resultFor: "Aufgabenantwort · {{id}}", delivering: "Jarvis bereitet die Benachrichtigung vor.", noResult: "Die Antwort erscheint in dieser Unterhaltung.",
+    draft: "{{agent}} antwortet; du kannst diesen Entwurf senden, sobald der Gesprächsschritt endet.",
+    stopAll: "Die Antwort und die Aufgaben in dieser Unterhaltung stoppen",
+    receivedQueued: "Empfangen · in Warteschlange",
+  } },
+  pt: { backgroundTasks: {
+    title: "Tarefas desta conversa", task: "Tarefa", active: "{{count}} em andamento", total: "{{count}} tarefas", pending: "{{count}} avisos pendentes", incomplete: "Estado parcial; pode haver mais tarefas em andamento.", unavailable: "Não foi possível atualizar o estado das tarefas.",
+    states: { queued: "Na fila", running: "Em andamento", completed: "Concluída", failed: "Falhou", cancelled: "Cancelada", unknown: "Estado a confirmar" },
+    elapsed: "{{minutes}} min", result: "Ver resposta", resultLabel: "Resposta de uma tarefa", resultFor: "Resposta da tarefa · {{id}}", delivering: "Jarvis está preparando o aviso.", noResult: "A resposta aparecerá nesta conversa.",
+    draft: "{{agent}} está respondendo; você poderá enviar este rascunho ao terminar o turno.",
+    stopAll: "Parar a resposta e as tarefas desta conversa",
+    receivedQueued: "Recebido · na fila",
+  } },
+};

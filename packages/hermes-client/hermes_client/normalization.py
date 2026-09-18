@@ -14,6 +14,7 @@ from .email_references import (
     project_email_reference_prompt,
 )
 from .types import NormalizedEvent
+from .background_tasks import background_task_projection
 
 
 _SECRET_KEY = re.compile(
@@ -122,6 +123,13 @@ class EventNormalizer:
         elif _REASONING_KEY.search(event_type):
             event_type = "reasoning.omitted"
             safe = {"omitted": True}
+        elif event_type.startswith("subagent."):
+            # The native goal/text/summary/output_tail fields contain child
+            # prompts, tool data or intermediate reasoning. Lifecycle only.
+            safe = self._sanitize(background_task_projection(payload, event_type=event_type))
+        elif event_type.startswith("delegation."):
+            # No audited session-scoped delegation.* wire contract exists.
+            safe = {"opaque": True}
         elif event_type.startswith("message."):
             if self._has_reasoning_discriminator(payload):
                 event_type = "reasoning.omitted"

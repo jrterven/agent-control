@@ -508,6 +508,7 @@ def test_history_exposes_active_operation_for_pwa_process_recovery(authenticated
     assert active.json() == {
         "items": [],
         "sessionStatus": "streaming",
+        "activeTurnId": None,
         "activeOperation": {
             "operationId": operation_id,
             "status": "streaming",

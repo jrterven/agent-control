@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 import inspect
+import json
 from pathlib import Path
 import random
 import re
@@ -27,6 +28,9 @@ from .media import project_media, read_media
 from .storage import OperationLedger, atomic_json
 from .tls import cloud_ssl_context
 from .media_install import media_profiles
+from .background_install import background_profiles
+from .background_tasks import retired_profile, snapshot as background_snapshot, unavailable as background_unavailable
+from hermes_client.compatibility import HERMES_0212_SHA
 from .hermes_media_plugin import queue_directory, validate_policy
 from .visual_media import acknowledge as acknowledge_media, next_publication, profile_home
 
@@ -80,10 +84,60 @@ class ConnectorRuntime:
         self.media_pending: dict[str, str] = {}
         self.media_install_at = 0.0
         self.visual_media_limits = validate_policy(None)
+        self.background_tasks_supported = False
+        self.background_states: dict[str, dict] = {}
+        self.background_install_at = 0.0
+        self.background_fingerprints: dict[tuple[str, str], str] = {}
+
+    async def _background_events(self, profile: str, snapshot: dict):
+        if (self.websocket is None or not self.background_tasks_supported
+                or self.background_states.get(profile, {}).get("state") != "ready"):
+            return
+        grouped: dict[str, list] = {}
+        for task in snapshot["tasks"]:
+            grouped.setdefault(task["storedSessionId"], []).append(task)
+        previous = {session for name, session in self.background_fingerprints if name == profile}
+        for session_id in sorted(set(grouped) | previous):
+            tasks = grouped.get(session_id, [])
+            complete = snapshot.get("complete") is True
+            # A failed/truncated read cannot certify that a missing task ended.
+            data = {"available": snapshot.get("available") is True, "complete": complete,
+                "tasks": tasks, "totalCount": len(tasks) if complete else None,
+                "activeCount": sum(task["state"] in {"running", "queued"} for task in tasks) if complete else None,
+                "pendingDeliveryCount": sum(task["state"] not in {"running", "queued"} and task["deliveryState"] == "pending" for task in tasks) if complete else None,
+                "source": "hermes-native-delegation"}
+            fingerprint = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+            key = (profile, session_id)
+            if self.background_fingerprints.get(key) == fingerprint:
+                continue
+            await self.on_event(NormalizedEvent.create(type="background.tasks", gateway_id=self.gateway_id,
+                profile_name=profile, stored_session_id=session_id, runtime_session_id=None,
+                runtime_generation=self.providers[profile].runtime_generation,
+                data={**data, "observedAt": snapshot["observedAt"]}))
+            self.background_fingerprints[key] = fingerprint
+        # Bound diagnostic caches independently of upstream lifecycle retention.
+        while len(self.background_fingerprints) > 2048:
+            self.background_fingerprints.pop(next(iter(self.background_fingerprints)))
+
+    def _background_snapshot(self, profile: str, stored_session_id: str | None = None) -> dict:
+        if self.config.get("sourceSha") != HERMES_0212_SHA:
+            return background_unavailable()
+        try:
+            if stored_session_id is None:
+                retired = retired_profile(Path(self.config["hermesHome"]), profile)
+                if retired is not None:
+                    return retired
+            home = profile_home(Path(self.config["hermesHome"]), profile)
+            return background_snapshot(home, stored_session_id)
+        except (OSError, ValueError):
+            return background_unavailable()
 
     def _save_media_policy(self, profiles=None):
         for profile in profiles or self.config["profiles"]:
             try:
+                if (self.config.get("sourceSha") == HERMES_0212_SHA
+                        and retired_profile(Path(self.config["hermesHome"]), profile) is not None):
+                    continue
                 home = profile_home(Path(self.config["hermesHome"]), profile)
                 queue_directory(home)
                 atomic_json(home / ".agent-control/media/policy.json", self.visual_media_limits)
@@ -126,7 +180,8 @@ class ConnectorRuntime:
             await send_message(websocket.send, self.send_lock, {"v": VERSION, "type": "heartbeat", "version": __version__,
                 "profiles": {name: {"generation": provider.runtime_generation,
                     "inventoryComplete": provider.session_inventory_complete,
-                    "visualMedia": self.media_states.get(name, {"state": "pendingActivation"})} for name, provider in self.providers.items()}})
+                    "visualMedia": self.media_states.get(name, {"state": "pendingActivation"}),
+                    "backgroundTasks": self.background_states.get(name, {"state": "pendingActivation"})} for name, provider in self.providers.items()}})
             await asyncio.sleep(15)
 
     async def _media_sender(self, websocket):
@@ -175,7 +230,22 @@ class ConnectorRuntime:
             except OSError:
                 maintenance_request_id = None
             active: bool | None = False
+            retired_profiles = set()
             for provider in tuple(self.providers.values()):
+                # Session idle does not imply the native delegated workers (or
+                # a completion waiting to wake its parent) are idle. Read the
+                # profile-local ledger even if Hermes's HTTP inventory fails.
+                background = await asyncio.to_thread(self._background_snapshot, provider.connection.profile_name)
+                if background.get("retired") is True:
+                    retired_profiles.add(provider.connection.profile_name)
+                observer = getattr(provider, "observe_background_tasks", None)
+                if callable(observer):
+                    observer(background)
+                await self._background_events(provider.connection.profile_name, background)
+                if (background.get("activeCount") or 0) > 0 or (background.get("pendingDeliveryCount") or 0) > 0:
+                    active = True
+                elif not background.get("complete") and active is not True:
+                    active = None
                 try:
                     available_profiles = await asyncio.wait_for(provider.list_profiles(), 10)
                     if provider.connection.profile_name not in {item.name for item in available_profiles}:
@@ -192,14 +262,21 @@ class ConnectorRuntime:
                 active = True
             self.active_work = active
             now = asyncio.get_running_loop().time()
+            live_config = {**self.config, "profiles": [name for name in self.config["profiles"] if name not in retired_profiles]}
             if self.visual_media_supported and now >= self.media_install_at:
-                self.media_states = await asyncio.to_thread(media_profiles, self.config, install=active is False)
+                self.media_states = await asyncio.to_thread(media_profiles, live_config, install=active is False)
+                self.media_states.update({name: {"state": "retired"} for name in retired_profiles})
                 self.media_install_at = now + 30
+            if self.background_tasks_supported and now >= self.background_install_at:
+                self.background_states = await asyncio.to_thread(background_profiles, live_config, install=active is False)
+                self.background_states.update({name: {"state": "retired"} for name in retired_profiles})
+                self.background_install_at = now + 30
             atomic_json(self.directory / "status.json", {"activeWork": active, "fresh": True,
                 "observedAt": datetime.now(timezone.utc).isoformat(), "connected": self.websocket is not None,
                 "connectionError": self.connection_error,
                 "version": __version__, "maintenance": maintenance_request_id is not None,
-                "maintenanceRequestId": maintenance_request_id, "visualMedia": self.media_states})
+                "maintenanceRequestId": maintenance_request_id, "visualMedia": self.media_states,
+                "backgroundTasks": self.background_states})
             await asyncio.sleep(3)
 
     async def execute(self, message: dict):
@@ -238,8 +315,23 @@ class ConnectorRuntime:
             if operation in WRITE_OPERATIONS:
                 if (self.directory / "maintenance.request").exists():
                     raise ValueError("CONNECTOR_MAINTENANCE")
-                ledger_key = f"{profile}:{operation}:{operation_id}"
+                next_ledger_key = f"{profile}:{operation}:{operation_id}"
                 digest = hashlib.sha256(encode_message({"v": VERSION, "profile": profile, "operation": operation, "args": args, "kwargs": kwargs})).hexdigest()
+                if (self.config.get("sourceSha") == HERMES_0212_SHA
+                        and operation in {"delete_profile", "delete_session"}
+                        and self.ledger.lookup(next_ledger_key, digest) is None):
+                    target_profile = args[0] if operation == "delete_profile" else profile
+                    route = (args[0] if args else kwargs.get("route")) if operation == "delete_session" else None
+                    evidence = await asyncio.to_thread(self._background_snapshot, target_profile,
+                        route.stored_session_id if route else None)
+                    if (evidence.get("complete") is not True or type(evidence.get("activeCount")) is not int
+                            or type(evidence.get("pendingDeliveryCount")) is not int
+                            or evidence["activeCount"] != 0 or evidence["pendingDeliveryCount"] != 0):
+                        response["error"] = "CONNECTOR_BACKGROUND_BUSY"
+                        return response
+                    if (self.directory / "maintenance.request").exists():
+                        raise ValueError("CONNECTOR_MAINTENANCE")
+                ledger_key = next_ledger_key
                 state, previous = self.ledger.reserve(ledger_key, digest)
                 if state == "completed":
                     response.update(decode_message(previous))
@@ -253,7 +345,14 @@ class ConnectorRuntime:
                 # returns its receipt, while an existing unshared agent stays private.
                 if kwargs["name"] in {item.name for item in await provider.list_profiles()}:
                     raise ValueError("INVALID_OPERATION")
-            if operation == "media":
+            if operation == "list_background_tasks":
+                # Drain safety needs the native ledger even before installation
+                # or after opt-out. Availability only controls the chat feature.
+                result = await asyncio.to_thread(self._background_snapshot, profile,
+                    args[0] if args else kwargs.get("stored_session_id"))
+                result["available"] = (result.get("available") is True and self.background_tasks_supported
+                    and self.background_states.get(profile, {}).get("state") == "ready")
+            elif operation == "media":
                 history = await provider.history_readonly(args[0])
                 result = read_media(history, Path(self.config["hermesHome"]), profile, args[0], args[1])
             else:
@@ -274,6 +373,9 @@ class ConnectorRuntime:
                             {**self.config, "profiles": [name]}, install=True))
                     except (OSError, ValueError):
                         self.media_states[name] = {"state": "installationFailed"}
+                if self.background_tasks_supported:
+                    self.background_states.update(await asyncio.to_thread(background_profiles,
+                        {**self.config, "profiles": [name]}, install=True))
             if operation in {"history", "history_readonly"}:
                 session_id = args[0].stored_session_id if operation == "history" else args[0]
                 result = project_media(result, Path(self.config["hermesHome"]), profile, session_id)
@@ -328,6 +430,10 @@ class ConnectorRuntime:
                     raise ProtocolError("Invalid visual media policy") from error
                 await asyncio.to_thread(self._save_media_policy)
             self.visual_media_supported = visual_media_supported
+            self.background_tasks_supported = isinstance(capabilities, dict) and capabilities.get("backgroundTasksV1") is True
+            # Preserve known sessions to emit authoritative empty inventories
+            # after reconnect, while forcing a first snapshot on this transport.
+            self.background_fingerprints = {key: "" for key in self.background_fingerprints}
             self.websocket = websocket
             self.connection_error = None
             # New cloud process may have lost its replay cursor; always request an

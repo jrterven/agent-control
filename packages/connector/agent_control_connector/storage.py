@@ -89,12 +89,19 @@ class OperationLedger:
         self.db.commit()
         self.receipt_bytes = self.db.execute("SELECT coalesce(sum(length(result)),0) FROM operations").fetchone()[0]
 
-    def reserve(self, key: str, digest: str) -> tuple[str, bytes | None]:
+    def lookup(self, key: str, digest: str) -> tuple[str, bytes | None] | None:
+        """Read an existing identity before a fresh-operation safety preflight."""
         row = self.db.execute("SELECT digest,state,result FROM operations WHERE key=?", (key,)).fetchone()
         if row:
             if row[0] != digest:
                 return "conflict", None
             return row[1], row[2]
+        return None
+
+    def reserve(self, key: str, digest: str) -> tuple[str, bytes | None]:
+        previous = self.lookup(key, digest)
+        if previous is not None:
+            return previous
         if self.db.execute("SELECT count(*) FROM operations").fetchone()[0] >= self.MAX_OPERATIONS:
             return "full", None
         try:

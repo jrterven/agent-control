@@ -1,6 +1,8 @@
 import { bootstrapData, expect, test } from "./fixtures";
 import type { Page } from "@playwright/test";
 
+test.use({ serviceWorkers: "block" });
+
 async function mockLive(page: Page) {
   const calls: { purpose?: string; focusMessageId?: string; sessionId: string }[] = [];
   await page.route("**/api/v1/bootstrap", (route) => route.fulfill({ json: {

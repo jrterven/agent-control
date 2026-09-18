@@ -1,9 +1,12 @@
 import type {
   CapabilitySet,
+  ControlTurnOrigin,
   ConnectionState as SharedConnectionState,
   NormalizedEvent,
   SessionRoute,
 } from "@hermes-control/shared-types";
+
+export type { BackgroundTask, BackgroundTaskSnapshot, ControlTurnOrigin } from "@hermes-control/shared-types";
 
 export type ConnectionState = Exclude<SharedConnectionState, "connecting">;
 export type ThemePreference = "dark" | "light" | "auto";
@@ -220,13 +223,15 @@ export type ChatMessage = {
   createdAt: string;
   /** Absolute instant for ordering with voice calls; createdAt is a clock label. */
   timestamp?: string;
-  delivery?: "sending" | "sent" | "ambiguous" | "failed";
+  delivery?: "sending" | "sent" | "queued" | "ambiguous" | "failed";
   tools?: ToolRun[];
   activity?: AgentActivityItem[];
   media?: MessageMedia[];
   attachments?: MessageAttachment[];
   emailReferences?: EmailReference[];
   streaming?: boolean;
+  controlTurnId?: string;
+  controlTurnOrigin?: ControlTurnOrigin;
 };
 
 export type ApprovalChoice = "once" | "session" | "always" | "deny";

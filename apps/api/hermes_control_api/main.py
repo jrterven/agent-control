@@ -23,7 +23,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from .api import router
 from .cloud_auth import router as cloud_auth_router
 from .api.connector_routes import router as connector_router
-from .remote_provider import ConnectorRegistry
+from .remote_provider import BackgroundTasksBusyError, ConnectorRegistry
 from .cloud_operations import CloudMetrics, CloudOperationsMiddleware, router as cloud_operations_router
 from .config import Settings, get_settings
 from .database import Base, build_engine, build_session_factory
@@ -42,6 +42,7 @@ from .notifications import PushNotificationService
 from .openai_live import LiveSessionLimiter, OpenAILiveClient
 from .providers import build_provider_pool
 from .realtime import persist_normalized_event
+from .prompt_reconciliation import PromptHistoryReconciler
 from .security import SecretVault
 from .supervision import SupervisorHealth, supervise_periodic
 from .services import (
@@ -222,6 +223,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         event_hub.remember_correlation(event)
         await event_hub.publish(event, recipient_user_id=recipient_user_id)
         push_notification_service.schedule(completion)
+        prompt_reconciler.schedule(event)
 
     async def durable_event_sink(event) -> None:
         if offload_cloud_events:
@@ -259,6 +261,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session_factory=session_factory,
         push_notifications=push_notification_service,
     )
+    prompt_reconciler = PromptHistoryReconciler(session_factory, service_container)
     automation_route_health = SupervisorHealth(
         stale_after_seconds=max(
             settings.automation_route_stale_seconds,
@@ -407,6 +410,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 with contextlib.suppress(asyncio.CancelledError):
                     await watcher
             await push_notification_service.close()
+            await prompt_reconciler.close()
             await connector_registry.close()
             await provider_pool.close()
             engine.dispose()
@@ -474,6 +478,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.exception_handler(ConflictError)
     async def conflict(request: Request, exc: ConflictError):
         return error_response(request, 409, "CONFLICT", str(exc))
+
+    @app.exception_handler(BackgroundTasksBusyError)
+    async def background_tasks_busy(request: Request, exc: BackgroundTasksBusyError):
+        return error_response(request, 409, "BACKGROUND_TASKS_BUSY",
+            "Background tasks are active or their state is uncertain; wait for them to finish before deleting")
 
     @app.exception_handler(IntegrationError)
     async def integration_error(request: Request, exc: IntegrationError):

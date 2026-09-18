@@ -40,6 +40,41 @@ def test_drain_blocks_new_mutations_and_resume_restores_service(cloud_operator):
     assert not app.state.cloud_draining
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("counts", [(1, 0), (0, 1), (None, None)])
+async def test_drain_refuses_children_even_when_foreground_sessions_are_idle(cloud_operator, monkeypatch, counts):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from fastapi import HTTPException
+    from hermes_control_api.cloud_operations import drain
+    from hermes_control_api.models import Gateway
+    from hermes_control_api.connector_models import Connector
+    from sqlalchemy import select
+    app, _, _ = cloud_operator
+    with app.state.session_factory() as db:
+        owner = db.scalar(select(User))
+        gateway = Gateway(name="worker-device", owner_id=owner.id, transport_kind="connector",
+            rest_url="connector://test", ws_url="connector://test")
+        db.add(gateway)
+        db.flush()
+        db.add(Connector(owner_id=owner.id, gateway_id=gateway.id, name="device", token_hash="e" * 64, profiles=["default"]))
+        db.commit()
+        gateway_id = gateway.id
+    link = SimpleNamespace(online=True, pending={}, background_task_profiles={"default"})
+    app.state.connector_registry.links[gateway_id] = link
+    provider = SimpleNamespace(session_inventory_complete=True, list_sessions=AsyncMock(return_value=[]),
+        list_background_tasks=AsyncMock(return_value={"complete": True, "activeCount": counts[0], "pendingDeliveryCount": counts[1]}))
+    monkeypatch.setattr(app.state.services.provider_pool, "get", AsyncMock(return_value=provider))
+    try:
+        with pytest.raises(HTTPException) as error:
+            await drain(SimpleNamespace(app=app))
+        assert error.value.status_code == 409
+        assert not app.state.cloud_draining
+        provider.list_background_tasks.assert_awaited_once_with()
+    finally:
+        app.state.connector_registry.links.pop(gateway_id)
+
+
 def test_platform_status_requires_admin_and_never_records_literal_paths(cloud_operator):
     app, client, _ = cloud_operator
     client.get("/api/v1/sessions/private-test-id/messages?secret=should-never-appear")

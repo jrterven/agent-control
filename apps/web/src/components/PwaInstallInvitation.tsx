@@ -13,7 +13,7 @@ export function PwaInstallInvitation() {
   const { t } = useTranslation();
   const { mode, installed, dismissedUntil } = usePwaInstallStore();
   const authenticated = useAppStore((state) => state.authState === "authenticated");
-  const streaming = useAppStore((state) => Object.keys(state.streamingBySession).length > 0);
+  const streaming = useAppStore((state) => Object.keys(state.streamingBySession).length > 0 || Object.keys(state.runtimeTurnBySession).length > 0);
   const overlayOpen = useAppStore((state) => state.leftDrawerOpen || state.activityOpen || state.notificationsOpen || state.commandOpen || state.gatewayMenuOpen);
   const updateBlocked = usePwaUpdateStore((state) => hasPwaUpdateBlockers(state.blockers) || state.status === "applying");
   const [visible, setVisible] = useState(false);

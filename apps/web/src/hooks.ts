@@ -17,11 +17,12 @@ import {
   saveShellSnapshot,
   savePreference,
 } from "./lib/db";
-import { useAppStore } from "./store/appStore";
+import { activeResponseId, useAppStore } from "./store/appStore";
 import { isCloudProfileOffline, useCloudConfigurationStore } from "./lib/cloud";
 import i18n, { getCurrentLanguage } from "./i18n";
 import { subscribeToMediaQuery } from "./lib/mediaQuery";
 import { recordSessionCompletion } from "./lib/chatNotifications";
+import { controlTurnOrigin, normalizeBackgroundTasks } from "./lib/backgroundTasks";
 import { detectedTimeZone, isValidTimeZone, TIME_ZONE_PREFERENCE_KEY } from "./lib/dateTime";
 import type {
   AgentActivityItem,
@@ -43,6 +44,7 @@ const unmatchedSessionEvents = new Map<string, RealtimeEvent[]>();
 const rehydrationGenerations = new Map<string, number>();
 const activeSessionRecoveries = new Map<string, Promise<void>>();
 const interactionRevisions = new Map<string, number>();
+const historyOnlyTurns = new Set<string>();
 type StreamingMarkerState = {
   sessionId: string;
   mode: "outside" | "candidate" | "marker";
@@ -59,6 +61,7 @@ const CONTROL_BOOT_RETRY_INITIAL_MS = 1_000;
 const ACTIVE_SESSION_STATUSES = new Set([
   "pending", "queued", "accepted", "starting", "streaming", "running",
   "working", "waiting", "delivery_unknown",
+  "redirected", "steered",
 ]);
 const TERMINAL_STREAM_EVENTS = new Set([
   "message.complete", "message.completed", "message.done", "run.completed",
@@ -524,8 +527,21 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   const operationId = event.correlationId;
   const routeSessionId = eventSessionId(event);
   const terminalStreamEvent = TERMINAL_STREAM_EVENTS.has(event.type);
-  const messageId = (operationId ? state.pendingOperations[operationId] : undefined)
-    ?? (routeSessionId ? state.streamingBySession[routeSessionId] : undefined);
+  const rawTurn = data.controlTurn;
+  const turn = rawTurn && typeof rawTurn === "object" && !Array.isArray(rawTurn) ? rawTurn as Record<string, unknown> : undefined;
+  const historyCorrelated = turn?.correlation === "history";
+  const turnId = historyCorrelated && typeof turn.id === "string" && turn.id.length > 0 && turn.id.length <= 200 ? turn.id : undefined;
+  const independentMessageId = routeSessionId && turnId ? `control-turn-${routeSessionId}-${turnId}` : undefined;
+  const messageId = historyCorrelated ? independentMessageId
+    : (operationId ? state.pendingOperations[operationId] : undefined)
+      ?? (routeSessionId ? state.streamingBySession[routeSessionId] : undefined);
+
+  if (event.type === "background.tasks" && routeSessionId) {
+    const snapshot = normalizeBackgroundTasks(data);
+    if (!snapshot) return false;
+    state.setBackgroundTasks(routeSessionId, snapshot);
+    return true;
+  }
 
   const cloud = useCloudConfigurationStore.getState().methods?.mode === "cloud";
   if (cloud && event.type === "control.reconcile" && event.gatewayId) {
@@ -566,6 +582,46 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
     return true;
   }
 
+  const usageSessionId = routeSessionId
+    ?? (messageId ? state.messages.find((message) => message.id === messageId)?.sessionId : undefined);
+  const hasUsageSnapshot = Boolean(data.usage && typeof data.usage === "object" && !Array.isArray(data.usage));
+  const usage = hasUsageSnapshot ? normalizeSessionUsage(data.usage, event.occurredAt) : undefined;
+  if (usageSessionId && hasUsageSnapshot) state.setSessionUsage(usageSessionId, usage);
+  if (event.type === "session.usage") return Boolean(usageSessionId && hasUsageSnapshot);
+
+  if (historyCorrelated) {
+    // Native Hermes uses the same uncorrelated events for human and task
+    // completion turns. Only authoritative history can settle a human prompt.
+    // Starts can be emitted twice, so create a bubble only on useful content.
+    if (!independentMessageId || !routeSessionId) {
+      if (terminalStreamEvent && routeSessionId) void rehydrateSession(routeSessionId);
+      return true;
+    }
+    if (event.type === "message.start" || event.type === "message.started") {
+      state.setRuntimeTurn(routeSessionId, turnId);
+      return true;
+    }
+    const existing = state.messages.find((message) => message.id === independentMessageId);
+    if (terminalStreamEvent) {
+      historyOnlyTurns.delete(independentMessageId);
+      streamingMarkerStates.delete(independentMessageId);
+      streamingMarkerTombstones.delete(independentMessageId);
+      if (existing) state.updateMessage(independentMessageId, { streaming: false });
+      if (state.runtimeTurnBySession[routeSessionId] === turnId) state.setRuntimeTurn(routeSessionId, undefined);
+      if (event.type.startsWith("message.")) recordSessionCompletion(routeSessionId, event.occurredAt);
+      void rehydrateSession(routeSessionId);
+      return true;
+    }
+    if (historyOnlyTurns.has(independentMessageId)) return true;
+    if (!existing && (event.type === "message.delta" || event.type.startsWith("tool."))) {
+      state.setRuntimeTurn(routeSessionId, turnId);
+      state.appendMessage({
+        id: independentMessageId, sessionId: routeSessionId, role: "assistant", content: "", createdAt: "",
+        timestamp: absoluteTimestamp(event.occurredAt) ?? new Date().toISOString(), streaming: true, controlTurnId: turnId,
+      });
+    }
+  }
+
   if (event.type === "approval.request" && routeSessionId) {
     const request = parseApprovalRequest(routeSessionId, data);
     if (!request) return false;
@@ -603,12 +659,6 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
     }
   }
 
-  const usageSessionId = routeSessionId
-    ?? (messageId ? state.messages.find((message) => message.id === messageId)?.sessionId : undefined);
-  const hasUsageSnapshot = Boolean(data.usage && typeof data.usage === "object" && !Array.isArray(data.usage));
-  const usage = hasUsageSnapshot ? normalizeSessionUsage(data.usage, event.occurredAt) : undefined;
-  if (usageSessionId && hasUsageSnapshot) state.setSessionUsage(usageSessionId, usage);
-  if (event.type === "session.usage") return Boolean(usageSessionId && hasUsageSnapshot);
   if (!messageId) {
     if (terminalStreamEvent && routeSessionId) clearStreamingMarkerStatesForSession(routeSessionId);
     if (operationId) bufferUnmatchedEvent(operationId, event);
@@ -636,7 +686,7 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
     // truthful "analyzing" state instead of exposing or fabricating text.
     return true;
   }
-  const currentMessage = state.messages.find((message) => message.id === messageId);
+  const currentMessage = useAppStore.getState().messages.find((message) => message.id === messageId);
   const realtimeEmailReferences = emailReferencesFromValue(
     routeSessionId ?? currentMessage?.sessionId ?? "",
     data.controlEmailReferences,
@@ -647,7 +697,7 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
     });
   }
   if (event.type === "message.delta") {
-    const current = state.messages.find((message) => message.id === messageId);
+    const current = useAppStore.getState().messages.find((message) => message.id === messageId);
     const sessionId = routeSessionId ?? current?.sessionId ?? "";
     const visibleDelta = visibleStreamingDelta(
       messageId,
@@ -676,7 +726,7 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
     return true;
   }
   if (event.type.startsWith("tool.")) {
-    const current = state.messages.find((message) => message.id === messageId);
+    const current = useAppStore.getState().messages.find((message) => message.id === messageId);
     const requestedToolName = typeof data.name === "string" ? data.name : undefined;
     const activeTool = [...(current?.tools ?? [])].reverse().find((tool) => tool.status === "running" && (!requestedToolName || tool.name === requestedToolName));
     const toolName = requestedToolName ?? activeTool?.name ?? "tool";
@@ -805,6 +855,9 @@ function attachmentsFromHistory(item: Record<string, unknown>) {
 
 function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index: number): MappedHistoryItem | null {
   const role = item.role;
+  // The adapter's synthetic notification marker binds subsequent replies to
+  // a task. It is not a public utterance from the assistant.
+  if (role === "system" && controlTurnOrigin(item.controlTurnOrigin)) return null;
   const timestamp = historyTimestamp(item);
   const createdAt = timestamp ? new Date(timestamp).toLocaleTimeString(getCurrentLanguage(), { hour: "2-digit", minute: "2-digit" }) : "";
   if (role === "tool") {
@@ -824,6 +877,7 @@ function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index:
   const attachments = attachmentsFromHistory(item);
   const emailReferences = emailReferencesFromValue(sessionId, item.controlEmailReferences);
   const content = typeof item.content === "string" ? item.content : typeof item.text === "string" ? item.text : "";
+  const origin = controlTurnOrigin(item.controlTurnOrigin);
   if (!content && !media.length && !attachments.length && !emailReferences.length) return null;
   return {
     id: String(item.id ?? `${sessionId}-history-${index}`),
@@ -836,6 +890,7 @@ function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index:
     ...(media.length ? { media } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(emailReferences.length ? { emailReferences } : {}),
+    ...(origin ? { controlTurnOrigin: origin } : {}),
   };
 }
 
@@ -932,6 +987,7 @@ function appendTerminalHistoryNotice(
   if (lastUserIndex < 0) return;
   const hasFinalResponse = history.slice(lastUserIndex + 1).some((item) => {
     if (item?.role !== "assistant") return false;
+    if (controlTurnOrigin(item.controlTurnOrigin)) return false;
     if (item.tool_calls || item.toolCalls) return false;
     const finishReason = String(item.finish_reason ?? item.finishReason ?? "").trim().toLowerCase();
     if (["tool_calls", "tool_call", "function_call"].includes(finishReason)) return false;
@@ -979,6 +1035,10 @@ async function resumeActiveSession(sessionId: string) {
 
 export async function rehydrateSession(sessionId: string, recoveryAttempted = false) {
   const userId = useAppStore.getState().userId;
+  const authGeneration = useAppStore.getState().authGeneration;
+  const streamingAtStart = useAppStore.getState().streamingBySession[sessionId];
+  const runtimeTurnAtStart = useAppStore.getState().runtimeTurnBySession[sessionId];
+  void rehydrateBackgroundTasks(sessionId);
   nextRehydrationGeneration += 1;
   const generation = nextRehydrationGeneration;
   rehydrationGenerations.delete(sessionId);
@@ -994,16 +1054,33 @@ export async function rehydrateSession(sessionId: string, recoveryAttempted = fa
     // Reconnect, replay and terminal events can all request history at nearly
     // the same time. Never let a slower, older active snapshot overwrite a
     // newer terminal transcript.
-    if (rehydrationGenerations.get(sessionId) !== generation || useAppStore.getState().userId !== userId) return;
+    if (rehydrationGenerations.get(sessionId) !== generation || useAppStore.getState().userId !== userId || useAppStore.getState().authGeneration !== authGeneration) return;
     const messages = historyMessages(sessionId, history.items);
     const state = useAppStore.getState();
+    // A new human prompt can already be acknowledged while this older read
+    // returns. Applying its transcript would drop that sent user bubble, even
+    // if the optimistic assistant and operation lock survived the merge.
+    if (state.streamingBySession[sessionId] !== streamingAtStart) return;
+    if (state.runtimeTurnBySession[sessionId] === runtimeTurnAtStart && Object.prototype.hasOwnProperty.call(history, "activeTurnId")) {
+      const activeTurnId = typeof history.activeTurnId === "string" && history.activeTurnId.length > 0 && history.activeTurnId.length <= 200 ? history.activeTurnId : undefined;
+      if (activeTurnId) {
+        // History has no verifiable mapping from a partial assistant row to
+        // the current native turn. Use that transcript until the terminal
+        // event instead of displaying a second copy of the partial response.
+        historyOnlyTurns.add(`control-turn-${sessionId}-${activeTurnId}`);
+        if (historyOnlyTurns.size > 256) historyOnlyTurns.delete(historyOnlyTurns.values().next().value!);
+      }
+      state.setRuntimeTurn(sessionId, activeTurnId);
+      state.messages.filter((message) => message.sessionId === sessionId && message.controlTurnId)
+        .forEach((message) => state.updateMessage(message.id, { streaming: false }));
+    }
     const activeOperation = history.activeOperation;
     const operationIsActive = Boolean(
       activeOperation
       && typeof activeOperation.operationId === "string"
       && activeOperation.operationId.length > 0
       && activeOperation.operationId.length <= 200
-      && ["pending", "accepted", "streaming", "delivery_unknown"].includes(activeOperation.status),
+      && ["pending", "queued", "accepted", "streaming", "redirected", "steered", "delivery_unknown"].includes(activeOperation.status),
     );
     if (
       Array.isArray(history.pendingInteractions)
@@ -1057,6 +1134,12 @@ export async function rehydrateSession(sessionId: string, recoveryAttempted = fa
     }
 
     if (operationIsActive && activeOperation) {
+      if (activeOperation.status !== "queued") {
+        // The API promotes queued to streaming only after matching the actual
+        // human row against the submitted prompt and its history boundary.
+        state.messages.filter((message) => message.sessionId === sessionId && message.delivery === "queued")
+          .forEach((message) => state.updateMessage(message.id, { delivery: "sent" }));
+      }
       const existingStreamId = state.streamingBySession[sessionId];
       const existingStream = existingStreamId
         ? state.messages.find((message) => (
@@ -1098,6 +1181,8 @@ export async function rehydrateSession(sessionId: string, recoveryAttempted = fa
     }
 
     const staleStreamId = state.streamingBySession[sessionId];
+    state.messages.filter((message) => message.sessionId === sessionId && message.delivery === "queued")
+      .forEach((message) => state.updateMessage(message.id, { delivery: "sent" }));
     if (staleStreamId) {
       state.updateMessage(staleStreamId, { streaming: false });
       state.setStreamingMessageId(sessionId, undefined);
@@ -1108,12 +1193,12 @@ export async function rehydrateSession(sessionId: string, recoveryAttempted = fa
           unmatchedEvents.delete(operationId);
         });
     }
-    clearStreamingMarkerStatesForSession(sessionId);
+    if (!useAppStore.getState().runtimeTurnBySession[sessionId]) clearStreamingMarkerStatesForSession(sessionId);
     unmatchedSessionEvents.delete(sessionId);
-    appendTerminalHistoryNotice(sessionId, history.sessionStatus, history.items, messages);
+    if (!history.activeTurnId) appendTerminalHistoryNotice(sessionId, history.sessionStatus, history.items, messages);
     useAppStore.getState().setMessagesForSession(sessionId, messages);
   } catch {
-    if (rehydrationGenerations.get(sessionId) !== generation || useAppStore.getState().userId !== userId) return;
+    if (rehydrationGenerations.get(sessionId) !== generation || useAppStore.getState().userId !== userId || useAppStore.getState().authGeneration !== authGeneration) return;
     const state = useAppStore.getState();
     const workspaceId = state.sessions.find((session) => session.id === sessionId)?.workspaceId;
     if (state.offlineCacheEnabled && workspaceId) {
@@ -1124,7 +1209,23 @@ export async function rehydrateSession(sessionId: string, recoveryAttempted = fa
   }
 }
 
+export async function rehydrateBackgroundTasks(sessionId: string) {
+  const { userId, authGeneration, authState, demoMode } = useAppStore.getState();
+  const sessionExisted = useAppStore.getState().sessions.some((session) => session.id === sessionId);
+  if (authState !== "authenticated" || demoMode) return;
+  try {
+    const snapshot = normalizeBackgroundTasks(await api.backgroundTasks(sessionId, AbortSignal.timeout(8000)));
+    const current = useAppStore.getState();
+    if (!snapshot || current.userId !== userId || current.authGeneration !== authGeneration || current.authState !== "authenticated") return;
+    if (sessionExisted && !current.sessions.some((session) => session.id === sessionId)) return;
+    current.setBackgroundTasks(sessionId, snapshot);
+  } catch {
+    // Older connectors and temporary disconnects must not block reading chat.
+  }
+}
+
 function clearPrivateRuntimeState() {
+  historyOnlyTurns.clear();
   unmatchedEvents.clear();
   unmatchedSessionEvents.clear();
   rehydrationGenerations.clear();
@@ -1458,11 +1559,23 @@ export function useSessionHistory() {
   const demoMode = useAppStore((state) => state.demoMode);
   const bootstrapLoaded = useAppStore((state) => state.bootstrapLoaded);
   const sessionId = useAppStore((state) => state.selectedSessionId);
+  const connection = useAppStore((state) => state.connection);
 
   useEffect(() => {
     if ((authState !== "authenticated" && authState !== "offline") || demoMode || !bootstrapLoaded || !sessionId) return;
     void rehydrateSession(sessionId);
   }, [authState, bootstrapLoaded, demoMode, sessionId]);
+
+  useEffect(() => {
+    if (authState !== "authenticated" || demoMode || !bootstrapLoaded || !sessionId) return;
+    const refresh = () => {
+      if (document.visibilityState !== "hidden") void rehydrateBackgroundTasks(sessionId);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 30_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
+  }, [authState, bootstrapLoaded, demoMode, sessionId, connection]);
 }
 
 export async function createChatForCurrentContext() {
@@ -1659,7 +1772,7 @@ async function reconcileAmbiguousPrompt(sessionId: string, operationId: string, 
 export async function submitPrompt(content: string, attachments: File[] = []) {
   const state = useAppStore.getState();
   if (isCloudProfileOffline(state.profiles.find((profile) => profile.id === state.selectedProfileId), state.gateways, state.connection)) return;
-  if ((!content.trim() && !attachments.length) || state.streamingBySession[state.selectedSessionId] || !state.selectedSessionId) return;
+  if ((!content.trim() && !attachments.length) || activeResponseId(state, state.selectedSessionId) || !state.selectedSessionId) return;
   const now = new Date();
   const userMessage: ChatMessage = {
     id: crypto.randomUUID(), sessionId: state.selectedSessionId, role: "user", content: content.trim(),
@@ -1686,7 +1799,7 @@ export async function submitPrompt(content: string, attachments: File[] = []) {
       const buffered = unmatchedEvents.get(receipt.operationId) ?? [];
       unmatchedEvents.delete(receipt.operationId);
       buffered.forEach(applyRealtimeEvent);
-      state.updateMessage(userMessage.id, { delivery: "sent" });
+      state.updateMessage(userMessage.id, { delivery: receipt.status === "queued" ? "queued" : "sent" });
       if (["completed", "failed", "interrupted"].includes(receipt.status)) {
         const current = useAppStore.getState().messages.find((message) => message.id === assistantId);
         state.updateMessage(assistantId, {
@@ -1857,7 +1970,9 @@ export async function respondToClarification(
 export async function stopPrompt() {
   const state = useAppStore.getState();
   const sessionId = state.selectedSessionId;
-  const streamingId = state.streamingBySession[sessionId];
+  const streamingId = activeResponseId(state, sessionId);
+  const runtimeTurnId = state.runtimeTurnBySession[sessionId];
+  const humanStreamId = state.streamingBySession[sessionId];
   if (!streamingId) return;
   activeDemoControllers.get(sessionId)?.abort();
   if (!state.demoMode) {
@@ -1870,9 +1985,11 @@ export async function stopPrompt() {
       return;
     }
   }
-  state.updateMessage(streamingId, { streaming: false, content: state.messages.find((message) => message.id === streamingId)?.content || i18n.t("runtimeMessages.stopped") });
-  state.setStreamingMessageId(sessionId, undefined);
-  state.clearSessionInteractions(sessionId);
+  const current = useAppStore.getState();
+  state.updateMessage(streamingId, { streaming: false, content: current.messages.find((message) => message.id === streamingId)?.content || i18n.t("runtimeMessages.stopped") });
+  if (current.streamingBySession[sessionId] === humanStreamId) state.setStreamingMessageId(sessionId, undefined);
+  if (current.runtimeTurnBySession[sessionId] === runtimeTurnId) state.setRuntimeTurn(sessionId, undefined);
+  if (current.streamingBySession[sessionId] === humanStreamId && current.runtimeTurnBySession[sessionId] === runtimeTurnId) state.clearSessionInteractions(sessionId);
 }
 
 export function useSessionDraft(sessionId: string) {

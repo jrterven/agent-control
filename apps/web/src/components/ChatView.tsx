@@ -4,12 +4,13 @@ import type { CSSProperties } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { MessageMarkdown } from "./MessageMarkdown";
+import { BackgroundTasks, taskResultAnchor } from "./BackgroundTasks";
 import { Badge, Button, IconButton } from "@hermes-control/ui";
 import { createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
 import { api } from "../lib/api";
 import { conversationTimeline } from "../lib/chatTimeline";
 import { liveDelegationConversation } from "../lib/liveDelegation";
-import { useAppStore } from "../store/appStore";
+import { activeResponseId, useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
 import { useOpenAILive } from "../hooks/useOpenAILive";
 import { useSpeechPlayback, type LiveSpeechStatus, type SpeechPlaybackStatus } from "../hooks/useSpeechPlayback";
@@ -44,6 +45,7 @@ function DeliveryIcon({ delivery }: { delivery?: ChatMessage["delivery"] }) {
   const { t } = useTranslation();
   if (delivery === "ambiguous" || delivery === "failed") return <WarningCircle aria-label={t("chat.delivery.unconfirmed")} />;
   if (delivery === "sent") return <Checks aria-label={t("chat.delivery.delivered")} />;
+  if (delivery === "queued") return <span className="message-queued"><Checks aria-hidden="true" />{t("backgroundTasks.receivedQueued")}</span>;
   return <Check aria-label={t("chat.delivery.sending")} />;
 }
 
@@ -550,10 +552,10 @@ function Message({ message, profile, agentName, speech, liveExplanation, automat
       ]
     : [];
   return (
-    <article className="message message--assistant" aria-label={t("chat.assistantResponse", { agent: agentName })}>
+    <article className="message message--assistant" id={message.controlTurnOrigin ? taskResultAnchor(message.id) : undefined} tabIndex={message.controlTurnOrigin ? -1 : undefined} aria-label={t("chat.assistantResponse", { agent: agentName })}>
       <div className="assistant-avatar"><ProfileAvatar profile={profile} /></div>
       <div className="assistant-content">
-        <header><strong>{agentName}</strong><time>{message.createdAt}</time>{message.streaming ? <Badge tone="info">{t("chat.streaming")}</Badge> : null}</header>
+        <header><strong>{agentName}</strong><time>{message.createdAt}</time>{message.controlTurnOrigin ? <Badge>{t(message.controlTurnOrigin.taskId ? "backgroundTasks.resultFor" : "backgroundTasks.resultLabel", { id: message.controlTurnOrigin.taskId?.slice(0, 8) })}</Badge> : null}{message.streaming ? <Badge tone="info">{t("chat.streaming")}</Badge> : null}</header>
         <div className="markdown-body">
           {message.content.trim() ? (
             <MessageMarkdown content={message.content} sessionId={message.sessionId} streaming={message.streaming} />
@@ -628,7 +630,8 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachmentIssue, setAttachmentIssue] = useState<"tooMany" | "tooLarge" | "tooMuchTotal" | "unsupported" | undefined>();
-  const streamingMessageId = useAppStore((state) => state.streamingBySession[sessionId]);
+  const streamingMessageId = useAppStore((state) => activeResponseId(state, sessionId));
+  const hasBackgroundWork = useAppStore((state) => state.backgroundTasksBySession[sessionId]?.items.some((task) => ["queued", "running", "unknown"].includes(task.state)) === true);
   const csrfToken = useAppStore((state) => state.csrfToken);
   const authState = useAppStore((state) => state.authState);
   const dictationConfigured = useAppStore((state) => state.features?.dictation.available === true);
@@ -823,6 +826,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           value={displayedValue}
           readOnly={dictation.active || live.active}
           aria-label={t("chat.messagePlaceholder", { agent: agentName })}
+          aria-describedby={streamingMessageId && value.trim() ? "composer-pending-draft" : undefined}
           placeholder={t("chat.messagePlaceholder", { agent: agentName })}
           onChange={(event) => { setValue(event.target.value); draft.save(event.target.value); }}
           onKeyDown={(event) => {
@@ -864,12 +868,13 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           /> : null}
           {!offline && dictationConfigured ? <IconButton className="dictation-button" data-voice-provider="elevenlabs" data-live-phase={dictation.phase} selected={dictation.active} label={t(dictation.active ? "dictation.stop" : "dictation.start")} icon={dictation.active ? <Stop size={20} weight="fill" /> : <Microphone size={21} weight="fill" />} disabled={dictation.phase === "stopping" || (!dictation.active && (!dictation.available || live.active || Boolean(streamingMessageId)))} onClick={() => { if (dictation.active) dictation.stop(); else beginDictation(); }} /> : null}
           {!offline && live.playbackBlocked ? <IconButton label={t("liveVoice.playAudio")} icon={<SpeakerHigh size={21} />} onClick={() => void live.play()} /> : null}
-          {offline ? <Badge tone="warning">{t("chat.offlineDraft")}</Badge> : streamingMessageId ? (canInterrupt ? <Button variant="danger" size="sm" leadingIcon={<Stop weight="fill" />} onClick={() => void stopPrompt()}>{t("chat.stop")}</Button> : <Badge tone="info">{t("chat.running")}</Badge>) : <>
+          {offline ? <Badge tone="warning">{t("chat.offlineDraft")}</Badge> : streamingMessageId ? (canInterrupt ? <Button variant="danger" size="sm" aria-label={t(hasBackgroundWork ? "backgroundTasks.stopAll" : "chat.stop")} title={t(hasBackgroundWork ? "backgroundTasks.stopAll" : "chat.stop")} leadingIcon={<Stop weight="fill" />} onClick={() => void stopPrompt()}>{t("chat.stop")}</Button> : <Badge tone="info">{t("chat.running")}</Badge>) : <>
             <IconButton className="send-button" label={t("chat.sendMessage")} disabled={(!value.trim() && !attachments.length) || dictation.active || live.active} icon={<PaperPlaneTilt size={22} weight="fill" />} onClick={() => void onSubmit()} />
           </>}
         </div>
       </div>
       {attachmentIssue ? <p className="composer-attachment-error" role="alert">{t(`chat.attachments.errors.${attachmentIssue}`)}</p> : null}
+      {streamingMessageId && value.trim() ? <p className="composer-pending-draft" id="composer-pending-draft" role="status">{t("backgroundTasks.draft", { agent: agentName })}</p> : null}
       <p className="composer-note">{t(offline ? "chat.offlineDraftNote" : "chat.disclaimer")}</p>
     </div>
   );
@@ -881,7 +886,8 @@ export function ChatView() {
   const connection = useAppStore((state) => state.connection);
   const sessionId = useAppStore((state) => state.selectedSessionId);
   const profileId = useAppStore((state) => state.selectedProfileId);
-  const streamingMessageId = useAppStore((state) => state.streamingBySession[sessionId]);
+  const streamingMessageId = useAppStore((state) => activeResponseId(state, sessionId));
+  const pendingHumanMessageId = useAppStore((state) => state.streamingBySession[sessionId]);
   const messages = useAppStore((state) => state.messages);
   const approvals = useAppStore((state) => state.approvalsBySession[sessionId] ?? emptyApprovals);
   const clarifications = useAppStore((state) => state.clarificationsBySession[sessionId] ?? emptyClarifications);
@@ -897,6 +903,7 @@ export function ChatView() {
   const session = sessions.find((item) => item.id === sessionId);
   const visibleMessages = useMemo(() => messages.filter((message) => (
     message.sessionId === sessionId
+    && !(message.id === pendingHumanMessageId && streamingMessageId !== pendingHumanMessageId && !message.content.trim() && !message.tools?.length && !message.activity?.length)
     && (
       message.role !== "assistant"
       || message.streaming === true
@@ -906,7 +913,7 @@ export function ChatView() {
       || Boolean(message.tools?.length)
       || Boolean(message.activity?.length)
     )
-  )), [messages, sessionId]);
+  )), [messages, sessionId, pendingHumanMessageId, streamingMessageId]);
   const firstUserMessageId = useMemo(() => visibleMessages.find((message) => message.role === "user")?.id, [visibleMessages]);
   const globalSpeechAvailable = useAppStore((state) => state.features?.speech?.available === true);
   // Profiles from pre-voice cached bootstraps do not include ``speech``;
@@ -979,7 +986,10 @@ export function ChatView() {
 
   return (
     <section className="conversation" aria-labelledby="conversation-title">
-      <div className="conversation__title"><div><span className="eyebrow">{t("chat.conversation")}</span><h1 id="conversation-title">{session?.title ?? t("chat.newConversation")}</h1></div>{session ? <Badge>{session.storedSessionId}</Badge> : null}</div>
+      <div className="conversation__header">
+        <div className="conversation__title"><div><span className="eyebrow">{t("chat.conversation")}</span><h1 id="conversation-title">{session?.title ?? t("chat.newConversation")}</h1></div>{session ? <Badge>{session.storedSessionId}</Badge> : null}</div>
+        {session ? <BackgroundTasks key={sessionId} sessionId={sessionId} /> : null}
+      </div>
       <div
         className="message-scroll"
         ref={scrollRef}

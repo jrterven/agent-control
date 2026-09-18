@@ -4,6 +4,7 @@ import { loadPreference, savePreference } from "./lib/db";
 import { baseTranslations } from "./locales/base";
 import { adminResources } from "./locales/admin";
 import { chatResources } from "./locales/chat";
+import { backgroundTaskResources } from "./locales/backgroundTasks";
 import { imageResources } from "./locales/images";
 import { dictationResources } from "./locales/dictation";
 import { emailResources } from "./locales/email";
@@ -80,6 +81,7 @@ const i18nInitialization = i18n.use(initReactI18next).init({
       asResource(navigationResources[language]),
       asResource(notificationResources[language]),
       asResource(chatResources[language]),
+      asResource(backgroundTaskResources[language]),
       asResource(imageResources[language]),
       asResource(emailResources[language]),
       asResource(dictationResources[language]),

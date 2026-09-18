@@ -14,7 +14,7 @@ import { PwaInstallInvitation } from "./PwaInstallInvitation";
 
 export function AppShell({ children, conversation = false }: { children: ReactNode; conversation?: boolean }) {
   const { t } = useTranslation();
-  const hasStreamingResponse = useAppStore((state) => Object.keys(state.streamingBySession).length > 0);
+  const hasStreamingResponse = useAppStore((state) => Object.keys(state.streamingBySession).length > 0 || Object.keys(state.runtimeTurnBySession).length > 0);
   const updateStatus = usePwaUpdateStore((state) => state.status);
   const updateDeferred = usePwaUpdateStore((state) => state.deferred);
   const updateBlockers = usePwaUpdateStore((state) => state.blockers);

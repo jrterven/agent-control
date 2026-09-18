@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type {
   ApprovalRequest,
   Automation,
+  BackgroundTaskSnapshot,
   BootstrapData,
   ChatMessage,
   ClarificationRequest,
@@ -51,9 +52,11 @@ type AppState = {
   automations: Automation[];
   features?: ControlFeatures;
   sessionUsageById: Record<string, SessionUsage>;
+  backgroundTasksBySession: Record<string, BackgroundTaskSnapshot>;
   approvalsBySession: Record<string, ApprovalRequest[]>;
   clarificationsBySession: Record<string, ClarificationRequest[]>;
   streamingBySession: Record<string, string>;
+  runtimeTurnBySession: Record<string, string>;
   pendingOperations: Record<string, string>;
   messages: ChatMessage[];
   setAuth: (state: AuthState, userName?: string, csrfToken?: string, demoMode?: boolean, userId?: string) => void;
@@ -79,6 +82,7 @@ type AppState = {
   removeSession: (sessionId: string) => void;
   removeSessions: (sessionIds: string[]) => void;
   setSessionUsage: (sessionId: string, usage?: SessionUsage) => void;
+  setBackgroundTasks: (sessionId: string, snapshot: BackgroundTaskSnapshot) => void;
   upsertApproval: (request: ApprovalRequest) => void;
   updateApproval: (sessionId: string, requestId: string, update: Partial<ApprovalRequest>) => void;
   removeApproval: (sessionId: string, requestId: string) => void;
@@ -90,6 +94,7 @@ type AppState = {
   appendMessage: (message: ChatMessage) => void;
   updateMessage: (id: string, update: Partial<ChatMessage>) => void;
   setStreamingMessageId: (sessionId: string, id?: string) => void;
+  setRuntimeTurn: (sessionId: string, id?: string) => void;
   bindOperation: (operationId: string, messageId: string) => void;
   clearOperation: (operationId: string) => void;
   resetPrivateState: (retainAuthState?: boolean) => void;
@@ -113,10 +118,12 @@ const emptyPrivateState = {
   automations: [] as Automation[],
   features: undefined as ControlFeatures | undefined,
   sessionUsageById: {} as Record<string, SessionUsage>,
+  backgroundTasksBySession: {} as Record<string, BackgroundTaskSnapshot>,
   approvalsBySession: {} as Record<string, ApprovalRequest[]>,
   clarificationsBySession: {} as Record<string, ClarificationRequest[]>,
   pendingOperations: {} as Record<string, string>,
   streamingBySession: {} as Record<string, string>,
+  runtimeTurnBySession: {} as Record<string, string>,
   messages: [] as ChatMessage[],
 };
 
@@ -140,12 +147,16 @@ function withoutSessions(state: AppState, sessionIds: Set<string>): Partial<AppS
     state.messages.filter((message) => sessionIds.has(message.sessionId)).map((message) => message.id),
   );
   const streamingBySession = { ...state.streamingBySession };
+  const runtimeTurnBySession = { ...state.runtimeTurnBySession };
   const sessionUsageById = { ...state.sessionUsageById };
+  const backgroundTasksBySession = { ...state.backgroundTasksBySession };
   const approvalsBySession = { ...state.approvalsBySession };
   const clarificationsBySession = { ...state.clarificationsBySession };
   sessionIds.forEach((sessionId) => {
     delete streamingBySession[sessionId];
+    delete runtimeTurnBySession[sessionId];
     delete sessionUsageById[sessionId];
+    delete backgroundTasksBySession[sessionId];
     delete approvalsBySession[sessionId];
     delete clarificationsBySession[sessionId];
   });
@@ -168,9 +179,11 @@ function withoutSessions(state: AppState, sessionIds: Set<string>): Partial<AppS
     selectedSessionId,
     messages: state.messages.filter((message) => !sessionIds.has(message.sessionId)),
     sessionUsageById,
+    backgroundTasksBySession,
     approvalsBySession,
     clarificationsBySession,
     streamingBySession,
+    runtimeTurnBySession,
     pendingOperations,
     workspaces: state.workspaces.map((workspace) => {
       const count = removedByWorkspace.get(workspace.id) ?? 0;
@@ -338,6 +351,15 @@ export const useAppStore = create<AppState>((set) => ({
     else delete sessionUsageById[sessionId];
     return { sessionUsageById };
   }),
+  setBackgroundTasks: (sessionId, snapshot) => set((state) => {
+    const current = state.backgroundTasksBySession[sessionId];
+    if (current && Date.parse(current.observedAt) > Date.parse(snapshot.observedAt)) return {};
+    // An incomplete inventory cannot make a previously observed task disappear.
+    const items = snapshot.complete ? snapshot.items : [...new Map([
+      ...(current?.items ?? []), ...snapshot.items,
+    ].map((item) => [item.id, item])).values()].slice(-200);
+    return { backgroundTasksBySession: { ...state.backgroundTasksBySession, [sessionId]: { ...snapshot, items } } };
+  }),
   upsertApproval: (request) => set((state) => {
     const current = state.approvalsBySession[request.sessionId] ?? [];
     const existing = current.find((item) => item.requestId === request.requestId);
@@ -414,6 +436,7 @@ export const useAppStore = create<AppState>((set) => ({
       || message.id === streamingMessageId
       || operationMessageIds.has(message.id)
       || message.delivery === "sending"
+      || message.delivery === "queued"
       || message.delivery === "ambiguous"
     ));
     return { messages: [...state.messages.filter((message) => message.sessionId !== sessionId), ...nextMessages, ...pending] };
@@ -425,6 +448,12 @@ export const useAppStore = create<AppState>((set) => ({
     if (messageId) streamingBySession[sessionId] = messageId;
     else delete streamingBySession[sessionId];
     return { streamingBySession };
+  }),
+  setRuntimeTurn: (sessionId, id) => set((state) => {
+    const runtimeTurnBySession = { ...state.runtimeTurnBySession };
+    if (id) runtimeTurnBySession[sessionId] = id;
+    else delete runtimeTurnBySession[sessionId];
+    return { runtimeTurnBySession };
   }),
   bindOperation: (operationId, messageId) => set((state) => ({ pendingOperations: { ...state.pendingOperations, [operationId]: messageId } })),
   clearOperation: (operationId) => set((state) => {
@@ -448,3 +477,9 @@ export const useAppStore = create<AppState>((set) => ({
     gatewayMenuOpen: false,
   })),
 }));
+
+/** A native coordinator turn is foreground work; its delegated tasks are not. */
+export function activeResponseId(state: Pick<AppState, "runtimeTurnBySession" | "streamingBySession">, sessionId: string) {
+  const turnId = state.runtimeTurnBySession[sessionId];
+  return turnId ? `control-turn-${sessionId}-${turnId}` : state.streamingBySession[sessionId];
+}

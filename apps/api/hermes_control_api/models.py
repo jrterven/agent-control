@@ -335,6 +335,8 @@ class SessionLink(Base, Timestamped):
     initial_history_pending: Mapped[bool] = mapped_column(Boolean, default=False)
     replay_epoch: Mapped[str | None] = mapped_column(String(100))
     last_sequence: Mapped[int] = mapped_column(Integer, default=0)
+    background_tasks: Mapped[dict] = mapped_column(JSON, default=dict)
+    active_turn_id: Mapped[str | None] = mapped_column(String(64))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

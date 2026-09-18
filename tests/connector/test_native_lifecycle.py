@@ -47,6 +47,8 @@ def test_native_cli_version_status_and_failure_exit_codes(native_command,tmp_pat
     assert invoke("--version").stdout.strip() == "0.1.0"
     media = invoke("check-media")
     assert media.returncode == 0 and media.stdout.strip() == "ok", media.stderr
+    background = invoke("check-background")
+    assert background.returncode == 0 and background.stdout.strip() == "ok", background.stderr
     status=invoke("status","--data-dir",str(tmp_path/"unpaired"))
     assert status.returncode == 0
     assert json.loads(status.stdout)["activeWork"] is None

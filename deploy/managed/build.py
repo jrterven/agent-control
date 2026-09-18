@@ -115,6 +115,7 @@ def smoke(root: Path, work: Path) -> None:
            "import sys,ssl,sqlite3,anthropic,httpx,websockets,fastapi,uvicorn,hermes_cli,agent_control_connector; assert sys.version_info[:2] == (3,12)", env=env, cwd=work)
     invoke(root / "bin/agent-control-setup", "--help", env=env, cwd=work)
     invoke(root / "python/bin/python3", "-B", "-m", "agent_control_connector", "check-media", env=env, cwd=work)
+    invoke(root / "python/bin/python3", "-B", "-m", "agent_control_connector", "check-background", env=env, cwd=work)
     invoke(root / "python/bin/python3", "-B", "-m", "hermes_cli.main", "serve", "--help", env=env, cwd=work)
     invoke(root / "python/bin/python3", "-B", Path(__file__).with_name("smoke.py"), "--root", root, "--work", work, env=env, cwd=work)
     if sys.platform == "linux":

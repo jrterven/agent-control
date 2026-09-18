@@ -38,6 +38,31 @@ export interface SessionRoute {
   runtimeSessionId?: string | null;
 }
 
+export interface BackgroundTask {
+  id: string;
+  state: "queued" | "running" | "completed" | "failed" | "cancelled" | "unknown";
+  deliveryState: "pending" | "delivered" | "dropped" | "unknown";
+  /** A server-owned generic label; never the native goal or internal result. */
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+}
+
+export interface BackgroundTaskSnapshot {
+  items: BackgroundTask[];
+  complete: boolean;
+  activeCount: number | null;
+  pendingDeliveryCount: number | null;
+  available: boolean;
+  observedAt: string;
+}
+
+export interface ControlTurnOrigin {
+  kind: "background_task";
+  taskId?: string;
+}
+
 export interface CapabilitySet {
   version?: string | null;
   sourceSha?: string | null;

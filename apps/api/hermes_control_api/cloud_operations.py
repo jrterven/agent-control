@@ -122,10 +122,32 @@ async def drain(request: Request):
                         ).limit(1))
                         if active:
                             raise HTTPException(409, "An offline computer has unresolved work")
+                        snapshots = list(db.scalars(select(SessionLink.background_tasks).where(
+                            SessionLink.gateway_id == connector.gateway_id).limit(10_001)))
+                        if len(snapshots) > 10_000 or any(item and (
+                            item.get("complete") is not True
+                            or type(item.get("activeCount")) is not int or item.get("activeCount") != 0
+                            or type(item.get("pendingDeliveryCount")) is not int or item.get("pendingDeliveryCount") != 0
+                            or any(task.get("state") in {"queued", "running", "unknown"}
+                                for task in item.get("items", []))) for item in snapshots
+                        ):
+                            raise HTTPException(409, "An offline computer has unresolved background tasks")
                         continue
                     for profile in connector.profiles:
                         connection = await GatewayService(state.services).connection(db, connector.gateway_id, profile)
                         provider = await state.services.provider_pool.get(connection)
+                        link = registry.get(connector.gateway_id)
+                        if profile in getattr(link, "background_task_profiles", set()):
+                            tasks = await asyncio.wait_for(provider.list_background_tasks(), 15)
+                            if (tasks.get("complete") is not True or type(tasks.get("activeCount")) is not int
+                                    or type(tasks.get("pendingDeliveryCount")) is not int
+                                    or tasks.get("activeCount") != 0 or tasks.get("pendingDeliveryCount") != 0):
+                                raise HTTPException(409, "A computer has active or uncertain background tasks")
+                            if tasks.get("retired") is True:
+                                # New connectors prove the exact native
+                                # deletion tombstone and an empty retired DB.
+                                # Querying this absent profile could recreate it.
+                                continue
                         sessions = await asyncio.wait_for(provider.list_sessions(), 15)
                         if not provider.session_inventory_complete or any(session.status in ACTIVE for session in sessions):
                             raise HTTPException(409, "A computer has active or uncertain work")
@@ -140,6 +162,8 @@ async def drain(request: Request):
             state.cloud_draining = False
         if isinstance(exc, TimeoutError):
             raise HTTPException(409, "Computer availability could not be verified before the deadline") from None
+        if isinstance(exc, ConnectionError):
+            raise HTTPException(409, "A computer disconnected during the release preflight") from None
         raise
 
 

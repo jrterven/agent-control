@@ -1,6 +1,7 @@
 """Exercise the public HTTP API through a real ASGI WebSocket connector peer."""
 import asyncio
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 import threading
@@ -101,7 +102,7 @@ class LocalPeer:
 
 
 @pytest.fixture
-def attached(setup, tmp_path):
+def attached(setup, tmp_path, monkeypatch):
     app, client, headers, other = setup
     authorization = authorize(client)
     view = approve(client, headers, authorization)
@@ -112,6 +113,12 @@ def attached(setup, tmp_path):
             "profiles":["selected"],"restUrl":"http://127.0.0.1:9119","wsUrl":"ws://127.0.0.1:9119/api/ws",
             "sourceSha":HERMES_0212_SHA,"hermesHome":str(tmp_path)}, {"hermesToken":"secret"}, AuditedLocalProvider)
     runtime = client.portal.call(initialize)
+    # The deterministic in-memory Hermes fixture has no native SQLite ledger.
+    # Its empty task inventory is explicit; production still requires SQLite
+    # evidence from the selected profile before destructive operations.
+    monkeypatch.setattr(runtime, "_background_snapshot", lambda profile, stored_session_id=None: {
+        "available": True, "complete": True, "activeCount": 0, "pendingDeliveryCount": 0,
+        "tasks": [], "observedAt": datetime.now(timezone.utc).isoformat()})
     peer = LocalPeer(client,runtime,credentials["accessToken"])
     peer.start()
     client.portal.call(app.state.warm_capabilities_once)
@@ -217,7 +224,8 @@ def test_disconnect_after_dispatch_reconciles_without_repeating_prompt(attached)
         replacement.close()
 
 
-def test_shared_profile_can_be_deleted_through_another_shared_manager(attached):
+@pytest.mark.parametrize("active_children", [0, 1])
+def test_shared_profile_can_be_deleted_through_another_shared_manager(attached, active_children, monkeypatch):
     app,client,headers,runtime,peer,credentials,view = attached
     # A later-sorting target makes the original selected profile its manager.
     created = client.post("/api/v1/profiles",json={"gatewayId":credentials["gatewayId"],"technicalName":"z-new-agent",
@@ -227,6 +235,13 @@ def test_shared_profile_can_be_deleted_through_another_shared_manager(attached):
     with app.state.session_factory() as db:
         profile = db.scalar(select(ProfileRef).where(ProfileRef.gateway_id == credentials["gatewayId"],ProfileRef.profile_name == "z-new-agent"))
         identifier = profile.id
+    if active_children:
+        monkeypatch.setattr(runtime, "_background_snapshot", lambda profile, stored_session_id=None: {
+            "complete": True, "activeCount": active_children, "pendingDeliveryCount": 0})
     deleted = client.request("DELETE",f"/api/v1/profiles/{identifier}",json={"confirmation":"z-new-agent"},headers=mutate(headers))
+    if active_children:
+        assert deleted.status_code == 409 and deleted.json()["code"] == "BACKGROUND_TASKS_BUSY", deleted.text
+        assert "z-new-agent" in {row["technicalName"] for row in client.get("/api/v1/bootstrap").json()["profiles"]}
+        return
     assert deleted.status_code == 200, deleted.text
     assert "z-new-agent" not in {row["technicalName"] for row in client.get("/api/v1/bootstrap").json()["profiles"]}

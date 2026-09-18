@@ -272,7 +272,10 @@ def main(argv=None):
     media_status = commands.add_parser("media-status", help="Inspect per-profile image publication activation")
     media_install = commands.add_parser("install-media", help="Install the managed image plugin after the connector confirms idle; does not restart Hermes")
     media_check = commands.add_parser("check-media", help="Verify bundled raster codecs and image plugin without accessing user data")
-    for command in (pairing, commands.add_parser("run"), commands.add_parser("status"), commands.add_parser("doctor"), credential_check, media_status, media_install, media_check):
+    background_check = commands.add_parser("check-background", help="Verify bundled native delegation guidance without accessing user data")
+    background_status = commands.add_parser("background-status", help="Inspect managed native delegation activation")
+    background_install = commands.add_parser("install-background", help="Install native delegation guidance after idle; never restarts Hermes")
+    for command in (pairing, commands.add_parser("run"), commands.add_parser("status"), commands.add_parser("doctor"), credential_check, media_status, media_install, media_check, background_check, background_status, background_install):
         command.add_argument("--data-dir")
     args = parser.parse_args(values)
     directory = data_directory(args.data_dir)
@@ -287,6 +290,28 @@ def main(argv=None):
             from .visual_media import media_self_test
             media_self_test()
             print("ok")
+        elif args.command == "check-background":
+            from .background_install import background_self_test
+            background_self_test()
+            print("ok")
+        elif args.command in {"background-status", "install-background"}:
+            from .background_install import background_profiles
+            if args.command == "install-background":
+                from .manage import drain, management_lock
+                with management_lock(directory):
+                    marker = directory / "maintenance.request"
+                    if marker.exists() or marker.is_symlink():
+                        raise ValueError("An existing maintenance request must finish first")
+                    drain(directory)
+                    request = marker.read_text()
+                    try:
+                        result = background_profiles(read_json(directory / "config.json"), install=True)
+                    finally:
+                        if marker.exists() and not marker.is_symlink() and marker.read_text() == request:
+                            marker.unlink()
+            else:
+                result = background_profiles(read_json(directory / "config.json"))
+            print(json.dumps({"profiles": result}))
         elif args.command in {"media-status", "install-media"}:
             from .media_install import media_profiles
             if args.command == "install-media":

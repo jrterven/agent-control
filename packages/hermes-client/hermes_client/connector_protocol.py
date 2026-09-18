@@ -36,7 +36,7 @@ READ_OPERATIONS = frozenset({
     "capabilities", "list_profiles", "list_sessions", "search_sessions", "history",
     "history_readonly", "list_automations", "list_automation_runs", "list_models",
     "get_config", "get_soul", "get_memory", "list_skills", "list_toolsets",
-    "list_mcp_servers", "list_channels", "get_usage", "list_secrets", "media",
+    "list_mcp_servers", "list_channels", "get_usage", "list_secrets", "media", "list_background_tasks",
 })
 WRITE_OPERATIONS = frozenset({
     "create_profile", "delete_profile", "create_session", "resume_session",

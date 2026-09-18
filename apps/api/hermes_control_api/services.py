@@ -35,7 +35,7 @@ from hermes_client import (
     resolve_endpoint,
     validate_endpoint,
 )
-from hermes_client.history import project_history_message
+from hermes_client.history import project_history_message, project_history_turn_origins
 from hermes_client.compatibility import (
     PROFILE_TRANSFER_REVISIONS as _AUDITED_PROFILE_TRANSFER_REVISIONS,
     PROFILE_TRANSFER_PAIRS as _AUDITED_PROFILE_TRANSFER_PAIRS,
@@ -73,6 +73,7 @@ from .models import (
 from .notifications import completion_for_session
 from .providers import authoritative_provider_read
 from .realtime import persist_normalized_event
+from .remote_provider import BackgroundTasksBusyError
 from .schemas import (
     AutomationCreate,
     GatewayCreate,
@@ -151,6 +152,9 @@ _ACTIVE_RUNTIME_STATUSES = {
 }
 _ACTIVE_PROMPT_OPERATION_STATUSES = {
     "pending",
+    "queued",
+    "redirected",
+    "steered",
     "accepted",
     "streaming",
     "delivery_unknown",
@@ -1535,6 +1539,14 @@ class ProfileService:
         runs: list[AutomationRun],
         operations: list[IdempotencyOperation],
     ) -> None:
+        if any(
+            (item.background_tasks or {}).get("activeCount")
+            or (item.background_tasks or {}).get("pendingDeliveryCount")
+            or any(task.get("state") in {"queued", "running", "unknown"}
+                for task in (item.background_tasks or {}).get("items", []))
+            for item in sessions
+        ):
+            raise ConflictError("The agent has active or uncertain background tasks")
         if any(item.status.casefold() in _ACTIVE_RUNTIME_STATUSES for item in sessions):
             raise ConflictError(
                 "The agent has an active Control session; wait for it to finish"
@@ -1599,6 +1611,10 @@ class ProfileService:
             return
         try:
             await provider.delete_profile(profile_name)
+        except BackgroundTasksBusyError:
+            # The connector proves it rejected this request before reserving
+            # or dispatching the deletion. Preserve that actionable conflict.
+            raise
         except BaseException as exc:
             # ``CancelledError`` is an ambiguous delivery result just like a
             # dropped transport response: Hermes may have committed the
@@ -2955,7 +2971,7 @@ class SessionService:
                 select(IdempotencyOperation.scope).where(
                     IdempotencyOperation.user_id == actor.id,
                     IdempotencyOperation.status.in_(
-                        ("pending", "accepted", "streaming", "delivery_unknown")
+                        ("pending", "queued", "redirected", "steered", "accepted", "streaming", "delivery_unknown")
                     ),
                     IdempotencyOperation.scope.like("session:%:prompt"),
                 )
@@ -3088,7 +3104,7 @@ class SessionService:
         )
         connection = await self.gateways.connection(db, row.gateway_id, row.profile_name)
         initial_route = self._route(row)
-        active_statuses = ("pending", "accepted", "streaming", "delivery_unknown")
+        active_statuses = ("pending", "queued", "redirected", "steered", "accepted", "streaming", "delivery_unknown")
 
         def active_prompt_operation() -> IdempotencyOperation | None:
             return db.scalar(
@@ -3169,6 +3185,8 @@ class SessionService:
             )
             if resumed is not None and runtime_is_current and may_apply_recovered_status:
                 row.status = resumed.status
+                if str(resumed.status or "").strip().lower() not in _ACTIVE_RUNTIME_STATUSES:
+                    row.active_turn_id = None
                 row.updated_at = utc_now()
 
             if operation_remains_active and active_operation is not None:
@@ -3381,7 +3399,7 @@ class SessionService:
         )
         # The sanitizer's public collection bound is 500. Preserve the most
         # recent transcript window rather than exposing stale oldest rows.
-        bounded_history = [project_history_message(item) for item in history[-500:]]
+        bounded_history = project_history_turn_origins(history[-500:])
         sanitized = normalizer.sanitize_data(bounded_history)
         gateway = db.get(Gateway, row.gateway_id)
         if not isinstance(sanitized, list):
@@ -3616,6 +3634,10 @@ class SessionService:
 
     async def history(self, db: Session, actor: User, row: SessionLink) -> list[dict[str, Any]]:
         history = await self._raw_history(db, row)
+        row = db.scalar(select(SessionLink).where(SessionLink.id == row.id, SessionLink.owner_id == actor.id)
+            .with_for_update().execution_options(populate_existing=True))
+        if row is None:
+            raise NotFoundError("Session not found")
         self._reconcile_active_prompt_from_history(db, row, history)
         projected = self._project_history(db, row, history)
         self._cache_email_references(
@@ -3625,6 +3647,28 @@ class SessionService:
         )
         db.commit()
         return projected
+
+    async def background_tasks(self, db: Session, actor: User, row: SessionLink) -> dict:
+        from .background_tasks import persist_snapshot, project_snapshot, unavailable_snapshot
+        observed_at = utc_now().isoformat()
+        try:
+            connection = await self.gateways.connection(db, row.gateway_id, row.profile_name)
+            provider = await self.services.provider_pool.get(connection)
+            raw = await provider.list_background_tasks(row.stored_session_id)
+        except (ConnectionError, TimeoutError, RuntimeError, ValueError, AttributeError):
+            return unavailable_snapshot(row, observed_at=observed_at)
+        snapshot = project_snapshot(raw, row.stored_session_id, observed_at=observed_at)
+        if not snapshot["available"]:
+            return unavailable_snapshot(row, observed_at=observed_at)
+        # A realtime observation may have arrived while the provider read was
+        # in flight. Lock and refresh before comparing observation timestamps.
+        row = db.scalar(select(SessionLink).where(SessionLink.id == row.id, SessionLink.owner_id == actor.id)
+            .with_for_update().execution_options(populate_existing=True))
+        if row is None:
+            raise NotFoundError("Session not found")
+        snapshot = persist_snapshot(row, snapshot)
+        db.commit()
+        return snapshot
 
     async def email_reference(
         self,
@@ -3815,15 +3859,15 @@ class SessionService:
         if existing is not None:
             return dict(existing.response_json)
         # The audited Hermes event contract is session-scoped and does not
-        # echo a prompt request id.  Keeping exactly one unresolved prompt per
-        # session makes a fresh terminal message event safely correlatable
-        # without inventing upstream fields or ever retrying a prompt.
+        # echo a prompt request id. Keep one unresolved human prompt per
+        # session; history confirms its boundary independently of autonomous
+        # background completion turns, without ever retrying a prompt.
         active_operation = db.scalar(
             select(IdempotencyOperation).where(
                 IdempotencyOperation.user_id == actor.id,
                 IdempotencyOperation.scope == scope,
                 IdempotencyOperation.status.in_(
-                    ("pending", "accepted", "streaming", "delivery_unknown")
+                    ("pending", "queued", "redirected", "steered", "accepted", "streaming", "delivery_unknown")
                 ),
             )
         )
@@ -4098,7 +4142,7 @@ class SessionService:
                     IdempotencyOperation.user_id == row.owner_id,
                     IdempotencyOperation.scope == f"session:{row.id}:prompt",
                     IdempotencyOperation.status.in_(
-                        ("pending", "accepted", "streaming", "delivery_unknown")
+                        ("pending", "queued", "redirected", "steered", "accepted", "streaming", "delivery_unknown")
                     ),
                 )
                 .order_by(IdempotencyOperation.created_at)
@@ -4123,16 +4167,29 @@ class SessionService:
         for index, message in enumerate(history[baseline:], start=baseline):
             if not isinstance(message, dict) or message.get("role") != "user":
                 continue
+            if message.get("display_kind") == "async_delegation_complete":
+                continue
             text = message.get("text", message.get("content"))
             if isinstance(text, str) and cls._prompt_digest(text) == prompt_hash:
                 prompt_index = index
                 break
         if prompt_index is None:
             return
-        completed = any(
-            cls._is_terminal_assistant_message(message)
-            for message in history[prompt_index + 1 :]
-        )
+        if operation.status == "queued":
+            operation.status = "streaming"
+            metadata = {**metadata, "operationId": operation.idempotency_key, "status": "streaming"}
+            operation.response_json = metadata
+        completed = False
+        for message in history[prompt_index + 1 :]:
+            if not isinstance(message, dict):
+                continue
+            # A subsequent user row may be a native completion wakeup. Its
+            # assistant response cannot settle an earlier human operation.
+            if message.get("role") in {"user", "system"}:
+                break
+            if cls._is_terminal_assistant_message(message):
+                completed = True
+                break
         if completed:
             operation.status = "completed"
             operation.response_json = {
@@ -4140,7 +4197,8 @@ class SessionService:
                 "operationId": operation.idempotency_key,
                 "status": "completed",
             }
-            row.status = "ready"
+            if not row.active_turn_id:
+                row.status = "ready"
             return
 
         if not runtime_confirmed_inactive:
@@ -4203,7 +4261,7 @@ class SessionService:
             select(IdempotencyOperation).where(
                 IdempotencyOperation.user_id == actor.id,
                 IdempotencyOperation.scope == f"session:{row.id}:prompt",
-                IdempotencyOperation.status.in_(("pending", "accepted", "streaming")),
+                IdempotencyOperation.status.in_(("pending", "queued", "redirected", "steered", "accepted", "streaming")),
             )
         ).all()
         for operation in active_operations:
@@ -4522,6 +4580,7 @@ class SessionService:
             # suppress the resumed session's events.
             row.last_sequence = 0
             row.replay_epoch = None
+            row.active_turn_id = None
         row.runtime_session_id = runtime_session_id
         row.runtime_generation = next_generation
 

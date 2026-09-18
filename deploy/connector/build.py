@@ -31,6 +31,7 @@ def build(output: Path, revision: str) -> Path:
             "--hidden-import", "PIL.PngImagePlugin", "--hidden-import", "PIL.JpegImagePlugin",
             "--hidden-import", "PIL.WebPImagePlugin",
             "--add-data", str(REPO / "packages/connector/agent_control_connector/hermes_media_plugin.py") + ":agent_control_connector",
+            "--add-data", str(REPO / "packages/connector/agent_control_connector/hermes_background_plugin.py") + ":agent_control_connector",
             "--copy-metadata", "agent-control-connector",
             str(entry),
         ], check=True)
@@ -41,6 +42,7 @@ def build(output: Path, revision: str) -> Path:
         }) + "\n")
         subprocess.run([str(bundle / "agent-control-connector"), "--help"], check=True)
         subprocess.run([str(bundle / "agent-control-connector"), "check-media"], check=True)
+        subprocess.run([str(bundle / "agent-control-connector"), "check-background"], check=True)
         target = output / archive_platform()
         with tarfile.open(target, "w:gz", dereference=True) as archive:
             archive.add(bundle, arcname="agent-control-connector")

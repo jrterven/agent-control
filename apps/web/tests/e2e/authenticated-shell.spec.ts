@@ -1,5 +1,7 @@
 import { bootstrapData, expect, test } from "./fixtures";
 
+test.use({ serviceWorkers: "block" });
+
 test.describe("shell responsive con estado autenticado determinista", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/chats");

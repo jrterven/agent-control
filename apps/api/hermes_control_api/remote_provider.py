@@ -14,6 +14,10 @@ from hermes_client.provider import HermesProvider, RuntimeGenerationChanged, Ses
 from hermes_client.types import CapabilitySet, NormalizedEvent
 
 
+class BackgroundTasksBusyError(RuntimeError):
+    """A rejected destructive operation was not dispatched to Hermes."""
+
+
 class ConnectorLink:
     def __init__(self, gateway_id: str, profiles: frozenset[str], send_bytes, close_socket):
         self.gateway_id = gateway_id
@@ -26,6 +30,7 @@ class ConnectorLink:
         self.prepare_create = None
         self.generations: dict[str, str] = {}
         self.inventory_complete: dict[str, bool] = {}
+        self.background_task_profiles: set[str] = set()
         self.online = True
 
     async def call(self, profile: str, operation: str, args: tuple, kwargs: dict):
@@ -72,6 +77,7 @@ class ConnectorLink:
                 "SESSION_HISTORY_NOT_FOUND": SessionHistoryNotFound,
                 "CONNECTOR_OFFLINE": ConnectionError,
                 "INVALID_OPERATION": ValueError,
+                "CONNECTOR_BACKGROUND_BUSY": BackgroundTasksBusyError,
             }
             future.set_exception(exceptions.get(str(error), RuntimeError)(str(error)))
         else:
@@ -132,6 +138,8 @@ class ConnectorRegistry:
                     raise ProtocolError("Invalid connector profile state")
                 link.generations[profile] = str(state.get("generation") or "unknown")
                 link.inventory_complete[profile] = state.get("inventoryComplete") is True
+                if isinstance(state.get("backgroundTasks"), dict):
+                    link.background_task_profiles.add(profile)
             return
         if message.get("type") != "event":
             raise ProtocolError("Unknown connector message")
@@ -140,7 +148,13 @@ class ConnectorRegistry:
             raise ProtocolError("Unshared connector event")
         # A authenticated device may only publish into its assigned gateway.
         event.gateway_id = link.gateway_id
-        link.generations[event.profile_name] = event.runtime_generation or "unknown"
+        if event.runtime_generation:
+            link.generations[event.profile_name] = event.runtime_generation
+        if event.type == "background.tasks":
+            from .background_tasks import project_snapshot
+            if not event.stored_session_id or event.runtime_session_id or event.sequence is not None:
+                raise ProtocolError("Invalid background task route")
+            event.data = project_snapshot(event.data, event.stored_session_id, observed_at=event.timestamp.isoformat())
         key = f"{link.gateway_id}:{event.profile_name}:{event.event_id}"
         if key not in self.event_ids:
             await self.event_sink(event)

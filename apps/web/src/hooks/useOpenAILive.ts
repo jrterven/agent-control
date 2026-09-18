@@ -3,7 +3,7 @@ import { submitPrompt } from "../hooks";
 import { api } from "../lib/api";
 import { liveConversationSeparator, liveDelegationPrefix } from "../lib/liveDelegation";
 import { OpenAILiveClient, liveSupported, type LiveIssue, type LivePhase } from "../lib/openaiLiveClient";
-import { useAppStore } from "../store/appStore";
+import { activeResponseId, useAppStore } from "../store/appStore";
 import { useLiveTranscripts } from "./useLiveTranscripts";
 import type { ChatMessage } from "../types";
 
@@ -16,7 +16,7 @@ export async function delegateLiveRequest(sessionId: string, profileId: string, 
   if (signal.aborted || state.authState !== "authenticated" || state.selectedSessionId !== sessionId || state.selectedProfileId !== profileId || !profile?.mutable || !profile.capabilities?.prompts) {
     return "The selected conversation is unavailable. No new task was submitted.";
   }
-  if (state.streamingBySession[sessionId]) return "The agent is still working on the previous request. No new task was submitted. Ask the user to wait for its result before requesting another action.";
+  if (activeResponseId(state, sessionId)) return "The agent is still working on the previous request. No new task was submitted. Ask the user to wait for its result before requesting another action.";
   if (state.approvalsBySession[sessionId]?.length || state.clarificationsBySession[sessionId]?.length) return "The agent needs a response in the conversation's approval or clarification controls. No new task was submitted. Ask the user to use those controls.";
   const prompt = (voiceTaskInstructions + context).trim();
   const ownerId = state.userId;
@@ -54,14 +54,14 @@ export async function delegateLiveRequest(sessionId: string, profileId: string, 
       if (user?.delivery === "failed") { finish("The agent rejected this request; it was not completed. Check the chat before trying again."); return; }
       const needsInput = Boolean(current.approvalsBySession[sessionId]?.length || current.clarificationsBySession[sessionId]?.length);
       waiting(needsInput);
-      if (current.streamingBySession[sessionId] || needsInput) return;
+      if (activeResponseId(current, sessionId) || needsInput) return;
       const messages = current.messages.filter((message) => message.sessionId === sessionId);
       const promptMessage = [...messages].reverse().find((message) => message.role === "user" && message.content === prompt);
       const promptIndex = promptMessage ? messages.indexOf(promptMessage) : -1;
       const nextUserIndex = messages.findIndex((message, index) => index > promptIndex && message.role === "user");
       // Durable history can replace optimistic IDs after a fast result.
       const answer = messages.find((message) => message.id === assistantId)
-        ?? (promptIndex >= 0 ? messages.slice(promptIndex + 1, nextUserIndex >= 0 ? nextUserIndex : undefined).reverse().find((message) => message.role === "assistant") : undefined);
+        ?? (promptIndex >= 0 ? messages.slice(promptIndex + 1, nextUserIndex >= 0 ? nextUserIndex : undefined).reverse().find((message) => message.role === "assistant" && !message.controlTurnOrigin) : undefined);
       if (answer?.content.trim() && !answer.streaming) {
         // Rehydration clears the optimistic streaming marker before replacing
         // messages with durable history in the same turn. Read once more after
@@ -176,7 +176,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken }: { en
       return;
     }
     if (!valid()) return;
-    if (purpose !== "explain" && useAppStore.getState().streamingBySession[sessionId]) {
+    if (purpose !== "explain" && activeResponseId(useAppStore.getState(), sessionId)) {
       intentRef.current = false;
       setActive(false);
       setResumable(Boolean(resultRef.current));
@@ -259,7 +259,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken }: { en
             const resumeEpoch = epochRef.current;
             void call.closed.then(() => {
               if (!current() || resultRef.current !== completed) return;
-              if (intentRef.current && permitted() && epochRef.current === resumeEpoch && !useAppStore.getState().streamingBySession[sessionId]) {
+              if (intentRef.current && permitted() && epochRef.current === resumeEpoch && !activeResponseId(useAppStore.getState(), sessionId)) {
                 setExplainingMessageId(completed.id);
                 void open(resumeEpoch, completed, "resume");
               } else if (!callRef.current) {
@@ -352,7 +352,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken }: { en
 
   const start = async () => {
     if (!permitted() || (intentRef.current && callRef.current && !callRef.current.closing)) return;
-    if (!taskRef.current && useAppStore.getState().streamingBySession[sessionId]) return;
+    if (!taskRef.current && activeResponseId(useAppStore.getState(), sessionId)) return;
     const epoch = ++epochRef.current;
     intentRef.current = true;
     pausedRef.current = false;

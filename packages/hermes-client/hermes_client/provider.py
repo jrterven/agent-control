@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import random
@@ -33,10 +34,12 @@ from .limits import (
     bounded_json_request,
 )
 from .normalization import EventNormalizer
+from .history import project_history_message
 from .compatibility import (
     AUDITED_REVISIONS as _AUDITED_REVISIONS,
     PROFILE_MANAGEMENT_METHODS as _PROFILE_MANAGEMENT_METHODS_BY_REVISION,
     CONTRACTS,
+    HERMES_0212_SHA,
 )
 from .transport import (
     JsonRpcClient,
@@ -92,6 +95,8 @@ _ACTIVE_RUNTIME_STATUSES = frozenset(
         "running",
         "working",
         "waiting",
+        "redirected",
+        "steered",
     }
 )
 _TERMINAL_RUNTIME_EVENTS = frozenset(
@@ -327,6 +332,7 @@ class HermesProvider(Protocol):
         name: str,
     ) -> HermesProfile: ...
     async def list_sessions(self) -> list[HermesSession]: ...
+    async def list_background_tasks(self, stored_session_id: str | None = None) -> dict[str, Any]: ...
     async def search_sessions(
         self, query: str, *, limit: int = 20
     ) -> list[HermesSearchResult]: ...
@@ -485,6 +491,12 @@ class HermesGatewayProvider:
         self._closed = False
         self._instance_epoch = uuid4().hex
         self._session_inventory_complete = False
+        self._message_turns: OrderedDict[tuple[str, str | None, str], tuple[int, str]] = OrderedDict()
+        self._message_turn_sequences: OrderedDict[tuple[str, str | None, str], int] = OrderedDict()
+        self._continuation_owners: OrderedDict[str, SessionRoute] = OrderedDict()
+        self._background_continuations: OrderedDict[str, datetime] = OrderedDict()
+        self._human_continuations: OrderedDict[tuple[str, str], tuple[str, int | None]] = OrderedDict()
+        self._history_floors: OrderedDict[str, int] = OrderedDict()
 
     @property
     def runtime_generation(self) -> str:
@@ -605,6 +617,7 @@ class HermesGatewayProvider:
         # route so an eight-character id reused after restart cannot bind to a
         # stale Control session.
         event.runtime_generation = self.runtime_generation
+        self._project_message_turn(event)
         previous_gateway_epoch = self._gateway_epoch
         if (
             event.replay_epoch
@@ -659,22 +672,156 @@ class HermesGatewayProvider:
                 event.replay_epoch or self._gateway_epoch,
             )
             self._cursors.move_to_end(cursor_key)
+        native = (self.connection.trusted_source_sha or "").casefold() == HERMES_0212_SHA
+        if native and route is not None:
+            if event.type in {"message.start", "message.started"}:
+                self._mark_route_for_reattach(route)
+            if event.type.startswith("subagent.") and event.data.get("id"):
+                self._background_continuations[route.stored_session_id] = event.timestamp
+                self._background_continuations.move_to_end(route.stored_session_id)
+                self._mark_route_for_reattach(route)
+                self._trim_continuations()
         if event.type in _TERMINAL_RUNTIME_EVENTS:
             stored_session_id = event.stored_session_id or (
                 route.stored_session_id if route is not None else None
             )
-            if stored_session_id:
+            if stored_session_id and not self._continuation_required(stored_session_id):
                 self._reattach_routes.pop(stored_session_id, None)
         if self.event_sink is not None:
             await self.event_sink(event)
+
+    def _project_message_turn(self, event: NormalizedEvent) -> None:
+        """Native 939e notifications share message.* with human prompt turns.
+
+        Event sequencing supplies a stream identity, not a human correlation.
+        Missing starts/reconnects must remain history-correlated and cannot
+        settle an arbitrary pending prompt downstream.
+        """
+        if (self.connection.trusted_source_sha or "").casefold() != HERMES_0212_SHA or not event.type.startswith(("message.", "tool.", "subagent.")):
+            return
+        turn: dict[str, str] = {"correlation": "history"}
+        event.data["controlTurn"] = turn
+        if event.type.startswith("subagent."):
+            # Child lifecycle can arrive after the parent ended its turn or
+            # while a different human turn runs. Never attach it to that turn.
+            return
+        generation = self.runtime_generation
+        epoch = event.replay_epoch or self._gateway_epoch
+        # Forget prior generations even if their runtime IDs are reused.
+        for remembered in list(self._message_turn_sequences):
+            if remembered[0] != generation or remembered[1] != epoch:
+                self._message_turns.pop(remembered, None)
+                self._message_turn_sequences.pop(remembered, None)
+        if not event.runtime_session_id or event.sequence is None:
+            if event.runtime_session_id:
+                self._message_turns.pop((generation, epoch, event.runtime_session_id), None)
+            return
+        key = (generation, epoch, event.runtime_session_id)
+        previous_sequence = self._message_turn_sequences.get(key)
+        if previous_sequence is not None and event.sequence <= previous_sequence:
+            # A replayed older start must not take over a newer live stream.
+            return
+        self._message_turn_sequences[key] = event.sequence
+        self._message_turn_sequences.move_to_end(key)
+        while len(self._message_turn_sequences) > self._max_remembered_routes:
+            expired, _ = self._message_turn_sequences.popitem(last=False)
+            self._message_turns.pop(expired, None)
+        if event.type in {"message.start", "message.started"}:
+            material = json.dumps([*key, event.sequence], separators=(",", ":")).encode()
+            self._message_turns[key] = (event.sequence, hashlib.sha256(material).hexdigest())
+            self._message_turns.move_to_end(key)
+            while len(self._message_turns) > self._max_remembered_routes:
+                self._message_turns.popitem(last=False)
+        remembered = self._message_turns.get(key)
+        if remembered is not None and event.sequence >= remembered[0]:
+            turn["id"] = remembered[1]
+        if event.type in _TERMINAL_RUNTIME_EVENTS:
+            self._message_turns.pop(key, None)
 
     def _mark_route_for_reattach(self, route: SessionRoute) -> None:
         if not route.runtime_session_id:
             return
         self._reattach_routes.pop(route.stored_session_id, None)
         self._reattach_routes[route.stored_session_id] = route
+        self._continuation_owners[route.stored_session_id] = route
+        self._continuation_owners.move_to_end(route.stored_session_id)
         while len(self._reattach_routes) > self._max_remembered_routes:
             self._reattach_routes.popitem(last=False)
+        self._trim_continuations()
+
+    def _trim_continuations(self) -> None:
+        for values in (self._continuation_owners, self._background_continuations, self._human_continuations, self._history_floors):
+            while len(values) > self._max_remembered_routes:
+                values.popitem(last=False)
+
+    def _continuation_required(self, stored_session_id: str) -> bool:
+        return stored_session_id in self._background_continuations or any(
+            key[0] == stored_session_id for key in self._human_continuations)
+
+    def observe_background_tasks(self, snapshot: Mapping[str, Any]) -> None:
+        """Observe the connector's global, profile-owned read-only ledger scan.
+
+        This never takes ownership of a runtime just because session.list or
+        the ledger mentions it. Only a route previously used by this transport
+        may be kept attached. Incomplete/stale scans cannot remove a latch.
+        """
+        if (self.connection.trusted_source_sha or "").casefold() != HERMES_0212_SHA:
+            return
+        try:
+            observed = datetime.fromisoformat(str(snapshot["observedAt"]).replace("Z", "+00:00"))
+            if observed.tzinfo is None:
+                return
+        except (KeyError, TypeError, ValueError):
+            return
+        tasks = snapshot.get("tasks")
+        if not isinstance(tasks, list) or len(tasks) > 200:
+            return
+        active = {task.get("storedSessionId") for task in tasks if isinstance(task, Mapping)
+                  and isinstance(task.get("storedSessionId"), str)
+                  and (task.get("state") in {"queued", "running", "unknown"} or task.get("deliveryState") in {"pending", "unknown"})}
+        for stored in active:
+            route = self._continuation_owners.get(stored)
+            if route is not None:
+                previous = self._background_continuations.get(stored, observed)
+                self._background_continuations[stored] = max(previous, observed)
+                self._mark_route_for_reattach(route)
+        if snapshot.get("complete") is True:
+            for stored, latched_at in list(self._background_continuations.items()):
+                if stored not in active and observed >= latched_at:
+                    self._background_continuations.pop(stored, None)
+        self._trim_continuations()
+
+    def _observe_history_continuations(self, stored: str, messages: list[dict[str, Any]]) -> None:
+        """Release a human latch only with a new, exact durable prompt+answer."""
+        if (self.connection.trusted_source_sha or "").casefold() != HERMES_0212_SHA:
+            return
+        ids = [message.get("id") for message in messages]
+        if all(type(identifier) is int and identifier >= 0 for identifier in ids):
+            self._history_floors[stored] = max(ids, default=0)
+            self._history_floors.move_to_end(stored)
+        for key, (digest, floor) in list(self._human_continuations.items()):
+            if key[0] != stored or floor is None:
+                continue
+            matched = False
+            for message in messages:
+                role = message.get("role")
+                if role == "user":
+                    if matched:
+                        break  # Never use another human/notification's reply.
+                    content = message.get("content")
+                    matched = (not message.get("display_kind") and type(message.get("id")) is int
+                               and message["id"] > floor and isinstance(content, str)
+                               and hashlib.sha256(content.encode()).hexdigest() == digest)
+                elif matched and role == "system":
+                    break
+                elif matched and role == "assistant":
+                    projected = project_history_message(message)
+                    content = projected.get("content") or projected.get("text")
+                    if (not message.get("tool_calls") and isinstance(content, str) and content.strip()
+                            and message.get("finish_reason") in {"stop", "end_turn", "length", "completed"}):
+                        self._human_continuations.pop(key, None)
+                        break
+        self._trim_continuations()
 
     def _clear_route_for_reattach(self, stored_session_id: str) -> None:
         self._reattach_routes.pop(stored_session_id, None)
@@ -772,7 +919,7 @@ class HermesGatewayProvider:
                 self._remember_route(
                     attached_route, generation=self.runtime_generation
                 )
-                if resumed.status in _ACTIVE_RUNTIME_STATUSES:
+                if resumed.status in _ACTIVE_RUNTIME_STATUSES or self._continuation_required(route.stored_session_id):
                     self._mark_route_for_reattach(attached_route)
                 else:
                     self._clear_route_for_reattach(route.stored_session_id)
@@ -1429,6 +1576,13 @@ class HermesGatewayProvider:
                 await self._cleanup_profile_transfer_file(source_path)
             await destination._cleanup_profile_transfer_file(destination_path)
 
+    async def list_background_tasks(self, stored_session_id: str | None = None) -> dict[str, Any]:
+        # Native delegation.status is process-global and subagent.list is an
+        # owner-transport snapshot that omits async delegations entirely. Only
+        # the connector's profile-scoped durable reader can prove an inventory.
+        return {"available": False, "complete": False, "activeCount": None, "pendingDeliveryCount": None, "totalCount": None,
+                "tasks": [], "reason": "unsupported_runtime", "source": "hermes-native-delegation"}
+
     async def list_sessions(self) -> list[HermesSession]:
         self._session_inventory_complete = False
         try:
@@ -1565,6 +1719,11 @@ class HermesGatewayProvider:
         self._remember_route(
             SessionRoute(self.connection.gateway_id, self.connection.profile_name, session.stored_session_id, session.runtime_session_id)
         )
+        if (self.connection.trusted_source_sha or "").casefold() == HERMES_0212_SHA:
+            # A newly created native session is not persisted until its first
+            # prompt; a REST 404 here is expected, not a history baseline.
+            self._history_floors[session.stored_session_id] = 0
+            self._trim_continuations()
         return session
 
     async def resume_session(self, stored_session_id: str) -> HermesSession:
@@ -1739,6 +1898,7 @@ class HermesGatewayProvider:
             if self.connection.profile_name != "control-dev" or self.api is None:
                 raise
             return await self._api_history(stored_session_id)
+        self._observe_history_continuations(stored_session_id, messages)
         return messages
 
     async def submit_prompt(
@@ -1772,6 +1932,11 @@ class HermesGatewayProvider:
         # Mark before dispatch: a missing prompt.submit reply is ambiguous and
         # may mean Hermes already started the turn on this transport.
         self._mark_route_for_reattach(route)
+        continuation_key = (route.stored_session_id, operation_id)
+        if (self.connection.trusted_source_sha or "").casefold() == HERMES_0212_SHA:
+            self._human_continuations[continuation_key] = (
+                hashlib.sha256(prompt.encode()).hexdigest(), self._history_floors.pop(route.stored_session_id, None))
+            self._trim_continuations()
         try:
             raw = await self.rpc.request(
                 "prompt.submit",
@@ -1781,11 +1946,18 @@ class HermesGatewayProvider:
                     "text": prompt,
                     "prompt": prompt,
                     "request_id": operation_id,
+                    # 939e checks this atomically only when a turn is already
+                    # running. Queue this explicit human request behind a
+                    # notification turn instead of applying the default busy
+                    # redirect/interrupt mode; idle dispatch is unchanged.
+                    **({"queued": True} if (self.connection.trusted_source_sha or "").casefold() == HERMES_0212_SHA else {}),
                 },
                 expected_generation=rpc_generation,
             )
         except JsonRpcGenerationChanged as exc:
-            self._clear_route_for_reattach(route.stored_session_id)
+            self._human_continuations.pop(continuation_key, None)
+            if not self._continuation_required(route.stored_session_id):
+                self._clear_route_for_reattach(route.stored_session_id)
             raise RuntimeGenerationChanged(
                 "Hermes reconnected before prompt dispatch"
             ) from exc
@@ -1794,9 +1966,14 @@ class HermesGatewayProvider:
             # are ambiguous: Hermes may already have accepted the prompt.
             # Never downgrade this to a normal failure or retry it.
             raise RuntimeError("PROMPT_DELIVERY_UNKNOWN") from exc
+        except JsonRpcError:
+            self._human_continuations.pop(continuation_key, None)
+            raise
         status = raw.get("status", "streaming") if isinstance(raw, dict) else "streaming"
         if str(status) not in _ACTIVE_RUNTIME_STATUSES:
-            self._clear_route_for_reattach(route.stored_session_id)
+            self._human_continuations.pop(continuation_key, None)
+            if not self._continuation_required(route.stored_session_id):
+                self._clear_route_for_reattach(route.stored_session_id)
         return PromptReceipt(operation_id=operation_id, status=status)
 
     async def attach_prompt_attachment(
@@ -1911,7 +2088,15 @@ class HermesGatewayProvider:
             ) from exc
         except (JsonRpcDisconnected, ConnectionError, OSError, TimeoutError) as exc:
             raise RuntimeError("INTERRUPT_DELIVERY_UNKNOWN") from exc
-        self._clear_route_for_reattach(route.stored_session_id)
+        # Native interrupt clears queued inputs under the runtime history lock.
+        # An ambiguous delivery above must retain them; a confirmed stop may
+        # release human latches, while child cancellation awaits its ledger.
+        for key in list(self._human_continuations):
+            if key[0] == route.stored_session_id:
+                self._human_continuations.pop(key, None)
+        self._history_floors.pop(route.stored_session_id, None)
+        if not self._continuation_required(route.stored_session_id):
+            self._clear_route_for_reattach(route.stored_session_id)
 
     async def respond_approval(
         self,
@@ -2030,6 +2215,13 @@ class HermesGatewayProvider:
             raise RuntimeError("MUTATION_DELIVERY_UNKNOWN") from exc
         except (httpx.TransportError, httpx.TimeoutException, UpstreamPayloadError) as exc:
             raise RuntimeError("MUTATION_DELIVERY_UNKNOWN") from exc
+        self._clear_route_for_reattach(route.stored_session_id)
+        self._continuation_owners.pop(route.stored_session_id, None)
+        self._background_continuations.pop(route.stored_session_id, None)
+        self._history_floors.pop(route.stored_session_id, None)
+        for key in list(self._human_continuations):
+            if key[0] == route.stored_session_id:
+                self._human_continuations.pop(key, None)
         stale_runtime_ids = [
             runtime_id
             for runtime_id, remembered in self._routes.items()
@@ -2896,6 +3088,13 @@ class InMemoryHermesProvider:
     """Deterministic provider used offline and by integration tests."""
 
     _profiles_by_gateway: dict[str, dict[str, HermesProfile]] = defaultdict(dict)
+
+    def observe_background_tasks(self, snapshot: Mapping[str, Any]) -> None:
+        pass
+
+    async def list_background_tasks(self, stored_session_id: str | None = None) -> dict[str, Any]:
+        return {"available": True, "complete": True, "activeCount": 0, "pendingDeliveryCount": 0, "totalCount": 0,
+                "tasks": [], "source": "hermes-native-delegation"}
 
     def __init__(self, connection: ProviderConnection, event_sink: EventSink | None = None) -> None:
         self.connection = connection

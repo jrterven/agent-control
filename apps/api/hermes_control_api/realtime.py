@@ -7,6 +7,7 @@ from hermes_client import NormalizedEvent, email_reference_candidates
 from sqlalchemy import select
 
 from .gateway_health import aggregate_profile_health
+from .background_tasks import persist_snapshot, project_snapshot
 from .email_reference_cache import cache_references
 from .models import (
     Automation,
@@ -29,6 +30,9 @@ _INTERRUPTED = {
 }
 _ACTIVE_PROMPT_STATUSES = {
     "pending",
+    "queued",
+    "redirected",
+    "steered",
     "accepted",
     "streaming",
     "delivery_unknown",
@@ -94,6 +98,7 @@ def persist_normalized_event(
                     SessionLink.profile_name == event.profile_name,
                     *identity,
                 )
+                .with_for_update()
                 .limit(2)
             ).all()
         )
@@ -137,6 +142,11 @@ def persist_normalized_event(
                 _update_run(run, event)
                 db.commit()
             return
+        if event.type == "background.tasks":
+            snapshot = project_snapshot(event.data, session.stored_session_id, observed_at=event.timestamp.isoformat())
+            event.data = persist_snapshot(session, snapshot)
+            db.commit()
+            return
         if event.runtime_session_id:
             if not _release_stale_runtime_claim(db, event, excluding_id=session.id):
                 return
@@ -149,6 +159,7 @@ def persist_normalized_event(
                 # evaluating the first event from a resumed runtime.
                 session.last_sequence = 0
                 session.replay_epoch = None
+                session.active_turn_id = None
             session.runtime_session_id = event.runtime_session_id
             session.runtime_generation = event.runtime_generation
         # Hermes' official 0.20.5/0.20.6 event envelope has a per-session
@@ -189,9 +200,20 @@ def persist_normalized_event(
                     candidate_limit=8,
                 )
         terminal = terminal_status(event.type, event.data)
+        turn = event.data.get("controlTurn")
+        history_correlation = isinstance(turn, dict) and turn.get("correlation") == "history"
+        turn_id = turn.get("id") if history_correlation else None
+        if not isinstance(turn_id, str) or len(turn_id) != 64 or any(c not in "0123456789abcdef" for c in turn_id):
+            turn_id = None
+        if event.type == "message.start" and turn_id:
+            session.active_turn_id = turn_id
+            session.status = "streaming"
         completion: ChatCompletionNotification | None = None
         if terminal:
-            session.status = "ready" if terminal in {"completed", "interrupted"} else "error"
+            if (not history_correlation or (turn_id and session.active_turn_id == turn_id)
+                    or (turn_id is None and session.active_turn_id is None and event.sequence is not None)):
+                session.active_turn_id = None
+                session.status = "ready" if terminal in {"completed", "interrupted"} else "error"
             operation = _terminal_prompt_operation(db, session, event)
             if operation is not None:
                 operation.status = terminal
@@ -223,11 +245,10 @@ def _terminal_prompt_operation(
 ) -> IdempotencyOperation | None:
     """Resolve a terminal Hermes message to one Control prompt operation.
 
-    Audited Hermes releases do not echo ``request_id`` on events.  Control
-    therefore permits at most one active prompt per session (enforced by
-    ``SessionService.submit``) and may use that unambiguous session-local
-    operation when a fresh sequenced ``message.*`` terminal event arrives.
-    Exact correlation ids remain authoritative for mocks/future protocols.
+    Hermes with asynchronous delegation can start autonomous turns in the
+    same session. Its adapter requests authoritative history correlation.
+    Older adapters retain the single-operation fallback. Exact correlation
+    ids remain authoritative for mocks/future protocols.
     """
 
     scope = f"session:{session.id}:prompt"
@@ -239,6 +260,11 @@ def _terminal_prompt_operation(
                 IdempotencyOperation.idempotency_key == event.correlation_id,
             )
         )
+    turn = event.data.get("controlTurn")
+    if isinstance(turn, dict) and turn.get("correlation") == "history":
+        # Autonomous delegation completions share this same native session.
+        # Only authoritative persisted history can bind them to human prompts.
+        return None
     if not event.type.startswith("message.") or event.sequence is None:
         return None
     active = list(

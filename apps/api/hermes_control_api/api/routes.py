@@ -1678,6 +1678,17 @@ def mark_session_read(
     return session_view(db, row)
 
 
+@router.get("/sessions/{session_id}/background-tasks")
+async def session_background_tasks(
+    session_id: str,
+    request: Request,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    service = SessionService(services(request))
+    return await service.background_tasks(db, user, service.owned(db, user, session_id))
+
+
 @router.get("/sessions/{session_id}/messages")
 async def session_history(
     session_id: str,
@@ -1694,7 +1705,7 @@ async def session_history(
             IdempotencyOperation.user_id == user.id,
             IdempotencyOperation.scope == f"session:{row.id}:prompt",
             IdempotencyOperation.status.in_(
-                ("pending", "accepted", "streaming", "delivery_unknown")
+                ("pending", "queued", "redirected", "steered", "accepted", "streaming", "delivery_unknown")
             ),
         )
         .order_by(IdempotencyOperation.created_at.desc())
@@ -1714,6 +1725,7 @@ async def session_history(
         # These two bounded fields let a restarted/evicted PWA reconstruct the
         # in-flight response without retaining prompt text in browser storage.
         "sessionStatus": row.status,
+        "activeTurnId": row.active_turn_id,
         "activeOperation": (
             {
                 "operationId": active_operation.idempotency_key,

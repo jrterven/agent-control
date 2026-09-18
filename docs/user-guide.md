@@ -101,6 +101,23 @@ when the reader moves back. It is limited to six visible text lines and remains
 independently scrollable. This is an operational summary, not raw private
 chain-of-thought; the backend continues to omit private reasoning events.
 
+### Tasks in the same conversation
+
+On a compatible connected computer, agents can delegate independent lengthy
+work and finish their acknowledgement promptly. You can then send another
+request in the same conversation while the delegated work continues. The
+task list shows progress and links to the agent's result when it arrives.
+Existing conversations receive the capability instructions on their next turn;
+explicitly disabled delegation remains disabled.
+
+While the agent is composing a foreground response, you can keep editing the
+next draft. It has not been sent until you press Send after that turn finishes.
+Results from background work return automatically to this chat between turns.
+Reopening the chat restores task metadata and results; an offline computer
+shows uncertain status rather than an invented success. Running tasks require
+Hermes to stay running. Stopping/resetting the conversation can also stop its
+delegated work. Control never automatically repeats an uncertain action.
+
 ### Completion notifications and recent chats
 
 The bell in the top bar opens a notification inbox with the ten most recently

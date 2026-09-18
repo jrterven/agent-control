@@ -1,6 +1,6 @@
 import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, EmailReferencePreview, Gateway, ImageMediaMetadata, Profile, PushNotificationConfig, RealtimeEvent, SearchResult, SessionSummary, VoiceProvider, Workspace } from "../types";
 import type { OPENAI_LIVE_VOICES } from "./openaiLiveVoices";
-import type { AuthMethods, ConnectorList, ConnectorPairing, ConnectorView } from "@hermes-control/shared-types";
+import type { AuthMethods, BackgroundTaskSnapshot, ConnectorList, ConnectorPairing, ConnectorView } from "@hermes-control/shared-types";
 import { useAppStore } from "../store/appStore";
 
 export type AdminResourceName = "models" | "config" | "soul" | "skills" | "toolsets" | "mcp" | "channels" | "usage" | "secrets";
@@ -508,9 +508,11 @@ export const api = {
       "X-Confirm-Delete": storedSessionId,
     },
   }),
+  backgroundTasks: (sessionId: string, signal?: AbortSignal) => request<BackgroundTaskSnapshot>(`/sessions/${encodeURIComponent(sessionId)}/background-tasks`, { signal, cache: "no-store" }),
   sessionHistory: (sessionId: string) => request<{
     items: Array<Record<string, unknown>>;
     sessionStatus: string;
+    activeTurnId?: string | null;
     activeOperation: {
       operationId: string;
       status: string;

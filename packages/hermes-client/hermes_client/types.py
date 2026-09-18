@@ -158,7 +158,7 @@ class HermesSearchResult:
 @dataclass(frozen=True, slots=True)
 class PromptReceipt:
     operation_id: str
-    status: Literal["accepted", "streaming", "completed"] = "accepted"
+    status: Literal["accepted", "streaming", "completed", "queued", "redirected", "steered"] = "accepted"
     accepted_at: datetime = field(default_factory=utc_now)
 
 
