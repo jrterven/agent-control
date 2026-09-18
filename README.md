@@ -2,7 +2,8 @@
 
 Agent Control is a mobile-first web app for using your own Hermes agents from
 any device. The [public beta](https://agentcontrol.jemailabs.com) uses Google
-sign-in by invitation and a personal connector on each computer running Hermes.
+sign-in without an invitation, with a limit of 20 registered accounts, and a
+personal connector on each computer running Hermes.
 **No Tailscale, public IP, inbound port forwarding or SSH tunnel is required on
 the user's computer or phone.** The connector opens an outbound HTTPS/WSS
 connection to Agent Control.
@@ -26,8 +27,10 @@ and credential handling.
 
 ## Get started with the public beta
 
-1. Open [Agent Control](https://agentcontrol.jemailabs.com) and sign in with an
-   invited Google account.
+1. Open [Agent Control](https://agentcontrol.jemailabs.com) and sign in with your
+   Google account. No invitation is needed while places remain. The beta has
+   20 places in total, including existing accounts; when full, existing users
+   can still sign in, but new registrations stop.
 2. Open **My computers → Connect a computer** and choose an installation path:
 
    | Option | Platforms | What it installs |
@@ -128,7 +131,7 @@ completion alerts. You do not need Tailscale or a terminal on the phone.
 | Mobile and desktop | Installable PWA with opt-in Web Push completion alerts, 44 px touch targets, bottom navigation and context sheets on mobile, two panels on tablet, three panels on desktop, and dark/light/automatic themes. |
 | Internationalization | English, Spanish, French, German and Portuguese with browser-language detection and an immediate device-only language preference. |
 | Installation | Signed connector packages for Linux/macOS on Intel and ARM; a managed Hermes installer for Linux and a signed, notarized DMG for Apple Silicon Macs. Explicit updates, diagnostics, rollback and data-preserving uninstall. |
-| Operations | Isolated cloud deployment with PostgreSQL, Google invitations, immutable releases, idle-work checks, verified backups and public health/readiness/PWA checks. Private SQLite deployments and optional SSH/Tailscale workflows remain supported. |
+| Operations | Isolated cloud deployment with PostgreSQL, Google registration capped at 20 accounts, optional invitation-only access, immutable releases, idle-work checks, verified backups and public health/readiness/PWA checks. Private SQLite deployments and optional SSH/Tailscale workflows remain supported. |
 
 <table>
   <tr>
@@ -149,7 +152,7 @@ completion alerts. You do not need Tailscale or a terminal on the phone.
 
 ## Documentation
 
-- [Public cloud beta](docs/operations/cloud.md): invitation-only Google login,
+- [Public cloud beta](docs/operations/cloud.md): capped Google registration,
   personal Linux/macOS connectors, signed downloads and isolated cloud deployment.
 - [Managed Hermes installation](docs/operations/managed-installation.md): Mac
   DMG, guided Linux setup, provider authentication, local data and maintenance.
@@ -264,8 +267,10 @@ flowchart LR
 on users' computers with their own AI-provider accounts; the web server does not
 host their models or need a GPU for inference. Managed installs bundle an audited
 Hermes revision and its dependencies; existing installs retain their own runtime.
-Cloud registration is invitation-only, and one API worker is used because live
-event state is process-local. Teams, billing, native Windows installers and
+The public deployment accepts Google registration without invitations, up to
+20 accounts. Self-hosted cloud deployments keep invitation-only registration
+unless explicitly configured to use open registration. One API worker is used
+because live event state is process-local. Teams, billing, native Windows installers and
 cloud-hosted agents are outside this beta.
 
 Hermes owns the primary conversation history. The cloud also retains account

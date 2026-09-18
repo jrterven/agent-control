@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     public_base_url: str | None = None
     google_client_id: str | None = None
     google_client_secret: str | None = None
+    cloud_registration_mode: Literal["invite_only", "open"] = "invite_only"
     beta_max_users: int = Field(default=20, ge=1, le=20)
     cloud_rate_limit_per_ip: int = Field(default=600, ge=30, le=6000)
     cloud_rate_limit_per_user: int = Field(default=300, ge=30, le=3000)

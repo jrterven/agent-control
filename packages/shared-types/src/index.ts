@@ -3,6 +3,8 @@ export type ConnectionState = "connected" | "connecting" | "reconnecting" | "deg
 export interface AuthMethods {
   mode: "private" | "cloud";
   googleEnabled: boolean;
+  registrationMode?: "invite_only" | "open";
+  betaMaxUsers?: number;
 }
 
 export interface ConnectorView {

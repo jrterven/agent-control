@@ -3,15 +3,19 @@
 - Status: accepted
 - Date: 2026-09-13
 
-The public beta retains React/PWA and FastAPI. One invited Google identity owns
+The public beta retains React/PWA and FastAPI. One verified Google identity owns
 one personal account, its connectors, gateways and all derived Control resources.
 No public account is a platform administrator by default. Google identities bind
 to issuer/subject; a matching email never merges an existing local account.
 
 Cloud mode uses PostgreSQL, one API worker and a separate deployment. Private
 mode retains SQLite, direct providers, password authentication and Tailscale.
-Public registration, teams, billing, hosted runtimes and profile transfer between
-computers are outside this beta.
+The public deployment now accepts registration without invitations, capped at
+20 Google identities including existing accounts. Other deployments default to
+`invite_only`; `open` must be configured explicitly. Both policies share the
+transactional enrollment limit, and existing active identities can sign in at
+capacity. Teams, billing, cloud-hosted runtimes and profile transfer between
+computers remain outside this beta.
 
 A native connector runs the existing Hermes adapter on the user's Linux or Mac
 host. It keeps Hermes on numeric loopback and establishes the cloud WSS link

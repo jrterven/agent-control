@@ -102,6 +102,27 @@ def test_public_verifier_checks_boot_and_service_worker_dependencies(monkeypatch
     assert {"/api/v1/auth/methods", "/boot-recovery.js", "/workbox-runtime.js", "/notification-sw.js"} <= set(visited)
 
 
+@pytest.mark.parametrize("mode", ["invite_only", "open"])
+def test_public_verifier_checks_expected_registration_policy_and_capacity(monkeypatch, mode):
+    files = responses()
+    files["/api/v1/auth/methods"] = (json.dumps({
+        "mode": "cloud", "googleEnabled": True, "registrationMode": mode, "betaMaxUsers": 20,
+    }).encode(), "application/json")
+    stub_https(monkeypatch, files)
+    verification.verify("https://control.test")
+    verification.verify("https://control.test", registration_mode=mode, beta_max_users=20)
+    with pytest.raises(ValueError, match="policy"):
+        verification.verify("https://control.test", registration_mode="open" if mode == "invite_only" else "invite_only")
+    with pytest.raises(ValueError, match="capacity"):
+        verification.verify("https://control.test", beta_max_users=19)
+
+
+def test_public_verifier_requires_registration_metadata_when_expected(monkeypatch):
+    stub_https(monkeypatch, responses())
+    with pytest.raises(ValueError, match="policy"):
+        verification.verify("https://control.test", registration_mode="open", beta_max_users=20)
+
+
 @pytest.mark.parametrize("missing", ["/boot-recovery.js", "/notification-sw.js", "/workbox-runtime.js"])
 def test_public_verifier_rejects_spa_fallback_in_place_of_required_scripts(monkeypatch, missing):
     files = responses()

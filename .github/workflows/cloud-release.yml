@@ -9,6 +9,20 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: agent_control_validation
+          POSTGRES_USER: agent_control_test
+          POSTGRES_PASSWORD: local_ci_validation
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_control_test -d agent_control_validation"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,6 +38,8 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix design/prototypes/mobile-option-2
       - run: make test build
+        env:
+          AGENT_CONTROL_TEST_POSTGRES_URL: postgresql+psycopg://agent_control_test:local_ci_validation@127.0.0.1:5432/agent_control_validation
 
   connector:
     needs: verify

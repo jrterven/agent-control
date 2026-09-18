@@ -31,7 +31,8 @@ class PwaHTML(HTMLParser):
             self.icons.add(attributes["href"])
 
 
-def verify(origin: str) -> None:
+def verify(origin: str, *, registration_mode: str | None = None,
+           beta_max_users: int | None = None) -> None:
     parsed = urllib.parse.urlsplit(origin)
     if parsed.scheme != "https" or not parsed.hostname or parsed.path not in {"", "/"} or parsed.query or parsed.fragment or parsed.username:
         raise ValueError("Supply an HTTPS origin")
@@ -56,8 +57,13 @@ def verify(origin: str) -> None:
     if json.loads(ready).get("status") != "ready":
         raise ValueError("Readiness check failed")
     methods, _ = fetch("/api/v1/auth/methods")
-    if json.loads(methods) != {"mode": "cloud", "googleEnabled": True}:
+    authentication = json.loads(methods)
+    if authentication.get("mode") != "cloud" or authentication.get("googleEnabled") is not True:
         raise ValueError("Cloud Google sign-in is not enabled")
+    if registration_mode is not None and authentication.get("registrationMode") != registration_mode:
+        raise ValueError("Cloud registration policy does not match the release")
+    if beta_max_users is not None and authentication.get("betaMaxUsers") != beta_max_users:
+        raise ValueError("Cloud registration capacity does not match the release")
     html, kind = fetch("/")
     if kind != "text/html":
         raise ValueError("PWA HTML is missing")
@@ -101,5 +107,7 @@ def verify(origin: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("origin")
+    parser.add_argument("--registration-mode", choices=("invite_only", "open"))
+    parser.add_argument("--beta-max-users", type=int, choices=range(1, 21))
     args = parser.parse_args()
-    verify(args.origin)
+    verify(args.origin, registration_mode=args.registration_mode, beta_max_users=args.beta_max_users)

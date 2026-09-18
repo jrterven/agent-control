@@ -120,6 +120,7 @@ export function ConnectorPairingForm({ initialCode = "" }: { initialCode?: strin
 export function ConnectorsScreen({ pairing = false }: { pairing?: boolean }) {
   const { t, i18n } = useTranslation();
   const cloud = useCloudConfigurationStore((state) => state.methods?.mode === "cloud");
+  const openRegistration = useCloudConfigurationStore((state) => state.methods?.registrationMode === "open");
   const csrfToken = useAppStore((state) => state.csrfToken);
   const timeZone = useAppStore((state) => state.timeZone);
   const offline = useAppStore((state) => state.authState !== "authenticated");
@@ -162,7 +163,7 @@ export function ConnectorsScreen({ pairing = false }: { pairing?: boolean }) {
   };
   if (!cloud) return <div className="page-wrap"><p>{t("cloud.privateOnly")}</p></div>;
   return <div className="page-wrap cloud-page">
-    <header className="page-header"><div><span className="eyebrow">{t("cloud.beta")}</span><h1>{t(pairing ? "cloud.connect" : "cloud.title")}</h1><p>{t("cloud.description")}</p></div>
+    <header className="page-header"><div><span className="eyebrow">{t(openRegistration ? "cloud.publicBeta" : "cloud.beta")}</span><h1>{t(pairing ? "cloud.connect" : "cloud.title")}</h1><p>{t("cloud.description")}</p></div>
       {pairing ? <Link to="/computers" className="hc-button hc-button--ghost hc-button--md">{t("cloud.title")}</Link> : <Link to="/connect" className="hc-button hc-button--primary hc-button--md">{t("cloud.connect")}</Link>}
     </header>
     <p className="cloud-privacy"><ShieldCheck aria-hidden="true" /> {t("cloud.privacy")}</p>

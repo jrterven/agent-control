@@ -38,13 +38,52 @@ afterEach(async () => {
 });
 
 describe("hosted sign-in", () => {
-  it("shows Google only and preserves the pairing destination", () => {
+  it.each([undefined, "invite_only"] as const)("preserves invitation-only sign-in and pairing destination with registration mode %s", (registrationMode) => {
+    useCloudConfigurationStore.setState({ methods: { mode: "cloud", googleEnabled: true, registrationMode, betaMaxUsers: 20 } });
     window.history.replaceState({}, "", "/login?returnTo=%2Fconnect%3Fcode%3DABCD-EFGH&error=invite_required");
     render(<LoginScreen />);
+    expect(screen.getByText("Invitation-only beta")).toBeInTheDocument();
     expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Continue with Google" })).toHaveAttribute("href", "/api/v1/auth/google/start?returnTo=%2Fconnect%3Fcode%3DABCD-EFGH");
     expect(screen.getByRole("alert")).toHaveTextContent("account that received your invitation");
     expect(screen.getByText(/credentials stay on your computer/)).toBeInTheDocument();
+  });
+
+  it("offers public Google registration with the total capacity, without claiming places remain", () => {
+    useCloudConfigurationStore.setState({ methods: { mode: "cloud", googleEnabled: true, registrationMode: "open", betaMaxUsers: 20 } });
+    render(<LoginScreen />);
+    expect(screen.getByText("Public beta")).toBeInTheDocument();
+    expect(screen.getByText(/No invitation is required/)).toBeInTheDocument();
+    expect(screen.getByText(/20 places in total/)).toBeInTheDocument();
+    expect(screen.queryByText("Invitation-only beta")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Continue with Google" })).toHaveAttribute("href", "/api/v1/auth/google/start?returnTo=%2Fchats");
+  });
+
+  it.each([
+    ["en", "All 20 places in the beta are occupied. If you already have an account, you can still sign in with Google.", "Continue with Google"],
+    ["es", "Los 20 cupos de la beta están ocupados. Si ya tienes una cuenta, puedes seguir entrando con Google.", "Continuar con Google"],
+  ])("explains beta capacity and keeps existing account sign-in available in %s", async (language, message, linkLabel) => {
+    await i18n.changeLanguage(language);
+    useCloudConfigurationStore.setState({ methods: { mode: "cloud", googleEnabled: true, registrationMode: "open", betaMaxUsers: 20 } });
+    window.history.replaceState({}, "", "/login?returnTo=%2Fconnect%3Fcode%3DABCD-EFGH&error=beta_full");
+    render(<LoginScreen />);
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByRole("link", { name: linkLabel })).toHaveAttribute("href", "/api/v1/auth/google/start?returnTo=%2Fconnect%3Fcode%3DABCD-EFGH");
+  });
+
+  it("does not send open registration users to request an invitation after other errors", () => {
+    useCloudConfigurationStore.setState({ methods: { mode: "cloud", googleEnabled: true, registrationMode: "open", betaMaxUsers: 20 } });
+    window.history.replaceState({}, "", "/login?error=oauth_failed");
+    render(<LoginScreen />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Try again with Google or contact support");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("invitation");
+  });
+
+  it("does not invent a capacity if an older server omits it", () => {
+    window.history.replaceState({}, "", "/login?error=beta_full");
+    render(<LoginScreen />);
+    expect(screen.getByRole("alert")).toHaveTextContent("The beta is full. If you already have an account");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("20");
   });
 
   it("does not turn a return URL into an external redirect", () => {
@@ -132,6 +171,12 @@ describe("computer pairing", () => {
 });
 
 describe("my computers", () => {
+  it.each([["open", "Public beta"], ["invite_only", "Invitation-only beta"]] as const)("labels computer management for %s registration", (registrationMode, label) => {
+    useCloudConfigurationStore.setState({ methods: { mode: "cloud", googleEnabled: true, registrationMode, betaMaxUsers: 20 } });
+    render(<ConnectorsScreen />);
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
   it("replaces direct gateway configuration and confirms a revocation", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "connectors").mockResolvedValue({ items: [connector], installCommand: "install connector" });

@@ -1,8 +1,10 @@
 # Known limitations
 
 - Private mode supports one administrator. The separate cloud beta supports up
-  to 20 invited Google accounts with isolated personal connectors; sharing,
-  organizations, billing and managed Hermes runtimes are not implemented.
+  to 20 registered Google accounts with isolated personal connectors. The public
+  deployment allows registration without invitations until that cap is reached;
+  other deployments can retain invitation-only access. Sharing, organizations,
+  billing and cloud-hosted Hermes runtimes are not implemented.
 - Uvicorn runs one worker because realtime tickets and event subscriptions are
   process-local. Horizontal scaling needs a shared ticket/event backend.
 - SQLite is appropriate for one always-on node. It is not a multi-writer cluster

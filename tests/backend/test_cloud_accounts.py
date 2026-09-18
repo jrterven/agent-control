@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from hermes_control_api.auth import issue_session
@@ -53,7 +54,9 @@ def seed_tenants(app):
 
 def test_cloud_methods_and_password_login_disabled(cloud):
     app, client, _ = cloud
-    assert client.get("/api/v1/auth/methods").json() == {"mode": "cloud", "googleEnabled": True}
+    assert client.get("/api/v1/auth/methods").json() == {
+        "mode": "cloud", "googleEnabled": True, "registrationMode": "invite_only", "betaMaxUsers": 20,
+    }
     assert client.post("/api/v1/auth/login", json={"username":"x","password":"123456789012"}).status_code == 403
     with app.state.session_factory() as db:
         assert db.scalar(select(Gateway)) is None
@@ -112,6 +115,120 @@ def test_invite_limit_expiry_and_unverified_email(cloud):
         db.commit()
         with pytest.raises(ValueError, match="invite_required"):
             enroll_google_identity(db, settings, {"sub":"1", "email":"a@example.com", "email_verified":True})
+
+
+def test_registration_configuration_defaults_closed_and_rejects_invalid_modes_or_capacity():
+    assert Settings(_env_file=None).cloud_registration_mode == "invite_only"
+    for values in ({"cloud_registration_mode": "public"}, {"beta_max_users": 21}, {"beta_max_users": 0}):
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, **values)
+
+
+def test_open_google_signup_does_not_require_invitation_or_merge_local_admin(cloud):
+    app, client, settings = cloud
+    settings.cloud_registration_mode = "open"
+    assert client.get("/api/v1/auth/methods").json() == {
+        "mode": "cloud", "googleEnabled": True, "registrationMode": "open", "betaMaxUsers": 20,
+    }
+    with app.state.session_factory() as db:
+        admin = User(username="person@example.com", password_hash="unused", is_admin=True)
+        db.add(admin)
+        db.commit()
+        claims = {"sub": "new-google-user", "email": "PERSON@example.com", "email_verified": True}
+        user = enroll_google_identity(db, settings, claims)
+        assert user.id != admin.id
+        assert user.is_active and not user.is_admin
+        assert db.scalar(select(BetaInvitation)) is None
+        identity = db.scalar(select(ExternalIdentity))
+        assert identity.user_id == user.id and identity.email == "person@example.com"
+        assert identity.issuer == "https://accounts.google.com"
+        # Subject is authoritative even when another verified account has the
+        # same email. It must never inherit the existing account's resources.
+        other = enroll_google_identity(db, settings, {**claims, "sub": "other-google-user"})
+        assert other.id != user.id and other.id != admin.id
+        assert not other.is_admin
+
+
+def test_open_capacity_blocks_new_accounts_but_existing_accounts_keep_access(cloud):
+    app, _, settings = cloud
+    settings.cloud_registration_mode = "open"
+    settings.beta_max_users = 1
+    claims = {"sub": "first", "email": "first@example.com", "email_verified": True}
+    with app.state.session_factory() as db:
+        user = enroll_google_identity(db, settings, claims)
+        with pytest.raises(ValueError, match="beta_full"):
+            enroll_google_identity(db, settings, {**claims, "sub": "extra", "email": "extra@example.com"})
+        db.rollback()
+        again = enroll_google_identity(db, settings, {**claims, "email": "renamed@example.com"})
+        assert again.id == user.id
+        assert db.scalar(select(ExternalIdentity)).email == "renamed@example.com"
+        assert len(db.scalars(select(ExternalIdentity)).all()) == 1
+        user.is_active = False
+        db.commit()
+        with pytest.raises(ValueError, match="google_login_failed"):
+            enroll_google_identity(db, settings, claims)
+        db.rollback()
+        # Disabling a user cannot be bypassed with a fresh identity, nor does
+        # it silently release a slot while that user's account still exists.
+        with pytest.raises(ValueError, match="beta_full"):
+            enroll_google_identity(db, settings, {**claims, "sub": "extra"})
+
+
+@pytest.mark.parametrize("verified", [False, None, "true", 1])
+def test_open_signup_requires_a_verified_google_email(cloud, verified):
+    app, _, settings = cloud
+    settings.cloud_registration_mode = "open"
+    with app.state.session_factory() as db:
+        with pytest.raises(ValueError, match="google_login_failed"):
+            enroll_google_identity(db, settings, {
+                "sub": "unverified", "email": "person@example.com", "email_verified": verified,
+            })
+        assert db.scalar(select(ExternalIdentity)) is None
+        assert db.scalar(select(User)) is None
+
+
+@pytest.mark.parametrize("state", ["pending", "expired", "revoked"])
+def test_open_signup_ignores_invitation_restrictions_and_consumes_only_valid_invites(cloud, state):
+    app, _, settings = cloud
+    settings.cloud_registration_mode = "open"
+    with app.state.session_factory() as db:
+        invitation = invite_email(db, settings, "person@example.com")
+        if state == "expired":
+            invitation.expires_at = utc_now() - timedelta(seconds=1)
+        elif state == "revoked":
+            invitation.revoked_at = utc_now()
+        db.commit()
+        user = enroll_google_identity(db, settings, {
+            "sub": "open-user", "email": "person@example.com", "email_verified": True,
+        })
+        assert user.is_active and not user.is_admin
+        assert (invitation.accepted_at is not None) == (state == "pending")
+        assert invitation.user_id == (user.id if state == "pending" else None)
+
+
+def test_open_callback_creates_session_and_full_beta_redirects_without_session(cloud, monkeypatch):
+    app, client, settings = cloud
+    settings.cloud_registration_mode = "open"
+    settings.beta_max_users = 1
+
+    async def exchange(settings, code, verifier, nonce):
+        return {"sub": code, "email": f"{code}@example.com", "email_verified": True}
+
+    monkeypatch.setattr("hermes_control_api.cloud_auth.exchange_google_code", exchange)
+    for subject, location in (("first", "/connect"), ("extra", "/login?error=beta_full"), ("first", "/connect")):
+        client.cookies.clear()
+        start = client.get("/api/v1/auth/google/start?returnTo=%2Fconnect", follow_redirects=False)
+        state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+        response = client.get(f"/api/v1/auth/google/callback?state={state}&code={subject}", follow_redirects=False)
+        assert response.headers["location"] == location
+        if subject == "first":
+            assert client.get("/api/v1/auth/me").json()["isAdmin"] is False
+        else:
+            assert "hc_session" not in client.cookies
+            assert client.get("/api/v1/auth/me").status_code == 401
+    with app.state.session_factory() as db:
+        assert len(db.scalars(select(User)).all()) == 1
+        assert db.scalar(select(BetaInvitation)) is None
 
 
 def test_oidc_pkce_browser_binding_and_single_use_callback(cloud, monkeypatch):

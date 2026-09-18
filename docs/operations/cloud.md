@@ -1,6 +1,8 @@
 # Public cloud beta
 
-Agent Control supports a separate, invitation-only cloud deployment. The existing
+Agent Control supports a separate cloud deployment with capped Google registration.
+The public beta uses open registration without invitations, with 20 total accounts.
+Other cloud deployments default to invitation-only registration. The existing
 private installation keeps its own users, database, secrets and Tailscale origin.
 The cloud does not seed an environment gateway or initiate direct connections to
 user-supplied URLs. See [ADR 0009](../adr/0009-public-cloud-personal-connectors.md).
@@ -40,7 +42,39 @@ accounts and measure capacity before increasing scope. One API worker is require
    database and API background supervision; sleeping users' computers do not
    make the service globally unready. Verification checks health/readiness and
    the actual PWA HTML, manifest, icons, JS/CSS and service worker over HTTPS.
-6. Create an invitation using the installed CLI, then let that person sign in:
+6. Choose the registration policy in the API environment file:
+
+   ```dotenv
+   HERMES_CONTROL_CLOUD_REGISTRATION_MODE=open
+   HERMES_CONTROL_BETA_MAX_USERS=20
+   ```
+
+   `open` allows new verified Google identities to register without an invitation.
+   `invite_only` is the default when the setting is absent. In either mode the
+   maximum is 20 registered Google identities, including existing and disabled
+   accounts; pending invitations do not reserve places in open registration.
+   Revoking a computer does not remove its owner's account or free a place.
+   Enrollment is serialized in PostgreSQL, so concurrent sign-ins cannot exceed
+   the cap. At capacity new users see a beta-full message; existing active
+   identities can still sign in. New accounts never receive platform administration.
+   Switching back to `invite_only` restricts new registrations without removing
+   access from existing active users.
+
+   After publishing a configuration change, verify the intended policy as well
+   as health and public PWA assets:
+
+   ```bash
+   python3 deploy/cloud/verify.py https://YOUR_DOMAIN --registration-mode open --beta-max-users 20
+   ```
+
+   Confirm Google Auth Platform uses an External audience and review its
+   publication/branding status before advertising public access. The app requests
+   only `openid email profile`, not Gmail or Drive access. Google's
+   [basic identity exception](https://support.google.com/cloud/answer/15549945?hl=en)
+   means these sign-ins do not require adding each person to Google's test-user list.
+
+   For an invitation-only deployment, create an invitation using the installed
+   CLI, then let that person sign in:
 
    ```bash
    docker compose --env-file /etc/agent-control/compose.env -f compose.yml exec control \
@@ -305,7 +339,7 @@ vault key and does not prevent the service from reading them when needed.
 | Browser drafts and conversation snapshots | Stored locally in that browser until cleared by the application or user. Logging in on another device does not itself remove these local copies. |
 | Database backups | Include persisted cloud records. The deployment policy is 30 days, but the operator must configure the backup scheduler, off-host copy and expiry on the actual server, then verify they run. Neither this document nor the backup command installs that schedule. Deleted live data can remain in retained backups until those backups expire. |
 
-Before opening the beta, publish this retention policy to invited users and
+Before opening the beta, publish this retention policy to users and
 provide an operator contact for deletion requests. An operator must separately
 handle the cloud records, browser copies under the user's control and backup
 retention; cloud cleanup does not delete Hermes history on the user's computer.
@@ -316,6 +350,8 @@ retention; cloud cleanup does not delete Hermes history on the user's computer.
 connector protocol/lifecycle tests. `npm run test:e2e -- cloud-onboarding.spec.ts`
 exercises Google redirect, profile review, revocation and the empty state in
 mobile/desktop Chromium, WebKit and Firefox configurations. Google is mocked in
-automated tests; verify a real invited Google sign-in against the configured
-public origin before inviting external users. Use only isolated test agents
+automated tests; verify a real Google sign-in against the configured public
+origin with the selected registration policy before advertising external access.
+Open registration tests cover uninvited accounts, the last available place,
+concurrent enrollment and existing-account login at capacity. Use only isolated test agents
 for mutation checks; never send test prompts or reset personal agents.

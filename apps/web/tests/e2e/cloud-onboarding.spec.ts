@@ -5,7 +5,7 @@ const pairing = { code: "ABCD-EFGH", name: "Mac de prueba", profiles: ["default"
 const computer = { id: "computer-e2e", name: "Mac de prueba", profiles: ["default"], status: "offline", version: "0.1.0", lastSeenAt: null };
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/v1/auth/methods", (route) => route.fulfill({ json: { mode: "cloud", googleEnabled: true } }));
+  await page.route("**/api/v1/auth/methods", (route) => route.fulfill({ json: { mode: "cloud", googleEnabled: true, registrationMode: "open", betaMaxUsers: 20 } }));
   await page.route("**/api/v1/bootstrap", (route) => route.fulfill({ json: { gateways: [], profiles: [], sessions: [], workspaces: [], automations: [] } }));
   await page.route("**/api/v1/connectors", (route) => route.fulfill({ json: { items: [computer], installCommand: "curl --proto '=https' --tlsv1.2 -fsSL https://control.example/connector/install.sh | sh -s -- --server https://control.example" } }));
   await page.route("**/api/v1/connectors/pair/inspect", (route) => route.fulfill({ json: pairing }));
@@ -22,6 +22,7 @@ test("vincula perfiles revisados desde una pantalla móvil sin desbordamientos",
   });
   await page.goto("/connect?code=ABCD-EFGH");
   await expect(page.getByRole("heading", { name: "Conectar un equipo", exact: true })).toBeVisible();
+  await expect(page.getByText("Beta pública", { exact: true })).toBeVisible();
   await expect(page.getByText(/tus credenciales de Hermes permanecen/i)).toBeVisible();
   await expect(page.getByLabel("Código de vinculación")).toHaveValue("ABCD-EFGH");
   await page.getByRole("button", { name: "Revisar equipo" }).click();
@@ -37,9 +38,31 @@ test("vincula perfiles revisados desde una pantalla móvil sin desbordamientos",
 test("conserva el código al redirigir al acceso de Google", async ({ page }) => {
   await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 401, json: { detail: "Not authenticated" } }));
   await page.goto("/connect?code=ABCD-EFGH");
+  await expect(page.getByText("Beta pública", { exact: true })).toBeVisible();
+  await expect(page.getByText(/20 cupos en total/)).toBeVisible();
+  await expect(page.getByText(/No necesitas invitación/)).toBeVisible();
   await expect(page.getByRole("link", { name: "Continuar con Google" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Continuar con Google" })).toHaveAttribute("href", "/api/v1/auth/google/start?returnTo=%2Fconnect%3Fcode%3DABCD-EFGH");
   await expect(page.getByLabel("Contraseña")).toHaveCount(0);
+});
+
+test("explica el cupo lleno y permite que las cuentas existentes entren con Google", async ({ page }) => {
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 401, json: { detail: "Not authenticated" } }));
+  await page.goto("/login?error=beta_full&returnTo=%2Fconnect%3Fcode%3DABCD-EFGH");
+  await expect(page.getByRole("alert")).toHaveText("Los 20 cupos de la beta están ocupados. Si ya tienes una cuenta, puedes seguir entrando con Google.");
+  await expect(page.getByRole("link", { name: "Continuar con Google" })).toHaveAttribute("href", "/api/v1/auth/google/start?returnTo=%2Fconnect%3Fcode%3DABCD-EFGH");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: `test-results/public-beta-full-${test.info().project.name}.png`, fullPage: true });
+});
+
+test("conserva la presentación por invitación cuando ese modo está configurado", async ({ page }) => {
+  await page.route("**/api/v1/auth/methods", (route) => route.fulfill({ json: { mode: "cloud", googleEnabled: true, registrationMode: "invite_only", betaMaxUsers: 20 } }));
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 401, json: { detail: "Not authenticated" } }));
+  await page.goto("/login?error=invite_required");
+  await expect(page.getByText("Beta por invitación", { exact: true })).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("Usa la cuenta de Google que recibió tu invitación");
+  await expect(page.getByText(/20 cupos en total/)).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Continuar con Google" })).toBeVisible();
 });
 
 test("muestra el estado del equipo y confirma revocar el acceso", async ({ page }) => {

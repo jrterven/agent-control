@@ -44,7 +44,13 @@ export function LoginScreen() {
   const { t } = useTranslation();
   const configuration = useCloudConfiguration();
   const cloud = configuration.methods?.mode === "cloud";
-  const googleError = new URLSearchParams(window.location.search).has("error");
+  const openRegistration = cloud && configuration.methods?.registrationMode === "open";
+  const betaMaxUsers = configuration.methods?.betaMaxUsers;
+  const hasCapacity = typeof betaMaxUsers === "number" && Number.isInteger(betaMaxUsers) && betaMaxUsers > 0;
+  const googleError = new URLSearchParams(window.location.search).get("error");
+  const googleErrorKey = googleError === "beta_full"
+    ? hasCapacity ? "cloud.betaFull" : "cloud.betaFullUnknownCapacity"
+    : openRegistration ? "cloud.openLoginError" : "cloud.loginError";
   const [serverError, setServerError] = useState("");
   const loginSchema = useMemo(() => z.object({
     username: z.string().min(1, t("login.usernameRequired")),
@@ -64,11 +70,12 @@ export function LoginScreen() {
     <main className="login-screen">
       <section className="login-card" aria-labelledby="login-title">
         <div className="login-brand"><BrandMark size="lg" label="Agent Control" /><div><strong>Agent</strong><span>Control</span></div></div>
-        <span className="eyebrow">{t(cloud ? "cloud.beta" : "login.protected")}</span>
+        <span className="eyebrow">{t(cloud ? openRegistration ? "cloud.publicBeta" : "cloud.beta" : "login.protected")}</span>
         <h1 id="login-title">{t(cloud ? "cloud.loginTitle" : "login.title")}</h1>
-        <p>{t(cloud ? "cloud.loginDescription" : "login.description")}</p>
+        <p>{t(cloud ? openRegistration ? "cloud.openLoginDescription" : "cloud.loginDescription" : "login.description")}</p>
+        {openRegistration && hasCapacity ? <p>{t("cloud.betaCapacity", { count: betaMaxUsers })}</p> : null}
         {!configuration.methods ? configuration.error ? <div><p className="form-error" role="alert">{t("cloud.unavailable")}</p><Button onClick={() => void configuration.load()}>{t("cloud.retry")}</Button></div> : <p role="status">{t("cloud.loading")}</p> : cloud ? <div className="cloud-login">
-          {googleError ? <p className="form-error" role="alert">{t("cloud.loginError")}</p> : null}
+          {googleError ? <p className="form-error" role="alert">{t(googleErrorKey, { count: betaMaxUsers })}</p> : null}
           {configuration.methods.googleEnabled ? <a className="hc-button hc-button--primary hc-button--md" href={googleLoginUrl(window.location.search)}>{t("cloud.google")}</a> : <p role="alert">{t("cloud.unavailable")}</p>}
           <p className="cloud-privacy">{t("cloud.privacy")}</p>
         </div> : <form onSubmit={onSubmit} noValidate>

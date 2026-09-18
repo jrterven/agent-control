@@ -1,4 +1,4 @@
-"""Invitation-only Google OIDC authorization code flow with PKCE.
+"""Capacity-limited Google OIDC authorization code flow with PKCE.
 
 Only fixed Google endpoints are contacted. ID tokens and access tokens are
 never retained; flow secrets expire after ten minutes and are single use.
@@ -85,7 +85,7 @@ def invite_email(db: Session, settings: Settings, email: str, *, days: int = 14)
 
 def enroll_google_identity(db: Session, settings: Settings, claims: dict) -> User:
     if claims.get("email_verified") is not True:
-        raise ValueError("invite_required")
+        raise ValueError("google_login_failed" if settings.cloud_registration_mode == "open" else "invite_required")
     email = normalized_email(str(claims.get("email", "")))
     subject = claims.get("sub")
     if not isinstance(subject, str) or not 1 <= len(subject) <= 255:
@@ -105,7 +105,11 @@ def enroll_google_identity(db: Session, settings: Settings, claims: dict) -> Use
     invitation = db.scalar(select(BetaInvitation).where(BetaInvitation.email == email).with_for_update())
     if (invitation is None or invitation.revoked_at is not None
         or invitation.accepted_at is not None or aware(invitation.expires_at) <= utc_now()):
-        raise ValueError("invite_required")
+        if settings.cloud_registration_mode == "invite_only":
+            raise ValueError("invite_required")
+        # Invitations do not reserve or deny admission in open registration.
+        # Only a usable invitation may be consumed for the enrollment record.
+        invitation = None
     if (db.scalar(select(func.count()).select_from(ExternalIdentity)) or 0) >= settings.beta_max_users:
         raise ValueError("beta_full")
     # Never merge a local password account by matching its display name/email.
@@ -116,8 +120,9 @@ def enroll_google_identity(db: Session, settings: Settings, claims: dict) -> Use
     db.add(user)
     db.flush()
     db.add(ExternalIdentity(user_id=user.id, issuer=ISSUER, subject=subject, email=email))
-    invitation.user_id = user.id
-    invitation.accepted_at = utc_now()
+    if invitation is not None:
+        invitation.user_id = user.id
+        invitation.accepted_at = utc_now()
     db.commit()
     return user
 
@@ -159,7 +164,10 @@ def verify_google_id_token(settings: Settings, id_token: str, jwks: dict, nonce:
 @router.get("/methods")
 def methods(request: Request) -> dict:
     settings = request.app.state.services.settings
-    return {"mode": settings.deployment_mode, "googleEnabled": google_enabled(settings)}
+    response = {"mode": settings.deployment_mode, "googleEnabled": google_enabled(settings)}
+    if settings.deployment_mode == "cloud":
+        response.update(registrationMode=settings.cloud_registration_mode, betaMaxUsers=settings.beta_max_users)
+    return response
 
 
 @router.get("/google/start")

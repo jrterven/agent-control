@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from threading import Barrier
 from uuid import uuid4
 
 import pytest
@@ -78,7 +79,7 @@ def test_postgresql_upgrade_preserves_private_resources_and_assigns_owner(pg_url
         assert db.execute(text("SELECT owner_id,transport_kind FROM gateways WHERE id='gateway'")).one() == ("admin", "direct")
         assert db.execute(text("SELECT id,title,last_sequence FROM session_links")).one() == ("session","Keep this title",91)
         assert db.execute(text("SELECT profile_name FROM profile_refs")).scalar_one() == "personal"
-        assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0023_connectors"
+        assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0024_managed_installation"
     migrate(pg_url, "0021_live_transcripts", action="downgrade")
     migrate(pg_url)
     with engine.connect() as db:
@@ -117,6 +118,53 @@ def test_postgresql_concurrent_invites_stop_at_twenty_and_identity_is_stable(pg_
         with pytest.raises(ValueError, match="limit"):
             invite_email(db, configuration, "person21@example.com")
     engine.dispose()
+
+
+def test_postgresql_open_signup_serializes_the_last_slot_and_keeps_existing_logins(pg_url):
+    migrate(pg_url)
+    configuration = settings(pg_url)
+    configuration.cloud_registration_mode = "open"
+    engine = build_engine(configuration)
+    factory = build_session_factory(engine)
+    with factory() as db:
+        for index in range(19):
+            user = User(username=f"existing{index}@example.com", password_hash="unused", is_admin=False)
+            db.add(user)
+            db.flush()
+            db.add(ExternalIdentity(user_id=user.id, issuer="https://accounts.google.com",
+                subject=f"existing{index}", email=user.username))
+        db.commit()
+    barrier = Barrier(8)
+
+    def enroll(index):
+        with factory() as db:
+            barrier.wait(timeout=15)
+            try:
+                user = enroll_google_identity(db, configuration, {
+                    "sub": f"new{index}", "email": f"new{index}@example.com", "email_verified": True,
+                })
+                return index, user.id
+            except ValueError as exc:
+                assert str(exc) == "beta_full"
+                return index, None
+
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(enroll, range(8)))
+        winners = [(index, user_id) for index, user_id in results if user_id]
+        assert len(winners) == 1
+        index, user_id = winners[0]
+        with factory() as db:
+            assert db.scalar(select(func.count()).select_from(ExternalIdentity)) == 20
+            assert db.scalar(select(func.count()).select_from(User)) == 20
+            assert db.scalar(select(func.count()).select_from(User).where(User.is_admin.is_(True))) == 0
+            assert db.scalar(select(func.count()).select_from(BetaInvitation)) == 0
+            returning = enroll_google_identity(db, configuration, {
+                "sub": f"new{index}", "email": "renamed@example.com", "email_verified": True,
+            })
+            assert returning.id == user_id
+    finally:
+        engine.dispose()
 
 
 def test_postgresql_api_never_exposes_other_tenants_gateway_profile_or_session(pg_url):
