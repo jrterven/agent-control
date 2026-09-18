@@ -86,6 +86,47 @@ test.describe("shell responsive con estado autenticado determinista", () => {
     await expect(sidebar).toBeVisible();
   });
 
+  test("oculta la barra lateral, amplía el chat y conserva la preferencia al recargar", async ({ page }) => {
+    test.skip(page.viewportSize()!.width < 780, "Control de navegación acoplada");
+    const sidebar = page.locator("#left-sidebar");
+    const main = page.locator(".app-center");
+    const initialWidth = (await main.boundingBox())!.width;
+    await page.getByRole("button", { name: "Ocultar barra lateral" }).click();
+    await expect(sidebar).toBeHidden();
+    await expect.poll(async () => (await main.boundingBox())!.width).toBeGreaterThan(initialWidth + 250);
+    await page.reload();
+    await expect(sidebar).toBeHidden();
+    await page.getByRole("button", { name: "Mostrar barra lateral" }).click();
+    await expect(sidebar).toBeVisible();
+    await expect.poll(async () => (await main.boundingBox())!.width).toBeLessThan(initialWidth + 2);
+
+    if (page.viewportSize()!.width >= 1200) {
+      await page.getByRole("button", { name: "Ocultar contexto" }).click();
+      await page.getByRole("button", { name: "Ocultar barra lateral" }).click();
+      await expect(sidebar).toBeHidden();
+      await expect(page.locator("#activity-panel")).toBeHidden();
+      await expect.poll(async () => (await main.boundingBox())!.width).toBe(page.viewportSize()!.width);
+    }
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole("button", { name: "Abrir navegación" }).click();
+    await expect(sidebar).toBeVisible();
+    await sidebar.getByRole("button", { name: "Cerrar navegación" }).click();
+    await expect(sidebar).toBeHidden();
+  });
+
+  test("mantiene separados los controles en el ancho mínimo de tablet", async ({ page }) => {
+    test.skip(page.viewportSize()!.width < 780, "Controles de tablet");
+    await page.setViewportSize({ width: 780, height: 900 });
+    await page.getByRole("button", { name: "Elegir espacio de trabajo: Operación móvil" }).click();
+    await page.getByRole("menuitemradio", { name: /Sin espacio de trabajo/ }).click();
+    const identity = (await page.locator(".identity-button").boundingBox())!;
+    const workspace = (await page.locator(".workspace-switcher-wrap").boundingBox())!;
+    expect(identity.x + identity.width).toBeLessThanOrEqual(workspace.x);
+    await expect(page.getByRole("button", { name: "Ocultar barra lateral" })).toBeVisible();
+    await page.screenshot({ path: `test-results/sidebar-tablet-minimum-${test.info().project.name}.png` });
+  });
+
   test("abre un chat vacío desde Ajustes con el mismo agente y espacio de trabajo", async ({ page }) => {
     let createCount = 0;
     await page.route("**/api/v1/sessions", async (route) => {

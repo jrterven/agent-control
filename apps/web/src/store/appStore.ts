@@ -15,6 +15,7 @@ import type {
   Workspace,
 } from "../types";
 import { detectedTimeZone } from "../lib/dateTime";
+import { readDesktopSidebarOpen, saveDesktopSidebarOpen } from "../lib/sidebarPreference";
 
 type AuthState = "checking" | "authenticated" | "offline" | "unauthenticated";
 
@@ -25,6 +26,7 @@ type AppState = {
   csrfToken?: string;
   demoMode: boolean;
   leftDrawerOpen: boolean;
+  desktopSidebarOpen: boolean;
   activityOpen: boolean;
   desktopContextOpen: boolean;
   notificationsOpen: boolean;
@@ -54,6 +56,7 @@ type AppState = {
   messages: ChatMessage[];
   setAuth: (state: AuthState, userName?: string, csrfToken?: string, demoMode?: boolean, userId?: string) => void;
   setLeftDrawerOpen: (open: boolean) => void;
+  setDesktopSidebarOpen: (open: boolean) => void;
   setActivityOpen: (open: boolean) => void;
   setDesktopContextOpen: (open: boolean) => void;
   setNotificationsOpen: (open: boolean) => void;
@@ -165,6 +168,7 @@ function withoutSessions(state: AppState, sessionIds: Set<string>): Partial<AppS
 export const useAppStore = create<AppState>((set) => ({
   authState: "checking",
   leftDrawerOpen: false,
+  desktopSidebarOpen: readDesktopSidebarOpen(),
   activityOpen: false,
   desktopContextOpen: true,
   notificationsOpen: false,
@@ -210,6 +214,10 @@ export const useAppStore = create<AppState>((set) => ({
     };
   }),
   setLeftDrawerOpen: (leftDrawerOpen) => set({ leftDrawerOpen }),
+  setDesktopSidebarOpen: (desktopSidebarOpen) => {
+    saveDesktopSidebarOpen(desktopSidebarOpen);
+    set({ desktopSidebarOpen, gatewayMenuOpen: false });
+  },
   setActivityOpen: (activityOpen) => set({ activityOpen }),
   setDesktopContextOpen: (desktopContextOpen) => set({ desktopContextOpen }),
   setNotificationsOpen: (notificationsOpen) => set({ notificationsOpen }),

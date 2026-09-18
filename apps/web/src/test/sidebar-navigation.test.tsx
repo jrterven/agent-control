@@ -20,6 +20,10 @@ vi.mock("@tanstack/react-router", () => ({
 const newSession: SessionSummary = { ...sessions[0], id: "session-new", title: "Nueva conversación", preview: "" };
 
 beforeEach(() => {
+  vi.mocked(window.matchMedia).mockImplementation((query) => ({
+    matches: query.includes("prefers-color-scheme: dark"), media: query, onchange: null,
+    addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+  }));
   navigation.navigate.mockReset();
   navigation.pathname = "/computers";
   useCloudConfigurationStore.setState({ methods: { mode: "cloud", googleEnabled: true } });

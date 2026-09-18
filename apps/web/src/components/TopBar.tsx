@@ -19,6 +19,8 @@ export function TopBar() {
   const profileId = useAppStore((state) => state.selectedProfileId);
   const connection = useAppStore((state) => state.connection);
   const setLeftOpen = useAppStore((state) => state.setLeftDrawerOpen);
+  const desktopSidebarOpen = useAppStore((state) => state.desktopSidebarOpen);
+  const setDesktopSidebarOpen = useAppStore((state) => state.setDesktopSidebarOpen);
   const setActivityOpen = useAppStore((state) => state.setActivityOpen);
   const setDesktopContextOpen = useAppStore((state) => state.setDesktopContextOpen);
   const setNotificationsOpen = useAppStore((state) => state.setNotificationsOpen);
@@ -31,6 +33,8 @@ export function TopBar() {
   const demoMode = useAppStore((state) => state.demoMode);
   const profiles = useAppStore((state) => state.profiles);
   const desktopContext = useMediaQuery("(min-width: 1200px)");
+  const desktopSidebar = useMediaQuery("(min-width: 780px)");
+  const navigationOpen = desktopSidebar ? desktopSidebarOpen : leftOpen;
   const contextOpen = desktopContext ? desktopContextOpen : activityOpen;
   const contextLabel = t(contextOpen ? "nav.hideContext" : "nav.showContext");
   const contextButtonLabel = updateAvailable ? `${contextLabel} · ${t("updates.availableTitle")}` : contextLabel;
@@ -38,10 +42,18 @@ export function TopBar() {
 
   return (
     <header className="top-bar">
-      <IconButton className="top-bar__menu" label={t("nav.openNavigation")} icon={<List size={25} />} selected={leftOpen} aria-controls="left-sidebar" aria-expanded={leftOpen} onClick={() => setLeftOpen(!leftOpen)} />
+      <IconButton
+        className="top-bar__menu"
+        label={t(desktopSidebar ? (navigationOpen ? "nav.hideSidebar" : "nav.showSidebar") : "nav.openNavigation")}
+        icon={desktopSidebar ? <SidebarSimple size={23} style={{ transform: "scaleX(-1)" }} /> : <List size={25} />}
+        selected={navigationOpen}
+        aria-controls="left-sidebar"
+        aria-expanded={navigationOpen}
+        onClick={() => desktopSidebar ? setDesktopSidebarOpen(!desktopSidebarOpen) : setLeftOpen(!leftOpen)}
+      />
       <div className="top-bar__identity">
         <ProfileAvatar profile={profile} />
-        <button className="identity-button" type="button" onClick={() => setLeftOpen(true)}>
+        <button className="identity-button" type="button" onClick={() => desktopSidebar ? setDesktopSidebarOpen(true) : setLeftOpen(true)}>
           <span className="identity-button__name">{profile?.displayName ?? t("nav.noAgent")}</span>
           <CaretDown size={16} />
           <span className="identity-button__status"><StatusDot tone={connection === "connected" ? "positive" : connection === "reconnecting" ? "warning" : "negative"} />{demoMode ? t("connection.localMock") : t(connectionLabelKeys[connection])}</span>

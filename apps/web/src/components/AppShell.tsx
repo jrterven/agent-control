@@ -20,6 +20,7 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
   const updateBlockers = usePwaUpdateStore((state) => state.blockers);
   const setUpdateBlocker = usePwaUpdateStore((state) => state.setBlocker);
   const desktopContextOpen = useAppStore((state) => state.desktopContextOpen);
+  const desktopSidebarOpen = useAppStore((state) => state.desktopSidebarOpen);
 
   useEffect(() => {
     setUpdateBlocker("streaming", hasStreamingResponse);
@@ -33,7 +34,7 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
   }, [updateBlockers, updateDeferred, updateStatus]);
 
   return (
-    <div className={cx("app-shell", !desktopContextOpen && "is-context-collapsed")}>
+    <div className={cx("app-shell", !desktopContextOpen && "is-context-collapsed", !desktopSidebarOpen && "is-sidebar-collapsed")}>
       <a className="skip-link" href="#main-content">{t("nav.skipToContent")}</a>
       <LeftSidebar />
       <div className="app-center">

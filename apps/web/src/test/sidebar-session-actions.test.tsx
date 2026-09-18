@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -48,6 +48,10 @@ const workspace = {
 
 describe("sidebar session menu", () => {
   beforeEach(() => {
+    vi.mocked(window.matchMedia).mockImplementation((query: string) => ({
+      matches: false, media: query, onchange: null,
+      addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+    }));
     useAppStore.getState().resetPrivateState();
     useAppStore.setState({
       authState: "authenticated",
@@ -253,5 +257,195 @@ describe("sidebar session menu", () => {
 
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("selects visible pinned and unpinned conversations without opening another chat", async () => {
+    const user = userEvent.setup();
+    const pinned = { ...session, id: "session-pinned", title: "Fijada", workspaceId: workspace.id, pinnedAt: "2026-09-01T00:00:00Z" };
+    const hidden = { ...session, id: "session-hidden", title: "Oculta", workspaceId: workspace.id };
+    useAppStore.setState({ sessions: [session, pinned, hidden] });
+    render(<LeftSidebar />);
+
+    const trigger = screen.getByRole("button", { name: "Seleccionar conversaciones" });
+    await user.click(trigger);
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar visibles" }));
+
+    expect(screen.getByRole("checkbox", { name: "Seleccionar “Conversación”" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Seleccionar “Fijada”" })).toBeChecked();
+    expect(screen.queryByRole("checkbox", { name: "Seleccionar “Oculta”" })).not.toBeInTheDocument();
+    expect(screen.getByText("2 seleccionadas")).toBeInTheDocument();
+    expect(useAppStore.getState().selectedSessionId).toBe(session.id);
+    expect(screen.queryByRole("button", { name: "Opciones de “Conversación”" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar “Conversación”" }));
+    expect(screen.getByRole("checkbox", { name: "Seleccionar visibles" })).toBePartiallyChecked();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("moves a selection together and keeps the active conversation and workspace counts consistent", async () => {
+    const user = userEvent.setup();
+    const second = { ...session, id: "session-b", storedSessionId: "stored-b", title: "Segunda" };
+    useAppStore.setState({ sessions: [session, second] });
+    const move = vi.spyOn(api, "moveSession").mockImplementation(async (id) => ({ ...[session, second].find((item) => item.id === id)!, workspaceId: workspace.id, updatedAt: "después" }));
+    render(<LeftSidebar />);
+
+    await user.click(screen.getByRole("button", { name: "Seleccionar conversaciones" }));
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar visibles" }));
+    await user.click(screen.getByRole("button", { name: "Mover" }));
+    const dialog = screen.getByRole("dialog", { name: "Mover conversaciones" });
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Espacio de trabajo" }), workspace.id);
+    await user.click(within(dialog).getByRole("button", { name: "Mover" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mover conversaciones" })).not.toBeInTheDocument());
+    expect(move).toHaveBeenCalledTimes(2);
+    expect(move).toHaveBeenCalledWith("session-a", workspace.id, "csrf-memory-only");
+    expect(move).toHaveBeenCalledWith("session-b", workspace.id, "csrf-memory-only");
+    expect(useAppStore.getState().selectedSessionId).toBe(session.id);
+    expect(useAppStore.getState().selectedWorkspaceId).toBe(workspace.id);
+    expect(useAppStore.getState().workspaces[0].sessionCount).toBe(2);
+    expect(screen.getByText("0 seleccionadas")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Se movieron 2 conversaciones");
+    expect(screen.getByRole("checkbox", { name: "Seleccionar visibles" })).toHaveFocus();
+  });
+
+  it("retains only failed deletions for retry and requires confirmation with the selected titles", async () => {
+    const user = userEvent.setup();
+    const second = { ...session, id: "session-b", storedSessionId: "stored-b", title: "Segunda" };
+    useAppStore.setState({ sessions: [session, second] });
+    const remove = vi.spyOn(api, "deleteSessionFromHermes")
+      .mockImplementation(async (id) => { if (id === second.id) throw new Error("Agente ocupado"); });
+    render(<LeftSidebar />);
+
+    await user.click(screen.getByRole("button", { name: "Seleccionar conversaciones" }));
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar visibles" }));
+    await user.click(screen.getByRole("button", { name: "Eliminar…" }));
+    const dialog = screen.getByRole("dialog", { name: "Eliminar 2 conversaciones" });
+    expect(dialog).toHaveTextContent("Conversación");
+    expect(dialog).toHaveTextContent("Segunda");
+    expect(dialog).toHaveTextContent("Esta acción no se puede deshacer");
+    expect(remove).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Eliminar de Hermes" }));
+
+    await waitFor(() => expect(within(dialog).getByRole("alert")).toHaveTextContent("1 completadas; 1 fallaron"));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Agente ocupado");
+    expect(useAppStore.getState().sessions.map((item) => item.id)).toEqual([second.id]);
+    expect(remove).toHaveBeenCalledWith("session-a", "stored-exact-42", "csrf-memory-only");
+    expect(remove).toHaveBeenCalledWith("session-b", "stored-b", "csrf-memory-only");
+
+    remove.mockResolvedValue(undefined);
+    await user.click(within(dialog).getByRole("button", { name: "Eliminar de Hermes" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Eliminar/ })).not.toBeInTheDocument());
+    expect(remove).toHaveBeenCalledTimes(3);
+    expect(remove).toHaveBeenLastCalledWith("session-b", "stored-b", "csrf-memory-only");
+    expect(useAppStore.getState().sessions).toEqual([]);
+    expect(screen.getByRole("button", { name: "Salir de selección" })).toHaveFocus();
+  });
+
+  it("retains failed moves even when moving the active conversation changes the visible workspace", async () => {
+    const user = userEvent.setup();
+    const second = { ...session, id: "session-b", title: "Segunda" };
+    useAppStore.setState({ sessions: [session, second] });
+    const move = vi.spyOn(api, "moveSession").mockImplementation(async (id) => {
+      if (id === second.id) throw new Error("Sin conexión");
+      return { ...session, workspaceId: workspace.id, updatedAt: "después" };
+    });
+    render(<LeftSidebar />);
+
+    await user.click(screen.getByRole("button", { name: "Seleccionar conversaciones" }));
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar visibles" }));
+    await user.click(screen.getByRole("button", { name: "Mover" }));
+    const dialog = screen.getByRole("dialog", { name: "Mover conversaciones" });
+    await user.selectOptions(within(dialog).getByRole("combobox"), workspace.id);
+    await user.click(within(dialog).getByRole("button", { name: "Mover" }));
+
+    await waitFor(() => expect(within(dialog).getByRole("alert")).toHaveTextContent("1 completadas; 1 fallaron"));
+    expect(useAppStore.getState().selectedWorkspaceId).toBe(workspace.id);
+    expect(within(dialog).getByRole("list")).toHaveTextContent("Segunda");
+    expect(within(dialog).getByRole("list")).not.toHaveTextContent("Conversación");
+
+    move.mockResolvedValue({ ...second, workspaceId: workspace.id });
+    await user.click(within(dialog).getByRole("button", { name: "Mover" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mover conversaciones" })).not.toBeInTheDocument());
+    expect(move).toHaveBeenCalledTimes(3);
+    expect(move).toHaveBeenLastCalledWith(second.id, workspace.id, "csrf-memory-only");
+  });
+
+  it("pins mixed selections without repeating already pinned chats, then unpins the selected group", async () => {
+    const user = userEvent.setup();
+    const pinned = { ...session, id: "session-pinned", title: "Fijada", pinnedAt: "2026-09-01T00:00:00Z" };
+    useAppStore.setState({ sessions: [session, pinned] });
+    const setPinned = vi.spyOn(api, "setSessionPinned").mockImplementation(async (id, pin) => ({ ...[session, pinned].find((item) => item.id === id)!, pinnedAt: pin ? "2026-09-02T00:00:00Z" : undefined }));
+    render(<LeftSidebar />);
+    await user.click(screen.getByRole("button", { name: "Seleccionar conversaciones" }));
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar visibles" }));
+    await user.click(screen.getByRole("button", { name: "Fijar selección" }));
+    await waitFor(() => expect(screen.getByText("0 seleccionadas")).toBeInTheDocument());
+    expect(setPinned).toHaveBeenCalledTimes(1);
+    expect(setPinned).toHaveBeenCalledWith(session.id, true, "csrf-memory-only");
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar visibles" }));
+    await user.click(screen.getByRole("button", { name: "Desfijar selección" }));
+    await waitFor(() => expect(screen.queryByText("Fijados")).not.toBeInTheDocument());
+    expect(setPinned).toHaveBeenCalledTimes(3);
+    expect(useAppStore.getState().sessions.every((item) => !item.pinnedAt)).toBe(true);
+  });
+
+  it("disables bulk deletion if a selected agent does not support it", async () => {
+    const user = userEvent.setup();
+    const readOnlyProfile = { ...profile, id: "read-only", mutable: false };
+    useAppStore.setState({ profiles: [profile, readOnlyProfile], sessions: [session, { ...session, id: "unsupported", title: "Solo lectura", profileId: readOnlyProfile.id, pinnedAt: "2026-09-01T00:00:00Z" }] });
+    render(<LeftSidebar />);
+    await user.click(screen.getByRole("button", { name: "Seleccionar conversaciones" }));
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar visibles" }));
+    expect(screen.getByRole("button", { name: "Eliminar…" })).toBeDisabled();
+    expect(screen.getByText("Algunas conversaciones seleccionadas no permiten eliminarse.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mover" })).toBeEnabled();
+  });
+
+  it("does not offer selection mutations in demo mode", () => {
+    useAppStore.setState({ demoMode: true });
+    render(<LeftSidebar />);
+    expect(screen.queryByRole("button", { name: "Seleccionar conversaciones" })).not.toBeInTheDocument();
+  });
+
+  it("clears selection and ignores in-flight results when the authenticated owner changes", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ userId: "owner-a" });
+    let resolvePin!: (value: SessionSummary) => void;
+    vi.spyOn(api, "setSessionPinned").mockImplementation(() => new Promise((resolve) => { resolvePin = resolve; }));
+    render(<LeftSidebar />);
+    await user.click(screen.getByRole("button", { name: "Seleccionar conversaciones" }));
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar visibles" }));
+    await user.click(screen.getByRole("button", { name: "Fijar selección" }));
+    expect(screen.getByRole("button", { name: "Salir de selección" })).toBeDisabled();
+    await act(async () => useAppStore.setState({ userId: "owner-b", sessions: [{ ...session, title: "Nueva cuenta" }] }));
+    await act(async () => resolvePin({ ...session, pinnedAt: "2026-09-02T00:00:00Z" }));
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(useAppStore.getState().sessions[0].pinnedAt).toBeUndefined();
+    expect(useAppStore.getState().sessions[0].title).toBe("Nueva cuenta");
+  });
+
+  it("stops scheduling batches after unmount while reflecting completed requests for the same owner", async () => {
+    const user = userEvent.setup();
+    const targets = Array.from({ length: 5 }, (_, index) => ({ ...session, id: `session-${index}`, title: `Conversación ${index}` }));
+    useAppStore.setState({ userId: "owner-a", sessions: targets });
+    const pending = new Map<string, (value: SessionSummary) => void>();
+    const setPinned = vi.spyOn(api, "setSessionPinned").mockImplementation((id) => new Promise((resolve) => { pending.set(id, resolve); }));
+    const { unmount } = render(<LeftSidebar />);
+    await user.click(screen.getByRole("button", { name: "Seleccionar conversaciones" }));
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar visibles" }));
+    await user.click(screen.getByRole("button", { name: "Fijar selección" }));
+    expect(setPinned).toHaveBeenCalledTimes(4);
+
+    unmount();
+    await act(async () => {
+      for (const target of targets.slice(0, 4)) pending.get(target.id)!({ ...target, pinnedAt: "2026-09-02T00:00:00Z" });
+    });
+
+    expect(setPinned).toHaveBeenCalledTimes(4);
+    expect(setPinned).not.toHaveBeenCalledWith(targets[4].id, true, "csrf-memory-only");
+    expect(useAppStore.getState().sessions.slice(0, 4).every((item) => Boolean(item.pinnedAt))).toBe(true);
+    expect(useAppStore.getState().sessions[4].pinnedAt).toBeUndefined();
   });
 });

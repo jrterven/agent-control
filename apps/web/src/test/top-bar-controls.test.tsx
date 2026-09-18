@@ -18,6 +18,7 @@ import { useAppStore } from "../store/appStore";
 function matchMediaFor(width: "desktop" | "tablet") {
   return (query: string): MediaQueryList => ({
     matches: query.includes("prefers-color-scheme: dark")
+      || query.includes("min-width: 780px")
       || (width === "desktop" ? query.includes("min-width: 1200px") : query.includes("max-width: 1199px")),
     media: query,
     onchange: null,
@@ -65,6 +66,7 @@ describe("desktop top bar controls", () => {
       bootstrapLoaded: true,
       connection: "connected",
       desktopContextOpen: true,
+      desktopSidebarOpen: true,
       activityOpen: false,
       selectedGatewayId: "gateway-1",
       selectedProfileId: "profile-jarvis",
@@ -146,6 +148,39 @@ describe("desktop top bar controls", () => {
     expect(useAppStore.getState().desktopContextOpen).toBe(true);
     expect(shell).not.toHaveClass("is-context-collapsed");
     expect(panel).not.toHaveAttribute("aria-hidden");
+  });
+
+  it("hides and restores desktop navigation independently from context and remembers the preference", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<AppShell><div>Contenido del chat</div></AppShell>);
+    const shell = container.querySelector(".app-shell");
+    const sidebar = container.querySelector("#left-sidebar");
+
+    await user.click(screen.getByRole("button", { name: "Ocultar barra lateral" }));
+    expect(shell).toHaveClass("is-sidebar-collapsed");
+    expect(sidebar).toHaveAttribute("inert");
+    expect(sidebar).toHaveAttribute("aria-hidden", "true");
+    expect(useAppStore.getState().desktopContextOpen).toBe(true);
+    expect(localStorage.getItem("agent-control.desktop-sidebar-open")).toBe("false");
+    const restore = screen.getByRole("button", { name: "Mostrar barra lateral" });
+    expect(restore).toHaveAttribute("aria-expanded", "false");
+    expect(restore).toHaveFocus();
+
+    await user.click(restore);
+    expect(shell).not.toHaveClass("is-sidebar-collapsed");
+    expect(sidebar).not.toHaveAttribute("inert");
+    expect(sidebar).not.toHaveAttribute("aria-hidden");
+    expect(localStorage.getItem("agent-control.desktop-sidebar-open")).toBe("true");
+  });
+
+  it("opens the mobile drawer without changing a collapsed desktop preference", async () => {
+    vi.mocked(window.matchMedia).mockImplementation((query) => ({ ...matchMediaFor("tablet")(query), matches: query.includes("max-width: 779px") }));
+    useAppStore.setState({ desktopSidebarOpen: false });
+    const user = userEvent.setup();
+    render(<TopBar />);
+    await user.click(screen.getByRole("button", { name: "Abrir navegación" }));
+    expect(useAppStore.getState().leftDrawerOpen).toBe(true);
+    expect(useAppStore.getState().desktopSidebarOpen).toBe(false);
   });
 
   it("keeps the tablet overlay state separate from the docked desktop preference", async () => {

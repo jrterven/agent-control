@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Archive, CaretDown, ChatTeardropText, DotsThree, DotsThreeVertical, FolderSimple, GearSix, Lightning, MagnifyingGlass, PencilSimple, Plus, PushPinSimple, PushPinSimpleSlash, Robot, Trash, WarningCircle, X } from "@phosphor-icons/react";
+import { Archive, CaretDown, ChatTeardropText, CheckSquareOffset, DotsThree, DotsThreeVertical, FolderSimple, GearSix, Lightning, MagnifyingGlass, PencilSimple, Plus, PushPinSimple, PushPinSimpleSlash, Robot, Trash, WarningCircle, X } from "@phosphor-icons/react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { Badge, Button, IconButton, StatusDot, cx } from "@hermes-control/ui";
 import { useTranslation } from "react-i18next";
@@ -7,9 +7,11 @@ import { api } from "../lib/api";
 import { formatConversationTimestamp, formatConversationTimestampLong } from "../lib/dateTime";
 import { createChatForCurrentContext } from "../hooks";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
+import { useMediaQuery } from "../lib/useMediaQuery";
 import { useAppStore } from "../store/appStore";
 import { BrandMark } from "./BrandMark";
 import { ProfileAvatar } from "./ProfileAvatar";
+import { SidebarBulkDialog, SidebarSelectionToolbar, useSidebarBulkSelection } from "./SidebarBulkActions";
 import type { SessionSummary, Workspace } from "../types";
 import { useCloudConfigurationStore } from "../lib/cloud";
 
@@ -19,6 +21,8 @@ export function LeftSidebar() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const navigate = useNavigate();
   const open = useAppStore((state) => state.leftDrawerOpen);
+  const desktopSidebarOpen = useAppStore((state) => state.desktopSidebarOpen);
+  const desktopSidebar = useMediaQuery("(min-width: 780px)");
   const close = useAppStore((state) => state.setLeftDrawerOpen);
   const selectedGatewayId = useAppStore((state) => state.selectedGatewayId);
   const selectedProfileId = useAppStore((state) => state.selectedProfileId);
@@ -79,6 +83,8 @@ export function LeftSidebar() {
   const gatewayTriggerRef = useRef<HTMLButtonElement>(null);
   const sessionMenuRef = useRef<HTMLDivElement>(null);
   const sessionMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const selectionTriggerRef = useRef<HTMLButtonElement>(null);
+  const bulkSelection = useSidebarBulkSelection();
   const gateway = gateways.find((item) => item.id === selectedGatewayId) ?? gateways[0];
   const selectedProfile = profiles.find((item) => item.id === selectedProfileId);
   const canCreateSession = demoMode || (
@@ -86,7 +92,7 @@ export function LeftSidebar() {
     && selectedProfile?.mutable === true
     && Boolean(selectedProfile.capabilities?.sessions)
   );
-  const sessionDialogOpen = Boolean(renameTarget || moveTarget || deleteTarget);
+  const sessionDialogOpen = Boolean(renameTarget || moveTarget || deleteTarget || bulkSelection.dialog);
   const mutationsDisabled = authState !== "authenticated" || demoMode;
   const drawer = useOverlayDialog<HTMLElement>({ open: open && !sessionDialogOpen, onClose: () => close(false), mediaQuery: "(max-width: 779px)" });
   const closeWorkspaceEditor = () => {
@@ -116,6 +122,12 @@ export function LeftSidebar() {
   const renameDialog = useOverlayDialog<HTMLDivElement>({ open: Boolean(renameTarget), onClose: closeRenameDialog, mediaQuery: "(min-width: 0px)" });
   const moveDialog = useOverlayDialog<HTMLDivElement>({ open: Boolean(moveTarget), onClose: closeMoveDialog, mediaQuery: "(min-width: 0px)" });
   const deleteDialog = useOverlayDialog<HTMLDivElement>({ open: Boolean(deleteTarget), onClose: closeDeleteDialog, mediaQuery: "(min-width: 0px)" });
+
+  const exitSelection = () => {
+    if (bulkSelection.busy) return;
+    bulkSelection.exit();
+    requestAnimationFrame(() => selectionTriggerRef.current?.focus());
+  };
 
   useEffect(() => {
     if (!gatewayMenuOpen) return;
@@ -267,7 +279,7 @@ export function LeftSidebar() {
 
   const deleteSession = async (event: FormEvent) => {
     event.preventDefault();
-    if (!deleteTarget || deleteBusy) return;
+    if (!deleteTarget || deleteBusy || mutationsDisabled || !canDeleteSession(deleteTarget)) return;
     const target = deleteTarget;
     setDeleteBusy(true);
     setDeleteError("");
@@ -338,12 +350,16 @@ export function LeftSidebar() {
     const language = i18n.resolvedLanguage ?? i18n.language;
     const updatedAt = formatConversationTimestamp(session.updatedAt, language, timeZone);
     return (
-      <div className={cx("session-list__row", session.id === selectedSessionId && "is-active")} key={session.id} role={pinnedSection ? "listitem" : undefined}>
-        <button type="button" className="session-list__select" onClick={() => { selectSession(session.id); void navigate({ to: "/chats" }); }}>
+      <div className={cx("session-list__row", session.id === selectedSessionId && "is-active", bulkSelection.active && bulkSelection.selectedIds.has(session.id) && "is-selected")} key={session.id} role={pinnedSection ? "listitem" : undefined}>
+        {bulkSelection.active ? <label className="session-list__select session-list__checkbox">
+          <input type="checkbox" aria-label={t("sidebar.selectConversation", { title: session.title })} checked={bulkSelection.selectedIds.has(session.id)} disabled={bulkSelection.busy || mutationsDisabled} onChange={() => bulkSelection.toggle(session.id)} />
           <span className="session-list__body"><strong>{session.title}</strong><small>{context}</small></span>
           <span className="session-list__meta" title={formatConversationTimestampLong(session.updatedAt, language, timeZone)}>{pinnedSection ? <PushPinSimple size={12} weight="fill" aria-hidden="true" /> : null}{session.unread ? <i /> : null}{updatedAt}</span>
-        </button>
-        {!mutationsDisabled ? <IconButton
+        </label> : <button type="button" className="session-list__select" onClick={() => { selectSession(session.id); void navigate({ to: "/chats" }); }}>
+          <span className="session-list__body"><strong>{session.title}</strong><small>{context}</small></span>
+          <span className="session-list__meta" title={formatConversationTimestampLong(session.updatedAt, language, timeZone)}>{pinnedSection ? <PushPinSimple size={12} weight="fill" aria-hidden="true" /> : null}{session.unread ? <i /> : null}{updatedAt}</span>
+        </button>}
+        {!mutationsDisabled && !bulkSelection.active ? <IconButton
           className="session-list__more"
           label={t("sidebar.conversationMenu", { title: session.title })}
           icon={<DotsThreeVertical size={20} weight="bold" />}
@@ -384,11 +400,18 @@ export function LeftSidebar() {
         ref={drawer.containerRef}
         className={cx("left-sidebar", open && "is-open")}
         aria-label={t("sidebar.navigationLabel")}
-        aria-hidden={sessionDialogOpen || (drawer.isOverlay && !open) ? true : undefined}
+        aria-hidden={sessionDialogOpen || (drawer.isOverlay && !open) || (desktopSidebar && !desktopSidebarOpen) ? true : undefined}
         aria-modal={drawer.active ? true : undefined}
         role={drawer.isOverlay ? "dialog" : undefined}
-        inert={sessionDialogOpen || (drawer.isOverlay && !open)}
+        inert={sessionDialogOpen || (drawer.isOverlay && !open) || (desktopSidebar && !desktopSidebarOpen)}
         tabIndex={drawer.active ? -1 : undefined}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && bulkSelection.active && !sessionDialogOpen) {
+            event.preventDefault();
+            event.stopPropagation();
+            exitSelection();
+          }
+        }}
       >
         <div className="sidebar-brand">
           <BrandMark size="md" />
@@ -451,6 +474,8 @@ export function LeftSidebar() {
           ))}
         </nav>
 
+        <SidebarSelectionToolbar selection={bulkSelection} visible={[...pinnedSessions, ...visibleSessions]} onExit={exitSelection} />
+
         <div className="sidebar-scroll">
           <div className="sidebar-section">
             <div className="sidebar-section__heading">
@@ -488,7 +513,12 @@ export function LeftSidebar() {
           </div> : null}
 
           <div className="sidebar-section sidebar-section--sessions">
-            <div className="sidebar-section__heading"><span>{t("sidebar.conversations")}</span></div>
+            <div className="sidebar-section__heading"><span>{t("sidebar.conversations")}</span>{!mutationsDisabled ? <button type="button" ref={selectionTriggerRef} className="hc-icon-button" aria-label={t("sidebar.selectConversations")} title={t("sidebar.selectConversations")} aria-pressed={bulkSelection.active} disabled={bulkSelection.busy || (!pinnedSessions.length && !visibleSessions.length && !bulkSelection.active)} onClick={() => {
+              closeSessionMenu();
+              setSessionAnnouncement("");
+              if (bulkSelection.active) exitSelection();
+              else bulkSelection.enter();
+            }}><CheckSquareOffset size={17} /></button> : null}</div>
             <div className="session-list">
               {visibleSessions.map((session) => renderSessionRow(session))}
             </div>
@@ -504,7 +534,8 @@ export function LeftSidebar() {
           </div>
         </div>
       </aside>
-      <p className="session-action-announcement" role="status" aria-live="polite">{sessionAnnouncement}</p>
+      <p className="session-action-announcement" role="status" aria-live="polite">{bulkSelection.announcement || sessionAnnouncement}</p>
+      <SidebarBulkDialog selection={bulkSelection} />
       {workspaceEditorOpen ? <div ref={workspaceDialog.containerRef} tabIndex={-1} className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="workspace-editor-title"><button className="modal-scrim" aria-label={t("sidebar.closeWorkspaceEditor")} onClick={closeWorkspaceEditor} /><div className="hc-panel form-modal workspace-editor"><span className="eyebrow">{t("sidebar.localOrganization")}</span><h2 id="workspace-editor-title">{editingWorkspace ? t("sidebar.editWorkspaceTitle") : t("sidebar.newWorkspaceTitle")}</h2><p>{t("sidebar.workspaceExplanation")}</p><form onSubmit={(event) => void saveWorkspace(event)}><label className="hc-field"><span>{t("sidebar.name")}</span><input autoFocus maxLength={200} value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} /></label><label className="hc-field"><span>{t("sidebar.description")}</span><textarea rows={3} maxLength={4000} value={workspaceDescription} onChange={(event) => setWorkspaceDescription(event.target.value)} /></label>{workspaceError ? <p className="form-error" role="alert">{workspaceError}</p> : null}<div>{editingWorkspace ? <Button type="button" variant="danger" disabled={workspaceBusy} leadingIcon={<Archive />} onClick={() => void archiveWorkspace()}>{t("sidebar.archive")}</Button> : <span />}<span><Button type="button" variant="ghost" disabled={workspaceBusy} onClick={closeWorkspaceEditor}>{t("sidebar.cancel")}</Button><Button type="submit" variant="primary" disabled={workspaceBusy || !workspaceName.trim()}>{workspaceBusy ? t("sidebar.saving") : t("sidebar.save")}</Button></span></div></form></div></div> : null}
       {renameTarget ? <div className="modal-layer" role="presentation"><button className="modal-scrim" aria-label={t("sidebar.closeRenameEditor")} onClick={closeRenameDialog} /><div ref={renameDialog.containerRef} tabIndex={-1} className="hc-panel form-modal session-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="session-rename-title" aria-describedby="session-rename-description"><span className="eyebrow">{t("sidebar.localOrganization")}</span><h2 id="session-rename-title">{t("sidebar.renameTitle")}</h2><p id="session-rename-description">{t("sidebar.renameDescription")}</p><form onSubmit={(event) => void saveSessionTitle(event)}><label className="hc-field"><span>{t("sidebar.conversationName")}</span><input autoFocus maxLength={300} value={renameTitle} onChange={(event) => setRenameTitle(event.target.value)} /></label>{renameError ? <p className="form-error" role="alert"><WarningCircle /> {renameError}</p> : null}<div><Button type="button" variant="ghost" disabled={renameBusy} onClick={closeRenameDialog}>{t("sidebar.cancel")}</Button><Button type="submit" variant="primary" disabled={renameBusy || !renameTitle.trim()}>{t(renameBusy ? "sidebar.renaming" : "sidebar.rename")}</Button></div></form></div></div> : null}
       {moveTarget ? <div className="modal-layer" role="presentation"><button className="modal-scrim" aria-label={t("sidebar.closeMoveEditor")} onClick={closeMoveDialog} /><div ref={moveDialog.containerRef} tabIndex={-1} className="hc-panel form-modal session-move-dialog" role="dialog" aria-modal="true" aria-labelledby="session-move-title" aria-describedby="session-move-description"><span className="eyebrow">{t("sidebar.localOrganization")}</span><h2 id="session-move-title">{t("sidebar.moveTitle")}</h2><p id="session-move-description">{t("sidebar.moveDescription", { title: moveTarget.title })}</p><form onSubmit={(event) => void moveSession(event)}><label className="hc-field"><span>{t("sidebar.workspaceDestination")}</span><select autoFocus value={moveWorkspaceId} onChange={(event) => setMoveWorkspaceId(event.target.value)}><option value="">{t("sidebar.noWorkspace")}</option>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label>{moveError ? <p className="form-error" role="alert"><WarningCircle /> {moveError}</p> : null}<div><Button type="button" variant="ghost" disabled={moveBusy} onClick={closeMoveDialog}>{t("sidebar.cancel")}</Button><Button type="submit" variant="primary" disabled={moveBusy || moveWorkspaceId === (moveTarget.workspaceId ?? "")} leadingIcon={<FolderSimple />}>{t(moveBusy ? "sidebar.moving" : "sidebar.move")}</Button></div></form></div></div> : null}
