@@ -121,6 +121,28 @@ describe("paired computer readiness", () => {
     expect(prompt).not.toHaveBeenCalled();
   });
 
+  it("opens the first chat after recovering an expired in-memory CSRF token", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ userId: "owner-a" });
+    vi.spyOn(api, "connectors").mockResolvedValue({ items: [{ ...computer, status: "online" }], installCommand: "" });
+    vi.spyOn(api, "bootstrap").mockResolvedValue({ ...empty, gateways: [gateways[0]], profiles: [readyProfile] });
+    const created = { ...sessions[0], id: "recovered-first-chat", workspaceId: undefined, preview: "" };
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(json({ detail: "Invalid CSRF token" }, 403))
+      .mockResolvedValueOnce(json({ id: "owner-a", csrfToken: "fresh-csrf" }))
+      .mockResolvedValueOnce(json(created));
+    render(<ConnectorReadiness computer={computer} />);
+
+    await user.click(await screen.findByRole("button", { name: "Abrir un chat nuevo" }));
+
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: "/chats" }));
+    expect(useAppStore.getState()).toMatchObject({ selectedSessionId: created.id, csrfToken: "fresh-csrf" });
+    expect(useAppStore.getState().sessions.filter((session) => session.id === created.id)).toHaveLength(1);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("never treats another computer's profiles as ready and blocks revoked access", async () => {
     const user = userEvent.setup();
     const list = vi.spyOn(api, "connectors").mockResolvedValue({ items: [{ ...computer, status: "online", gatewayId: "other-gateway" }], installCommand: "" });

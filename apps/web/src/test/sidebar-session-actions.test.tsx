@@ -448,4 +448,23 @@ describe("sidebar session menu", () => {
     expect(useAppStore.getState().sessions.slice(0, 4).every((item) => Boolean(item.pinnedAt))).toBe(true);
     expect(useAppStore.getState().sessions[4].pinnedAt).toBeUndefined();
   });
+
+  it("uses a renewed CSRF token for subsequent batches without losing the selection", async () => {
+    const user = userEvent.setup();
+    const targets = Array.from({ length: 5 }, (_, index) => ({ ...session, id: `session-${index}`, title: `Conversación ${index}` }));
+    useAppStore.setState({ userId: "owner-a", sessions: targets });
+    const setPinned = vi.spyOn(api, "setSessionPinned").mockImplementation(async (id) => {
+      useAppStore.setState({ csrfToken: "renewed-csrf" });
+      return { ...targets.find((target) => target.id === id)!, pinnedAt: "2026-09-18T00:00:00Z" };
+    });
+    render(<LeftSidebar />);
+    await user.click(screen.getByRole("button", { name: "Seleccionar conversaciones" }));
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar visibles" }));
+    await user.click(screen.getByRole("button", { name: "Fijar selección" }));
+    await waitFor(() => expect(screen.getByText("0 seleccionadas")).toBeInTheDocument());
+    expect(setPinned).toHaveBeenCalledTimes(5);
+    expect(setPinned.mock.calls.slice(0, 4).every(([, , token]) => token === "csrf-memory-only")).toBe(true);
+    expect(setPinned).toHaveBeenNthCalledWith(5, "session-4", true, "renewed-csrf");
+    expect(useAppStore.getState().sessions.every((target) => Boolean(target.pinnedAt))).toBe(true);
+  });
 });

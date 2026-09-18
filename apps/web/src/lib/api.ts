@@ -1,6 +1,7 @@
 import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, EmailReferencePreview, Gateway, Profile, PushNotificationConfig, RealtimeEvent, SearchResult, SessionSummary, VoiceProvider, Workspace } from "../types";
 import type { OPENAI_LIVE_VOICES } from "./openaiLiveVoices";
 import type { AuthMethods, ConnectorList, ConnectorPairing, ConnectorView } from "@hermes-control/shared-types";
+import { useAppStore } from "../store/appStore";
 
 export type AdminResourceName = "models" | "config" | "soul" | "skills" | "toolsets" | "mcp" | "channels" | "usage" | "secrets";
 
@@ -245,10 +246,65 @@ export class ApiError extends Error {
   }
 }
 
+type CsrfScope = { ownerId: string; token: string | null; authGeneration: number };
+let csrfRefresh: (CsrfScope & { promise: Promise<string | undefined> }) | undefined;
+
+function sameCsrfOwner(scope: CsrfScope) {
+  const state = useAppStore.getState();
+  return state.authState === "authenticated" && !state.demoMode && state.userId === scope.ownerId
+    && state.authGeneration === scope.authGeneration;
+}
+
+async function refreshRejectedCsrf(scope: CsrfScope): Promise<string | undefined> {
+  if (!sameCsrfOwner(scope)) return;
+  const currentToken = useAppStore.getState().csrfToken;
+  if (currentToken && currentToken !== scope.token) return currentToken;
+  if (!csrfRefresh || csrfRefresh.ownerId !== scope.ownerId || csrfRefresh.token !== scope.token
+    || csrfRefresh.authGeneration !== scope.authGeneration) {
+    const promise = (async () => {
+      try {
+        const user = await request<{ id: string; csrfToken?: string }>("/auth/me", {
+          cache: "no-store", signal: AbortSignal.timeout(8_000),
+        });
+        if (!sameCsrfOwner(scope)) return;
+        if (user.id !== scope.ownerId) {
+          // A cookie shared with another tab can now belong to another account.
+          // Clear the old identity through the existing auth/cache boundary;
+          // never replay its action as the newly signed-in owner.
+          window.dispatchEvent(new Event("hermes-control:unauthorized"));
+          return;
+        }
+        if (!user.csrfToken) return;
+        const latestToken = useAppStore.getState().csrfToken;
+        if (latestToken && latestToken !== scope.token) return latestToken;
+        useAppStore.setState({ csrfToken: user.csrfToken });
+        return user.csrfToken;
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401 && sameCsrfOwner(scope)) {
+          window.dispatchEvent(new Event("hermes-control:unauthorized"));
+        }
+        return undefined;
+      }
+    })();
+    csrfRefresh = { ...scope, promise };
+  }
+  const pending = csrfRefresh;
+  try {
+    return await pending.promise;
+  } finally {
+    if (csrfRefresh === pending) csrfRefresh = undefined;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const { headers: suppliedHeaders, ...rest } = init ?? {};
   const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
-  const response = await fetch(`/api/v1${path}`, {
+  const state = useAppStore.getState();
+  const submittedToken = new Headers(suppliedHeaders).get("X-CSRF-Token");
+  const scope = state.authState === "authenticated" && !state.demoMode && state.userId
+    && submittedToken === (state.csrfToken ?? null)
+    ? { ownerId: state.userId, token: submittedToken, authGeneration: state.authGeneration } : undefined;
+  const options: RequestInit = {
     credentials: "same-origin",
     ...rest,
     headers: {
@@ -256,16 +312,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.body && !isFormData ? { "Content-Type": "application/json" } : {}),
       ...suppliedHeaders,
     },
-  });
-  if (!response.ok) {
+  };
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetch(`/api/v1${path}`, { ...options });
+    if (response.ok) {
+      if (response.status === 204) return undefined as T;
+      return response.json() as Promise<T>;
+    }
     const body = await response.json().catch(() => ({ message: "No se pudo completar la solicitud" }));
+    // This exact response is emitted by require_csrf before endpoint execution
+    // or idempotency reservation. Other failures may have applied the action.
+    if (attempt === 0 && scope && response.status === 403 && body.detail === "Invalid CSRF token"
+      && ["POST", "PUT", "PATCH", "DELETE"].includes(options.method ?? "GET")) {
+      const token = await refreshRejectedCsrf(scope);
+      init?.signal?.throwIfAborted();
+      if (token && sameCsrfOwner(scope)) {
+        options.headers = { ...options.headers, "X-CSRF-Token": token };
+        // Reuse the exact body, idempotency key and deletion confirmation.
+        continue;
+      }
+    }
     if (response.status === 401 && path !== "/auth/me" && path !== "/auth/login") {
       window.dispatchEvent(new Event("hermes-control:unauthorized"));
     }
     throw new ApiError(response.status, String(body.message ?? body.detail ?? "No se pudo completar la solicitud"), typeof body.code === "string" ? body.code : undefined);
   }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
 }
 
 async function requestBlob(path: string): Promise<{ blob: Blob; filename?: string }> {

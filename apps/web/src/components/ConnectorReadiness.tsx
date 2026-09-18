@@ -14,7 +14,8 @@ type Readiness = "waitingConnector" | "waitingHermes" | "needsSetup" | "ready" |
 export function ConnectorReadiness({ computer }: { computer: ConnectorView }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const csrfToken = useAppStore((state) => state.csrfToken);
+  const userId = useAppStore((state) => state.userId);
+  const authGeneration = useAppStore((state) => state.authGeneration);
   const offline = useAppStore((state) => state.authState !== "authenticated");
   const [readiness, setReadiness] = useState<Readiness>("waitingConnector");
   const [availableProfiles, setAvailableProfiles] = useState<Profile[]>([]);
@@ -34,7 +35,7 @@ export function ConnectorReadiness({ computer }: { computer: ConnectorView }) {
       try {
         const [computers, projection] = await Promise.all([api.connectors(), api.bootstrap()]);
         const current = useAppStore.getState();
-        if (!active || current.authState !== "authenticated" || current.csrfToken !== csrfToken) return;
+        if (!active || current.authState !== "authenticated" || current.userId !== userId || current.authGeneration !== authGeneration) return;
         const linked = computers.items.find((item) => item.id === computer.id);
         current.hydrateBootstrap(projection);
         if (linked?.status === "revoked") { setReadiness("revoked"); setAvailableProfiles([]); return; }
@@ -53,7 +54,7 @@ export function ConnectorReadiness({ computer }: { computer: ConnectorView }) {
     void load();
     const timer = window.setInterval(() => { if (document.visibilityState !== "hidden") void load(); }, 3_000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [computer.id, computer.gatewayId, csrfToken, offline, revision]);
+  }, [computer.id, computer.gatewayId, userId, authGeneration, offline, revision]);
 
   const openChat = async () => {
     if (creatingRef.current || offline || readiness !== "ready" || !availableProfiles.some((profile) => profile.id === profileId)) return;
@@ -64,7 +65,7 @@ export function ConnectorReadiness({ computer }: { computer: ConnectorView }) {
       const session = await createChatForCurrentContext();
       if (!session) { setChatError(true); return; }
       const current = useAppStore.getState();
-      if (current.authState !== "authenticated" || current.csrfToken !== csrfToken) return;
+      if (current.authState !== "authenticated" || current.userId !== userId || current.authGeneration !== authGeneration) return;
       current.selectSession(session.id);
       await navigate({ to: "/chats" });
     } catch { setChatError(true); }

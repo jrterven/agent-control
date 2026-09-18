@@ -6,6 +6,24 @@ const message = (id: string, sessionId: string, update: Partial<ChatMessage> = {
   id, sessionId, role: "assistant", content: id, createdAt: "10:00", ...update,
 });
 
+describe("authentication lifetime", () => {
+  it("preserves pending work across verified CSRF renewal and invalidates it across authentication changes", () => {
+    useAppStore.getState().resetPrivateState();
+    useAppStore.getState().setAuth("authenticated", "Owner A", "old-csrf", false, "owner-a");
+    const generation = useAppStore.getState().authGeneration;
+    useAppStore.setState({ csrfToken: "fresh-csrf" });
+    expect(useAppStore.getState().authGeneration).toBe(generation);
+    useAppStore.getState().setAuth("authenticated", "Owner A", "fresh-csrf", false, "owner-a");
+    expect(useAppStore.getState().authGeneration).toBe(generation);
+
+    useAppStore.getState().setAuth("unauthenticated");
+    useAppStore.getState().setAuth("authenticated", "Owner A", "new-login-csrf", false, "owner-a");
+    expect(useAppStore.getState().authGeneration).toBe(generation + 2);
+    useAppStore.getState().resetPrivateState(true);
+    expect(useAppStore.getState().authGeneration).toBe(generation + 3);
+  });
+});
+
 describe("session history reconciliation", () => {
   beforeEach(() => {
     useAppStore.setState({

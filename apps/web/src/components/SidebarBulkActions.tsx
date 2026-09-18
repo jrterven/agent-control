@@ -15,6 +15,7 @@ export function useSidebarBulkSelection() {
   const profiles = useAppStore((state) => state.profiles);
   const selectedGatewayId = useAppStore((state) => state.selectedGatewayId);
   const authState = useAppStore((state) => state.authState);
+  const authGeneration = useAppStore((state) => state.authGeneration);
   const userId = useAppStore((state) => state.userId);
   const demoMode = useAppStore((state) => state.demoMode);
   const disabled = authState !== "authenticated" || demoMode;
@@ -43,7 +44,7 @@ export function useSidebarBulkSelection() {
     setError("");
     setAnnouncement("");
     return () => { generationRef.current += 1; };
-  }, [selectedGatewayId, userId, disabled]);
+  }, [selectedGatewayId, userId, authGeneration, disabled]);
 
   useEffect(() => {
     const existingIds = new Set(sessions.map((session) => session.id));
@@ -107,9 +108,9 @@ export function useSidebarBulkSelection() {
     const destination = workspaceId;
     const generation = generationRef.current;
     const state = useAppStore.getState();
-    const csrfToken = state.csrfToken;
     const isSameScope = () => useAppStore.getState().selectedGatewayId === selectedGatewayId
       && useAppStore.getState().userId === userId
+      && useAppStore.getState().authGeneration === authGeneration
       && useAppStore.getState().authState === "authenticated"
       && !useAppStore.getState().demoMode;
     const isCurrent = () => generationRef.current === generation && isSameScope();
@@ -124,6 +125,7 @@ export function useSidebarBulkSelection() {
       for (let start = 0; start < targets.length; start += 4) {
         if (!isCurrent()) return;
         const batch = targets.slice(start, start + 4);
+        const csrfToken = useAppStore.getState().csrfToken;
         const results = await Promise.allSettled(batch.map(async (session) => {
           if (action === "delete") {
             await api.deleteSessionFromHermes(session.id, session.storedSessionId, csrfToken);

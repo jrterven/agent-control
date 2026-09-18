@@ -21,6 +21,7 @@ type AuthState = "checking" | "authenticated" | "offline" | "unauthenticated";
 
 type AppState = {
   authState: AuthState;
+  authGeneration: number;
   userName: string;
   userId?: string;
   csrfToken?: string;
@@ -167,6 +168,7 @@ function withoutSessions(state: AppState, sessionIds: Set<string>): Partial<AppS
 
 export const useAppStore = create<AppState>((set) => ({
   authState: "checking",
+  authGeneration: 0,
   leftDrawerOpen: false,
   desktopSidebarOpen: readDesktopSidebarOpen(),
   activityOpen: false,
@@ -180,10 +182,20 @@ export const useAppStore = create<AppState>((set) => ({
   offlineCacheEnabled: false,
   ...emptyPrivateState,
   setAuth: (authState, userName = "Administrador", csrfToken, demoMode = false, userId) => set((state) => {
+    const nextUserId = authState === "unauthenticated" ? undefined : userId ?? state.userId;
+    const nextToken = authState === "unauthenticated" ? undefined : csrfToken;
+    // Authentication transitions invalidate pending work, including a logout
+    // followed by login as the same owner. A verified CSRF refresh updates only
+    // csrfToken directly and deliberately retains this lifetime identifier.
+    const authGeneration = state.authGeneration + Number(
+      state.authState !== authState || state.userId !== nextUserId
+      || state.csrfToken !== nextToken || state.demoMode !== demoMode,
+    );
     if (authState === "unauthenticated") {
       return {
         ...emptyPrivateState,
         authState,
+        authGeneration,
         theme: state.theme,
         timeZone: state.timeZone,
         advancedMode: state.advancedMode,
@@ -206,7 +218,8 @@ export const useAppStore = create<AppState>((set) => ({
     return {
       ...(changedOwner ? emptyPrivateState : {}),
       authState,
-      userId: userId ?? state.userId,
+      authGeneration,
+      userId: nextUserId,
       userName,
       csrfToken,
       demoMode,
@@ -396,6 +409,7 @@ export const useAppStore = create<AppState>((set) => ({
   resetPrivateState: (retainAuthState = false) => set((state) => ({
     ...emptyPrivateState,
     authState: retainAuthState ? state.authState : "unauthenticated",
+    authGeneration: state.authGeneration + 1,
     theme: state.theme,
     timeZone: state.timeZone,
     advancedMode: state.advancedMode,

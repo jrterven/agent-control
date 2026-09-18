@@ -110,6 +110,19 @@ describe("hosted sign-in", () => {
 });
 
 describe("computer pairing", () => {
+  it("shows successful pairing after a same-account CSRF renewal", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "inspectConnectorPairing").mockResolvedValue(pairing);
+    vi.spyOn(api, "approveConnectorPairing").mockImplementation(async () => {
+      useAppStore.setState({ csrfToken: "renewed-csrf" });
+      return connector;
+    });
+    render(<ConnectorPairingForm initialCode={pairing.code} />);
+    await user.click(screen.getByRole("button", { name: "Review computer" }));
+    await user.click(screen.getByRole("button", { name: "Connect selected profiles" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Computer linked");
+  });
+
   it("reviews the computer and submits only the explicitly selected profiles", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "inspectConnectorPairing").mockResolvedValue(pairing);

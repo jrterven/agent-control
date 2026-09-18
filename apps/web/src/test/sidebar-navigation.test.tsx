@@ -40,6 +40,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   useCloudConfigurationStore.setState({ methods: undefined });
 });
 
@@ -90,6 +91,46 @@ describe("equipment selector", () => {
 });
 
 describe("new chat navigation", () => {
+  it("opens a successfully recovered chat after its CSRF token is renewed", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ userId: "owner-a" });
+    const generation = useAppStore.getState().authGeneration;
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ detail: "Invalid CSRF token" }, 403))
+      .mockResolvedValueOnce(json({ id: "owner-a", csrfToken: "fresh-csrf" }))
+      .mockResolvedValueOnce(json(newSession));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<LeftSidebar />);
+
+    await user.click(screen.getByRole("button", { name: "Nuevo chat" }));
+
+    await waitFor(() => expect(navigation.navigate).toHaveBeenCalledWith({ to: "/chats" }));
+    expect(useAppStore.getState()).toMatchObject({ selectedSessionId: newSession.id, csrfToken: "fresh-csrf", authGeneration: generation });
+    expect(useAppStore.getState().sessions.filter((session) => session.id === newSession.id)).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(["/api/v1/sessions", "/api/v1/auth/me", "/api/v1/sessions"]);
+  });
+
+  it("discards a completed chat after signing out and back in as the same owner", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ userId: "owner-a" });
+    let finish!: (session: SessionSummary) => void;
+    vi.spyOn(api, "createSession").mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    render(<LeftSidebar />);
+    await user.click(screen.getByRole("button", { name: "Nuevo chat" }));
+
+    await act(async () => {
+      useAppStore.getState().setAuth("unauthenticated");
+      useAppStore.getState().setAuth("authenticated", "Owner A", "new-login-csrf", false, "owner-a");
+      finish(newSession);
+    });
+
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(useAppStore.getState().sessions).toHaveLength(0);
+    expect(useAppStore.getState().selectedSessionId).toBe("");
+  });
+
   it.each(["/computers", "/settings"])("opens one blank chat from %s after creation, preserving its context", async (pathname) => {
     navigation.pathname = pathname;
     const user = userEvent.setup();

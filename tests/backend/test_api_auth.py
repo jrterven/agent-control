@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from starlette.websockets import WebSocketDisconnect
 
-from hermes_control_api.models import ProfileRef
+from hermes_control_api.models import AuditEvent, IdempotencyOperation, ProfileRef, SessionLink
 
 from .conftest import mutation_headers
 
@@ -99,6 +99,79 @@ def test_csrf_is_stable_across_tabs_and_generic_mutations_are_idempotent(authent
 
     workspaces = client.get("/api/v1/workspaces").json()
     assert sum(item["name"] == "Idempotent workspace" for item in workspaces) == 1
+
+
+def test_stale_csrf_after_another_login_rejects_move_before_mutation_and_idempotency(
+    authenticated, app
+):
+    client, original_csrf = authenticated
+    identity = client.get("/api/v1/auth/me").json()
+    profile = next(
+        row
+        for row in client.get("/api/v1/bootstrap").json()["profiles"]
+        if row["technicalName"] == "control-dev"
+    )
+    created = client.post(
+        "/api/v1/sessions",
+        headers=mutation_headers(original_csrf, "stale-csrf-source"),
+        json={"profileId": profile["id"]},
+    )
+    assert created.status_code == 201, created.text
+    session_id = created.json()["id"]
+    workspace = client.post(
+        "/api/v1/workspaces",
+        headers=mutation_headers(original_csrf, "stale-csrf-destination"),
+        json={"name": "Move destination"},
+    )
+    assert workspace.status_code == 201, workspace.text
+    payload = {"workspaceId": workspace.json()["id"]}
+    path = f"/api/v1/sessions/{session_id}"
+    key = "stale-csrf-move"
+
+    # Another tab's login replaces the shared cookie while the first tab keeps
+    # the synchronizer token it originally received in memory.
+    original_cookie = client.cookies.get("hc_session")
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"username": "admin", "password": "correct horse battery staple"},
+    )
+    assert login.status_code == 200, login.text
+    assert client.cookies.get("hc_session") != original_cookie
+    assert login.json()["csrfToken"] != original_csrf
+    rejected = client.patch(
+        path, headers=mutation_headers(original_csrf, key), json=payload
+    )
+    assert rejected.status_code == 403
+    assert rejected.json() == {"detail": "Invalid CSRF token"}
+    with app.state.session_factory() as db:
+        assert db.get(SessionLink, session_id).workspace_id is None
+        assert db.scalar(select(IdempotencyOperation).where(
+            IdempotencyOperation.idempotency_key == key
+        )) is None
+        assert db.scalar(select(AuditEvent).where(
+            AuditEvent.target_id == session_id,
+            AuditEvent.action == "session.update",
+        )) is None
+
+    refreshed = client.get("/api/v1/auth/me")
+    assert refreshed.status_code == 200
+    assert refreshed.json()["id"] == identity["id"]
+    headers = mutation_headers(refreshed.json()["csrfToken"], key)
+    moved = client.patch(path, headers=headers, json=payload)
+    replay = client.patch(path, headers=headers, json=payload)
+    assert moved.status_code == replay.status_code == 200
+    assert moved.json()["workspaceId"] == payload["workspaceId"]
+    assert replay.json() == moved.json()
+    assert replay.headers["X-Idempotent-Replay"] == "true"
+    with app.state.session_factory() as db:
+        assert db.get(SessionLink, session_id).workspace_id == payload["workspaceId"]
+        assert len(db.scalars(select(IdempotencyOperation).where(
+            IdempotencyOperation.idempotency_key == key
+        )).all()) == 1
+        assert len(db.scalars(select(AuditEvent).where(
+            AuditEvent.target_id == session_id,
+            AuditEvent.action == "session.update",
+        )).all()) == 1
 
 
 def test_ticket_is_one_use(authenticated):

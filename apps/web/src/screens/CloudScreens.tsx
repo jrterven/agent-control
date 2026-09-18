@@ -11,11 +11,19 @@ import { useAppStore } from "../store/appStore";
 import { CloudInstallerOptions } from "../components/CloudInstallerOptions";
 import { ConnectorReadiness } from "../components/ConnectorReadiness";
 
-async function refreshAccountBootstrap(csrfToken?: string) {
+type AccountScope = Pick<ReturnType<typeof useAppStore.getState>, "userId" | "authGeneration">;
+
+function isCurrentAccount(scope: AccountScope) {
+  const current = useAppStore.getState();
+  return current.authState === "authenticated" && current.userId === scope.userId && current.authGeneration === scope.authGeneration;
+}
+
+async function refreshAccountBootstrap(scope: AccountScope) {
+  if (!isCurrentAccount(scope)) return;
   const projection = await api.bootstrap();
   const current = useAppStore.getState();
   // Do not hydrate a response from an account that signed out while it loaded.
-  if (current.authState === "authenticated" && current.csrfToken === csrfToken) current.hydrateBootstrap(projection);
+  if (isCurrentAccount(scope) && (!projection.userId || projection.userId === scope.userId)) current.hydrateBootstrap(projection);
 }
 
 export function CloudEmptyState() {
@@ -82,10 +90,10 @@ export function ConnectorPairingForm({ initialCode = "" }: { initialCode?: strin
     if (!pairing || busy || expired || offline) return;
     if (!profiles.length) { setError("cloud.selectProfile"); return; }
     setBusy("approve"); setError("");
+    const scope = useAppStore.getState();
     try {
       const result = await api.approveConnectorPairing(pairing.code, profiles, csrfToken);
-      const current = useAppStore.getState();
-      if (current.authState !== "authenticated" || current.csrfToken !== csrfToken) return;
+      if (!isCurrentAccount(scope)) return;
       setConnected(result); setPairing(null); setCode("");
     } catch (cause) { setError(pairingErrorKey(cause)); }
     finally { setBusy(null); }
@@ -153,11 +161,13 @@ export function ConnectorsScreen({ pairing = false }: { pairing?: boolean }) {
   const revoke = async () => {
     if (!revokeId || revoking || offline) return;
     setRevoking(true); setError("");
+    const scope = useAppStore.getState();
     try {
       await api.revokeConnector(revokeId, csrfToken);
+      if (!isCurrentAccount(scope)) return;
       setData((current) => current ? { ...current, items: current.items.map((item) => item.id === revokeId ? { ...item, status: "revoked" } : item) } : current);
       setRevokeId(null); setRevision((value) => value + 1);
-      await refreshAccountBootstrap(csrfToken).catch(() => undefined);
+      await refreshAccountBootstrap(scope).catch(() => undefined);
     } catch { setError("cloud.revokeError"); }
     finally { setRevoking(false); }
   };

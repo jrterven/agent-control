@@ -1492,12 +1492,12 @@ export async function createChatForCurrentContext() {
     const current = useAppStore.getState();
     // A request can finish after logout or an account switch. Its session must
     // never be projected into the new account's sidebar or selected for it.
-    if (current.authState !== "authenticated" || current.userId !== state.userId || current.csrfToken !== state.csrfToken) return undefined;
+    if (current.authState !== "authenticated" || current.userId !== state.userId || current.authGeneration !== state.authGeneration) return undefined;
     current.addSession(session);
     return session;
   } catch (error) {
     const current = useAppStore.getState();
-    if (current.authState === "authenticated" && current.userId === state.userId && current.csrfToken === state.csrfToken) current.setConnection("degraded");
+    if (current.authState === "authenticated" && current.userId === state.userId && current.authGeneration === state.authGeneration) current.setConnection("degraded");
     throw error;
   }
 }
