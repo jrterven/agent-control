@@ -2,6 +2,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 import json
+import socket
 import ssl
 import urllib.error
 from unittest.mock import AsyncMock
@@ -93,6 +94,60 @@ async def test_wss_uses_bundled_roots_and_verifies_identity(tmp_path, monkeypatc
                 with pytest.raises(ssl.SSLCertVerificationError):
                     await asyncio.wait_for(runtime._connection(), 5)
                 assert not received
+        finally:
+            runtime.ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_wss_falls_back_when_first_ipv6_address_never_connects(tmp_path, monkeypatch, local_tls):
+    ca_path, server_context = local_tls
+    monkeypatch.setattr(tls.certifi, "where", lambda: str(ca_path))
+    loop = asyncio.get_running_loop()
+    getaddrinfo, sock_connect, real_connect = loop.getaddrinfo, loop.sock_connect, module.connect
+    attempts, options, received = [], [], []
+    ipv6_cancelled = asyncio.Event()
+
+    async def dual_stack(host, port, **kwargs):
+        if host == "localhost":
+            return [(socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("::1", port, 0, 0)),
+                    (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.1", port))]
+        return await getaddrinfo(host, port, **kwargs)
+
+    async def first_address_blackhole(sock, address):
+        attempts.append(sock.family)
+        if sock.family == socket.AF_INET6:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                ipv6_cancelled.set()
+        else:
+            await sock_connect(sock, address)
+
+    def verified_connect(uri, **kwargs):
+        options.append(kwargs)
+        return real_connect(uri, **kwargs)
+
+    async def peer(websocket):
+        for frame in frames({"v": 1, "type": "welcome", "gatewayId": "gateway", "profiles": ["default"]}):
+            await websocket.send(frame)
+        received.append(FrameReader().feed(await websocket.recv()))
+
+    monkeypatch.setattr(loop, "getaddrinfo", dual_stack)
+    monkeypatch.setattr(loop, "sock_connect", first_address_blackhole)
+    monkeypatch.setattr(module, "connect", verified_connect)
+    async with serve(peer, "127.0.0.1", 0, ssl=server_context) as server:
+        runtime = connector(tmp_path, f"https://localhost:{server.sockets[0].getsockname()[1]}")
+        try:
+            # Serial address attempts hang here; Happy Eyeballs reaches IPv4
+            # while IPv6 remains pending and still verifies the DNS hostname.
+            await asyncio.wait_for(runtime._connection(), 3)
+            assert attempts[:2] == [socket.AF_INET6, socket.AF_INET]
+            assert ipv6_cancelled.is_set()
+            assert received[0]["type"] == "event"
+            assert options[0]["happy_eyeballs_delay"] == 0.25
+            assert options[0]["ssl"].check_hostname is True
+            assert options[0]["ssl"].verify_mode == ssl.CERT_REQUIRED
+            assert "family" not in options[0]
         finally:
             runtime.ledger.close()
 

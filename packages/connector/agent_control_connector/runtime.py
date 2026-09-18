@@ -414,6 +414,7 @@ class ConnectorRuntime:
         async with connect(url, additional_headers={"Authorization": "Bearer " + self.secrets["accessToken"]},
                            max_size=MAX_FRAME_BYTES, max_queue=8, ping_interval=15, ping_timeout=30,
                            open_timeout=15, close_timeout=5, compression=None, proxy=None,
+                           happy_eyeballs_delay=0.25,
                            ssl=cloud_ssl_context()) as websocket:
             reader = FrameReader()
             welcome = None
