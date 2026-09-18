@@ -765,17 +765,17 @@ function toolFromHistory(item: Record<string, unknown>, fallbackId: string): Too
 
 function mediaFromHistory(item: Record<string, unknown>) {
   if (!Array.isArray(item.controlMedia)) return [];
-  return item.controlMedia.slice(0, 16).flatMap((value) => {
+  return item.controlMedia.slice(0, 40).flatMap((value) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return [];
     const media = value as Record<string, unknown>;
     if (
-      media.kind !== "audio"
+      (media.kind !== "audio" && media.kind !== "image")
       || typeof media.id !== "string"
       || !/^[0-9a-f]{32}$/.test(media.id)
       || typeof media.mediaType !== "string"
-      || !media.mediaType.startsWith("audio/")
+      || (media.kind === "audio" ? !media.mediaType.startsWith("audio/") : !["image/png", "image/jpeg", "image/webp"].includes(media.mediaType))
     ) return [];
-    return [{ id: media.id, kind: "audio" as const, mediaType: media.mediaType }];
+    return [{ id: media.id, kind: media.kind as "audio" | "image", mediaType: media.mediaType }];
   });
 }
 

@@ -11,6 +11,7 @@ from pathlib import Path
 import random
 import re
 import ssl
+import sqlite3
 from typing import Any
 from uuid import uuid4
 
@@ -25,6 +26,9 @@ from . import __version__
 from .media import project_media, read_media
 from .storage import OperationLedger, atomic_json
 from .tls import cloud_ssl_context
+from .media_install import media_profiles
+from .hermes_media_plugin import queue_directory, validate_policy
+from .visual_media import acknowledge as acknowledge_media, next_publication, profile_home
 
 ACTIVE = {"pending", "queued", "accepted", "starting", "streaming", "running", "working", "waiting"}
 SAFE_PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$")
@@ -71,6 +75,20 @@ class ConnectorRuntime:
         self.closed = False
         self.active_work: bool | None = None
         self.connection_error: str | None = None
+        self.visual_media_supported = False
+        self.media_states: dict[str, dict] = {}
+        self.media_pending: dict[str, str] = {}
+        self.media_install_at = 0.0
+        self.visual_media_limits = validate_policy(None)
+
+    def _save_media_policy(self, profiles=None):
+        for profile in profiles or self.config["profiles"]:
+            try:
+                home = profile_home(Path(self.config["hermesHome"]), profile)
+                queue_directory(home)
+                atomic_json(home / ".agent-control/media/policy.json", self.visual_media_limits)
+            except (OSError, ValueError):
+                self.media_states[profile] = {"state": "policyUnavailable"}
 
     async def on_event(self, event: NormalizedEvent):
         if event.profile_name not in self.providers:
@@ -107,8 +125,45 @@ class ConnectorRuntime:
         while self.websocket is websocket:
             await send_message(websocket.send, self.send_lock, {"v": VERSION, "type": "heartbeat", "version": __version__,
                 "profiles": {name: {"generation": provider.runtime_generation,
-                    "inventoryComplete": provider.session_inventory_complete} for name, provider in self.providers.items()}})
+                    "inventoryComplete": provider.session_inventory_complete,
+                    "visualMedia": self.media_states.get(name, {"state": "pendingActivation"})} for name, provider in self.providers.items()}})
             await asyncio.sleep(15)
+
+    async def _media_sender(self, websocket):
+        while self.websocket is websocket:
+            for profile, provider in tuple(self.providers.items()):
+                try:
+                    home = profile_home(Path(self.config["hermesHome"]), profile)
+                    # Do not create outboxes just because an old profile exists.
+                    if not (home / ".agent-control/media/outbox.sqlite3").is_file():
+                        continue
+                    publication = await asyncio.to_thread(next_publication, home, profile)
+                    if publication is None:
+                        continue
+                    # Bind every publication to an actual stored session on this
+                    # provider. Never import another profile's files or route.
+                    await asyncio.wait_for(provider.history_readonly(publication["sessionId"]), 15)
+                    self.media_pending[publication["id"]] = profile
+                    await send_message(websocket.send, self.send_lock, publication)
+                except SessionHistoryNotFound:
+                    await asyncio.to_thread(acknowledge_media, home, publication["id"], "failed", "forbidden")
+                except (OSError, ValueError, ConnectionError, TimeoutError):
+                    # Durable outbox retries after reconnect or transient local failure.
+                    continue
+                except sqlite3.Error:
+                    self.media_states[profile] = {"state": "outboxUnavailable"}
+            await asyncio.sleep(.25)
+
+    async def _media_acknowledge(self, message):
+        identifier = message.get("id")
+        if not isinstance(identifier, str) or not re.fullmatch(r"[a-f0-9]{32}", identifier) or message.get("status") not in {"ready", "failed"}:
+            raise ProtocolError("Invalid media acknowledgement")
+        error = message.get("errorCode")
+        if error is not None and (not isinstance(error, str) or not re.fullmatch(r"[a-zA-Z0-9_]{1,80}", error)):
+            raise ProtocolError("Invalid media acknowledgement")
+        profile = self.media_pending.pop(identifier, None)
+        if profile:
+            await asyncio.to_thread(acknowledge_media, profile_home(Path(self.config["hermesHome"]), profile), identifier, message["status"], error)
 
     async def _status_loop(self):
         while not self.closed:
@@ -136,11 +191,15 @@ class ConnectorRuntime:
             if self.tasks:
                 active = True
             self.active_work = active
+            now = asyncio.get_running_loop().time()
+            if self.visual_media_supported and now >= self.media_install_at:
+                self.media_states = await asyncio.to_thread(media_profiles, self.config, install=active is False)
+                self.media_install_at = now + 30
             atomic_json(self.directory / "status.json", {"activeWork": active, "fresh": True,
                 "observedAt": datetime.now(timezone.utc).isoformat(), "connected": self.websocket is not None,
                 "connectionError": self.connection_error,
                 "version": __version__, "maintenance": maintenance_request_id is not None,
-                "maintenanceRequestId": maintenance_request_id})
+                "maintenanceRequestId": maintenance_request_id, "visualMedia": self.media_states})
             await asyncio.sleep(3)
 
     async def execute(self, message: dict):
@@ -206,6 +265,15 @@ class ConnectorRuntime:
                 self.config["profiles"] = list(dict.fromkeys([*self.config["profiles"], name]))
                 atomic_json(self.directory / "config.json", self.config)
                 self.providers[name] = self.provider_factory(replace(provider.connection, profile_name=name), self.on_event)
+                if self.visual_media_supported:
+                    try:
+                        await asyncio.to_thread(self._save_media_policy, [name])
+                        # Newly created profiles cannot have active agent work
+                        # yet; install before returning the creation receipt.
+                        self.media_states.update(await asyncio.to_thread(media_profiles,
+                            {**self.config, "profiles": [name]}, install=True))
+                    except (OSError, ValueError):
+                        self.media_states[name] = {"state": "installationFailed"}
             if operation in {"history", "history_readonly"}:
                 session_id = args[0].stored_session_id if operation == "history" else args[0]
                 result = project_media(result, Path(self.config["hermesHome"]), profile, session_id)
@@ -251,6 +319,15 @@ class ConnectorRuntime:
                 welcome = reader.feed(await asyncio.wait_for(websocket.recv(), 20))
             if welcome.get("type") != "welcome" or welcome.get("gatewayId") != self.gateway_id or not set(self.providers) <= set(welcome.get("profiles", [])):
                 raise ProtocolError("Cloud identity or approved profiles changed; pair again")
+            capabilities = welcome.get("capabilities")
+            visual_media_supported = isinstance(capabilities, dict) and capabilities.get("visualMediaV1") is True
+            if visual_media_supported:
+                try:
+                    self.visual_media_limits = validate_policy(welcome.get("visualMediaLimits"))
+                except ValueError as error:
+                    raise ProtocolError("Invalid visual media policy") from error
+                await asyncio.to_thread(self._save_media_policy)
+            self.visual_media_supported = visual_media_supported
             self.websocket = websocket
             self.connection_error = None
             # New cloud process may have lost its replay cursor; always request an
@@ -262,6 +339,7 @@ class ConnectorRuntime:
             self.replay_lost = False
             sender = asyncio.create_task(self._event_sender(websocket))
             heartbeat = asyncio.create_task(self._heartbeat(websocket))
+            media_sender = asyncio.create_task(self._media_sender(websocket)) if self.visual_media_supported else None
             try:
                 async for raw in websocket:
                     message = reader.feed(raw)
@@ -269,6 +347,8 @@ class ConnectorRuntime:
                         continue
                     if message.get("type") == "ack":
                         self._acknowledge(message.get("sequence"))
+                    elif message.get("type") == "media.ack" and self.visual_media_supported:
+                        await self._media_acknowledge(message)
                     elif message.get("type") == "request":
                         if len(self.tasks) >= 8:
                             raise ProtocolError("Too many connector operations")
@@ -281,7 +361,10 @@ class ConnectorRuntime:
                 self.websocket = None
                 sender.cancel()
                 heartbeat.cancel()
-                await asyncio.gather(sender, heartbeat, return_exceptions=True)
+                if media_sender:
+                    media_sender.cancel()
+                await asyncio.gather(sender, heartbeat, *([media_sender] if media_sender else []), return_exceptions=True)
+                self.media_pending.clear()
                 # Deliberately keep local providers and dispatched operations alive.
 
     async def run(self):

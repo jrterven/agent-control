@@ -5,6 +5,7 @@ import contextlib
 import hmac
 import secrets
 import shlex
+import re
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from typing import Literal
@@ -24,6 +25,68 @@ from ..remote_provider import ConnectorLink
 from ..security import random_token, token_hash
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
+
+
+def _ingest_image(state, connector_id: str, message: dict) -> dict:
+    # A fresh DB session belongs to this worker, never the WebSocket event loop.
+    from ..visual_media import get_visual_media_service
+    with state.session_factory() as db:
+        connector = db.get(Connector, connector_id)
+        if connector is None:
+            return {"id": message["id"], "status": "failed", "errorCode": "forbidden"}
+        return get_visual_media_service(state.services).ingest(
+            db, connector, media_id=message["id"], profile_name=message["profile"],
+            stored_session_id=message["sessionId"], metadata=message["metadata"],
+            content=message["content"], thumbnail=message.get("thumbnail"),
+        )
+
+
+async def _publish_image(state, link, connector_id: str, message: dict) -> None:
+    try:
+        try:
+            result = await asyncio.to_thread(_ingest_image, state, connector_id, message)
+        except Exception:
+            # Storage/network errors are retryable; never send exception details,
+            # object-store credentials or local paths back to the connector.
+            result = {"id": message["id"], "status": "failed", "errorCode": "storage_unavailable"}
+        with contextlib.suppress(Exception):
+            await send_message(link.send_bytes, link.lock, {"v": VERSION, "type": "media.ack", **result})
+    finally:
+        state.cloud_mutations_inflight -= 1
+        state.visual_publications_inflight -= 1
+
+
+async def _accept_image(state, link, connector_id: str, message: dict, publications: set) -> None:
+    if (message.get("v") != VERSION or not isinstance(message.get("id"), str)
+            or not re.fullmatch(r"[a-f0-9]{32}", message["id"])
+            or not isinstance(message.get("profile"), str)
+            or not isinstance(message.get("sessionId"), str)
+            or not 1 <= len(message["sessionId"]) <= 255
+            or not isinstance(message.get("metadata"), dict)
+            or not isinstance(message.get("content"), bytes)
+            or (message.get("thumbnail") is not None and not isinstance(message["thumbnail"], bytes))):
+        raise ProtocolError("Invalid image publication")
+    error = None
+    if message["profile"] not in link.profiles:
+        error = "forbidden"
+    elif len(message["content"]) > state.settings.visual_media_max_bytes or len(message.get("thumbnail") or b"") > state.settings.visual_media_max_bytes:
+        error = "invalid_image"
+    elif getattr(state, "cloud_draining", False):
+        error = "draining"
+    elif len(publications) >= 2 or getattr(state, "visual_publications_inflight", 0) >= 2:
+        error = "storage_unavailable"
+    if error:
+        await send_message(link.send_bytes, link.lock, {
+            "v": VERSION, "type": "media.ack", "id": message["id"], "status": "failed", "errorCode": error,
+        })
+        return
+    # Admission and drain accounting are atomic on the event loop. Publications
+    # survive a socket reconnect, so a lost ACK can be retried idempotently.
+    state.cloud_mutations_inflight = getattr(state, "cloud_mutations_inflight", 0) + 1
+    state.visual_publications_inflight = getattr(state, "visual_publications_inflight", 0) + 1
+    task = asyncio.create_task(_publish_image(state, link, connector_id, message))
+    publications.add(task)
+    task.add_done_callback(publications.discard)
 
 
 class DeviceRequest(BaseModel):
@@ -216,6 +279,7 @@ async def connector_socket(websocket: WebSocket):
     reader = FrameReader()
     link = ConnectorLink(gateway_id, profiles, websocket.send_bytes, lambda: websocket.close(code=1001))
     registry = websocket.app.state.connector_registry
+    publications: set[asyncio.Task] = set()
 
     async def prepare_create(name):
         if not isinstance(name, str) or not PROFILE.fullmatch(name):
@@ -234,7 +298,17 @@ async def connector_socket(websocket: WebSocket):
     link.prepare_create = prepare_create
     await registry.register(link)
     try:
-        await send_message(link.send_bytes, link.lock, {"v": VERSION, "type": "welcome", "gatewayId": gateway_id, "profiles": sorted(profiles)})
+        from ..visual_media import get_visual_media_service
+        media = get_visual_media_service(websocket.app.state.services)
+        settings = websocket.app.state.settings
+        await send_message(link.send_bytes, link.lock, {"v": VERSION, "type": "welcome", "gatewayId": gateway_id, "profiles": sorted(profiles),
+            "capabilities": {"visualMediaV1": media.configured},
+            "visualMediaLimits": {
+                "maxBytes": settings.visual_media_max_bytes,
+                "maxPixels": settings.visual_media_max_pixels,
+                "maxImagesPerGallery": settings.visual_media_max_images_per_gallery,
+                "maxImagesPerResponse": settings.visual_media_max_images_per_response,
+            }})
         while True:
             raw = await asyncio.wait_for(websocket.receive_bytes(), 45)
             message = reader.feed(raw)
@@ -250,9 +324,16 @@ async def connector_socket(websocket: WebSocket):
                 if current.last_seen_at is None or (datetime.now(timezone.utc) - aware(current.last_seen_at)).total_seconds() >= 10:
                     current.last_seen_at = datetime.now(timezone.utc)
                     db.commit()
-            await registry.receive(link, message)
+            if message.get("type") == "media.publish":
+                await _accept_image(websocket.app.state, link, connector_id, message, publications)
+            else:
+                await registry.receive(link, message)
     except (WebSocketDisconnect, TimeoutError, ProtocolError, ValueError, RuntimeError):
         pass
     finally:
+        # Do not cancel a to_thread upload halfway through committing immutable
+        # objects. The durable sender will retry if the disconnected ACK is lost.
+        if publications:
+            await asyncio.shield(asyncio.gather(*publications, return_exceptions=True))
         with contextlib.suppress(Exception):
             await registry.disconnect(gateway_id, link)

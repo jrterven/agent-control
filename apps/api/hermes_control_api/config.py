@@ -62,6 +62,18 @@ class Settings(BaseSettings):
         ge=1,
         le=500 * 1024 * 1024,
     )
+    # Private product media storage. No local-disk fallback is permitted.
+    visual_media_endpoint_url: str | None = None
+    visual_media_bucket: str | None = None
+    visual_media_access_key_id: str | None = Field(default=None, repr=False)
+    visual_media_secret_access_key: str | None = Field(default=None, repr=False)
+    visual_media_region: str = "auto"
+    visual_media_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=10 * 1024 * 1024)
+    visual_media_max_pixels: int = Field(default=25_000_000, ge=1, le=25_000_000)
+    visual_media_max_images_per_gallery: int = Field(default=6, ge=1, le=6)
+    visual_media_max_images_per_response: int = Field(default=24, ge=1, le=24)
+    visual_media_quota_bytes: int = Field(default=5 * 1024 ** 3, ge=1)
+    visual_media_retention_days: int = Field(default=30, ge=1, le=365)
     # Hermes' official 0.20.5/0.20.6 dashboard status response doesn't expose
     # the installed commit.  This operator-supplied value is therefore the
     # only revision identity trusted for enabling audited write contracts.

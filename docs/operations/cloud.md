@@ -250,6 +250,10 @@ the runtime has stopped; it preserves Hermes data and operation deduplication.
 
 ## Updates, recovery and monitoring
 
+Image-capable releases must also follow [private media rollout and recovery](visual-media.md).
+The image archive belongs to the same restored database snapshot; backing up only
+PostgreSQL is insufficient once images are published.
+
 Run `deploy/cloud/backup.sh /etc/agent-control/compose.env /ABSOLUTE_BACKUP_DIR`
 daily and before every deployment. It creates a private PostgreSQL custom-format
 dump, restores it to an isolated database and verifies the schema before
@@ -330,6 +334,7 @@ vault key and does not prevent the service from reading them when needed.
 | --- | --- |
 | Accounts, external identities, invitations, computers, gateways, profiles, session metadata and audit records | PostgreSQL. Retained until explicit deletion or operator cleanup; there is no automatic account-deletion interface or general age-based cleanup policy. Revoking a computer blocks access but does not delete its records. |
 | Live voice transcripts (`LiveTranscript`) | Encrypted in PostgreSQL and retained until the associated conversation is deleted. These are persisted transcripts, not just data in transit. |
+| Published agent images and thumbnails | Private product R2 bucket; authorized by conversation and available with the connector offline. Retained while the conversation exists. Deletion withdraws access immediately and daily GC purges blobs after 30 days. Paired database/blob backups have separate 30-day retention. |
 | Email reference cache | Encrypted in PostgreSQL with a fixed seven-day TTL and at most 512 entries per session. Access does not extend the TTL. Expired records are removed lazily during cache operations, so physical deletion can occur after expiry. |
 | Conversation event replay buffers | Memory only, limited to 32 MiB across routes and 2 MiB per route, with an additional cap of at most 512 events per route. Entries are evicted under pressure and disappear on restart. These buffers are not a durable full conversation archive; persisted live voice transcripts remain subject to the separate rule above. |
 | Google authorization flows | Valid for ten minutes, consumed once. A subsequent authorization start removes expired flow records. |

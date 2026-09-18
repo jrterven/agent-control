@@ -1,5 +1,8 @@
 # Backup and restore
 
+For cloud images, use the [paired database/blob backup and restore procedure](visual-media.md#backup-restoration-and-deletion).
+A database-only cloud snapshot cannot recover published image content.
+
 SQLite and the vault master key must be recoverable, but must never be stored in
 the same backup artifact.
 

@@ -718,6 +718,10 @@ def bootstrap(
         "deploymentMode": app_services.settings.deployment_mode,
         "userId": user.id,
         "features": {
+            "images": {
+                "maxImagesPerGallery": app_services.settings.visual_media_max_images_per_gallery,
+                "maxImagesPerResponse": app_services.settings.visual_media_max_images_per_response,
+            },
             "voice": {"provider": voice_provider(db, user)},
             "live": {
                 "available": OpenAIIntegrationService(app_services.vault).configured(db, user),
@@ -1825,23 +1829,42 @@ async def open_session_email_reference(
     )
 
 
+@router.get("/sessions/{session_id}/media/{media_id}/metadata")
+async def session_media_metadata(
+    session_id: str, media_id: str, request: Request,
+    user: User = Depends(current_user), db: Session = Depends(get_db),
+) -> Response:
+    from ..visual_media import get_visual_media_service, public_metadata
+    service = SessionService(services(request))
+    row = service.owned(db, user, session_id)
+    image = get_visual_media_service(services(request)).authorized(db, user, row, media_id)
+    if image is None:
+        raise NotFoundError("Image unavailable")
+    return JSONResponse(public_metadata(image), headers={
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+    })
+
+
 @router.get("/sessions/{session_id}/media/{media_id}")
 async def session_media(
     session_id: str,
     media_id: str,
     request: Request,
+    variant: str = Query(default="full", pattern="^(thumbnail|full)$"),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> Response:
-    """Stream one history-bound voice note without exposing its host path."""
+    """Serve an authorized durable image or history-bound voice note."""
 
     service = SessionService(services(request))
     row = service.owned(db, user, session_id)
-    asset = await service.media(db, user, row, media_id)
+    asset = await service.media(db, user, row, media_id, variant)
     if asset.content is not None:
+        image_extension = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}.get(asset.media_type)
+        filename = f"{media_id}.{image_extension}" if image_extension else "voice-note"
         return Response(content=asset.content, media_type=asset.media_type, headers={
             "Cache-Control": "private, no-store",
-            "Content-Disposition": 'inline; filename="voice-note"',
+            "Content-Disposition": f'inline; filename="{filename}"',
             "X-Content-Type-Options": "nosniff",
         })
     assert asset.path is not None

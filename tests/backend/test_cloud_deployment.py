@@ -173,6 +173,15 @@ elif "pg_dump" in args:
     print("verified-archive")
 elif "pg_restore" in args:
     sys.stdin.buffer.read()
+elif "psql" in args and "to_regclass" in " ".join(args):
+    print("yes" if failure.startswith("media-") else "no")
+elif "hermes_control_api.visual_media" in args:
+    operation = args[args.index("hermes_control_api.visual_media")+1]
+    if failure == "media-verify" and operation == "verify-backup": sys.exit(44)
+    if operation == "backup":
+        mount = Path(args[args.index("--volume")+1].split(":")[0])
+        target = mount / Path(args[args.index("backup")+1]).name
+        (target / "manifest.json").write_text('{"version":1,"assets":[]}')
 elif "hermes_control_api.cloud_migrations" in args:
     if failure == "migration": sys.exit(42)
 elif "up" in args:
@@ -245,3 +254,24 @@ def test_release_refuses_a_contended_lock_before_touching_containers(fake_deploy
     assert result.returncode != 0
     assert commands == []
     assert old_image in config.read_text()
+
+
+def test_image_backup_is_restored_before_release_and_published_with_dump(fake_deployment):
+    run, _, backups, _, _ = fake_deployment
+    result, commands = run("media-success")
+    assert result.returncode == 0, result.stderr
+    operations = [row["args"] for row in commands]
+    export = next(i for i, args in enumerate(operations) if "hermes_control_api.visual_media" in args and "backup" in args)
+    restore = next(i for i, args in enumerate(operations) if "verify-backup" in args)
+    cutover = next(i for i, args in enumerate(operations) if "up" in args)
+    assert export < restore < cutover
+    assert len(list(backups.glob("*.dump.media.tar"))) == 1
+
+
+def test_failed_image_restore_blocks_cutover_and_cleans_staging(fake_deployment):
+    run, config, backups, old_image, _ = fake_deployment
+    result, commands = run("media-verify")
+    assert result.returncode != 0
+    assert old_image in config.read_text()
+    assert not any("up" in row["args"] for row in commands)
+    assert list(backups.iterdir()) == []

@@ -32,6 +32,51 @@ POSTGRES = os.environ.get("AGENT_CONTROL_TEST_POSTGRES_URL")
 pytestmark = pytest.mark.skipif(not POSTGRES, reason="Set AGENT_CONTROL_TEST_POSTGRES_URL for real PostgreSQL checks")
 
 
+def test_visual_media_quota_reservations_are_serialized(pg_url):
+    import io
+    from PIL import Image
+    from hermes_control_api.connector_models import Connector
+    from hermes_control_api.models import VisualMedia
+    from hermes_control_api.visual_media import VisualMediaService, normalize_image
+    migrate(pg_url)
+    cfg = settings(pg_url)
+    output = io.BytesIO()
+    Image.new("RGB", (80, 60), "red").save(output, format="PNG")
+    content = output.getvalue()
+    full, thumb, _, _, _ = normalize_image(content, cfg)
+    cfg = cfg.model_copy(update={"visual_media_quota_bytes": len(full) + len(thumb)})
+    factory = build_session_factory(build_engine(cfg))
+    with factory() as db:
+        owner = User(username="media-quota", password_hash="none")
+        db.add(owner)
+        db.flush()
+        gateway = Gateway(name="media-host", owner_id=owner.id, transport_kind="connector",
+                          rest_url="http://unused.invalid", ws_url="ws://unused.invalid")
+        db.add(gateway)
+        db.flush()
+        connector = Connector(owner_id=owner.id, gateway_id=gateway.id, name="Host", profiles=["jarvis"], token_hash="media-token")
+        db.add(connector)
+        db.commit()
+        connector_id = connector.id
+    class Store:
+        def put(self, key, data, media_type):
+            pass
+    service = VisualMediaService(cfg, Store())
+    ready = Barrier(2)
+    def submit(identifier):
+        with factory() as db:
+            connector = db.get(Connector, connector_id)
+            ready.wait(timeout=10)
+            return service.ingest(db, connector, media_id=identifier, profile_name="jarvis", stored_session_id="cron",
+                metadata=dict(alt="Figure", provenance="local", mediaType="image/png", width=80, height=60), content=content)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(submit, ["a" * 32, "b" * 32]))
+    assert sorted(result["status"] for result in results) == ["failed", "ready"]
+    assert next(result for result in results if result["status"] == "failed")["errorCode"] == "quota_exceeded"
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(VisualMedia)) == 1
+
+
 @pytest.fixture
 def pg_url():
     url = make_url(POSTGRES).set(drivername="postgresql+psycopg")
@@ -79,7 +124,7 @@ def test_postgresql_upgrade_preserves_private_resources_and_assigns_owner(pg_url
         assert db.execute(text("SELECT owner_id,transport_kind FROM gateways WHERE id='gateway'")).one() == ("admin", "direct")
         assert db.execute(text("SELECT id,title,last_sequence FROM session_links")).one() == ("session","Keep this title",91)
         assert db.execute(text("SELECT profile_name FROM profile_refs")).scalar_one() == "personal"
-        assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0024_managed_installation"
+        assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0025_visual_media"
     migrate(pg_url, "0021_live_transcripts", action="downgrade")
     migrate(pg_url)
     with engine.connect() as db:

@@ -7,7 +7,7 @@ name = "agent-control-connector"
 version = "0.1.0"
 description = "Outbound-only personal Hermes connector for Agent Control"
 requires-python = ">=3.12,<3.15"
-dependencies = ["hermes-control-client>=0.1.0", "httpx>=0.28,<1", "websockets>=14,<17", "certifi>=2024.8.30"]
+dependencies = ["hermes-control-client>=0.1.0", "httpx>=0.28,<1", "websockets>=14,<17", "certifi>=2024.8.30", "Pillow>=11.3,<13", "PyYAML>=6,<7"]
 
 [project.scripts]
 agent-control-connector = "agent_control_connector.cli:main"

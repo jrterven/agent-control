@@ -3,9 +3,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import ReactMarkdown from "react-markdown";
-import rehypeSanitize from "rehype-sanitize";
-import remarkGfm from "remark-gfm";
+import { MessageMarkdown } from "./MessageMarkdown";
 import { Badge, Button, IconButton } from "@hermes-control/ui";
 import { createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
 import { api } from "../lib/api";
@@ -558,21 +556,21 @@ function Message({ message, profile, agentName, speech, liveExplanation, automat
         <header><strong>{agentName}</strong><time>{message.createdAt}</time>{message.streaming ? <Badge tone="info">{t("chat.streaming")}</Badge> : null}</header>
         <div className="markdown-body">
           {message.content.trim() ? (
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{message.content}</ReactMarkdown>
+            <MessageMarkdown content={message.content} sessionId={message.sessionId} streaming={message.streaming} />
           ) : evidence.length ? (
             <ToolEvidenceDisclosure agentName={agentName} evidence={evidence} messageId={message.id} toolCount={message.tools?.length ?? 0} />
           ) : " "}
           {message.streaming ? <span className="stream-caret" aria-hidden="true" /> : null}
         </div>
         {message.emailReferences?.length ? <EmailReferences references={message.emailReferences} sessionId={message.sessionId} agentName={agentName} /> : null}
-        {message.media?.length ? (
+        {message.media?.some((media) => media.kind === "audio") ? (
           <div className="message-media">
-            {message.media.map((media, index) => (
+            {message.media.filter((media) => media.kind === "audio").map((media, index, audio) => (
               <VoiceNote
                 key={media.id}
                 media={media}
                 sessionId={message.sessionId}
-                number={message.media && message.media.length > 1 ? index + 1 : undefined}
+                number={audio.length > 1 ? index + 1 : undefined}
               />
             ))}
           </div>

@@ -81,6 +81,17 @@ describe("rehydrated Hermes tool history", () => {
     expect(screen.queryByRole("button", { name: /Herramientas · 2/i })).not.toBeInTheDocument();
   });
 
+  it("retains image media in history without duplicating positional galleries or creating an audio player", async () => {
+    const id = "a".repeat(32);
+    vi.spyOn(api, "imageMetadata").mockResolvedValue({ id, kind: "image", status: "ready", mediaType: "image/png", alt: "Diagrama", provenance: "generated" });
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({ sessionStatus: "ready", activeOperation: null, items: [{ id: "assistant-image", role: "assistant", content: `Antes\n\n![Diagrama](ac-media:${id})\n\nDespués`, controlMedia: [{ id, kind: "image", mediaType: "image/png" }] }] });
+    const { container } = render(<ReopenedChat />);
+    expect(await screen.findByRole("img", { name: "Diagrama" })).toBeVisible();
+    expect(screen.getAllByRole("region", { name: "Imágenes de la respuesta" })).toHaveLength(1);
+    expect(container.querySelector("audio")).not.toBeInTheDocument();
+    expect(useAppStore.getState().messages[0]?.media).toEqual([{ id, kind: "image", mediaType: "image/png" }]);
+  });
+
   it("renders an authenticated voice-note player instead of a private MEDIA path", async () => {
     vi.spyOn(api, "sessionHistory").mockResolvedValue({
       sessionStatus: "ready",

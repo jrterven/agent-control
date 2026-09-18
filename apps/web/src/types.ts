@@ -130,8 +130,23 @@ export type AgentActivityItem = {
 
 export type MessageMedia = {
   id: string;
-  kind: "audio";
+  kind: "audio" | "image";
   mediaType: string;
+};
+
+export type ImageMediaMetadata = {
+  id: string;
+  kind: "image";
+  status: "pending" | "ready" | "failed";
+  mediaType?: "image/png" | "image/jpeg" | "image/webp";
+  width?: number;
+  height?: number;
+  alt: string;
+  caption?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
+  provenance: "web" | "generated" | "local";
+  errorCode?: string;
 };
 
 export type MessageAttachment = {
@@ -180,6 +195,7 @@ export type SpeechFeature = {
 };
 
 export type ControlFeatures = {
+  images?: { maxImagesPerGallery: number; maxImagesPerResponse: number };
   dictation: DictationFeature;
   // Optional while an encrypted offline snapshot from a pre-TTS build is
   // being replaced by a fresh bootstrap response.

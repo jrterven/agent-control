@@ -132,6 +132,7 @@ completion alerts. You do not need Tailscale or a terminal on the phone.
 | Internationalization | English, Spanish, French, German and Portuguese with browser-language detection and an immediate device-only language preference. |
 | Installation | Signed connector packages for Linux/macOS on Intel and ARM; a managed Hermes installer for Linux and a signed, notarized DMG for Apple Silicon Macs. Explicit updates, diagnostics, rollback and data-preserving uninstall. |
 | Operations | Isolated cloud deployment with PostgreSQL, Google registration capped at 20 accounts, optional invitation-only access, immutable releases, idle-work checks, verified backups and public health/readiness/PWA checks. Private SQLite deployments and optional SSH/Tailscale workflows remain supported. |
+| Agent images | Inline Markdown images and responsive galleries, accessible zoom/navigation/downloads, source attribution and private durable storage. Requires the image-capable connector/plugin and a configured private product R2 bucket; see the [activation runbook](docs/operations/visual-media.md). |
 
 <table>
   <tr>

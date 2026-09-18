@@ -269,7 +269,10 @@ def main(argv=None):
     pairing.add_argument("--ws-url")
     pairing.add_argument("--profiles")
     credential_check = commands.add_parser("check-credentials", help="Check access to existing credentials without starting or changing the connector")
-    for command in (pairing, commands.add_parser("run"), commands.add_parser("status"), commands.add_parser("doctor"), credential_check):
+    media_status = commands.add_parser("media-status", help="Inspect per-profile image publication activation")
+    media_install = commands.add_parser("install-media", help="Install the managed image plugin after the connector confirms idle; does not restart Hermes")
+    media_check = commands.add_parser("check-media", help="Verify bundled raster codecs and image plugin without accessing user data")
+    for command in (pairing, commands.add_parser("run"), commands.add_parser("status"), commands.add_parser("doctor"), credential_check, media_status, media_install, media_check):
         command.add_argument("--data-dir")
     args = parser.parse_args(values)
     directory = data_directory(args.data_dir)
@@ -280,6 +283,22 @@ def main(argv=None):
             run(directory)
         elif args.command == "check-credentials":
             check_credentials(directory)
+        elif args.command == "check-media":
+            from .visual_media import media_self_test
+            media_self_test()
+            print("ok")
+        elif args.command in {"media-status", "install-media"}:
+            from .media_install import media_profiles
+            if args.command == "install-media":
+                from .manage import drain
+                drain(directory)
+                try:
+                    result = media_profiles(read_json(directory / "config.json"), install=True)
+                finally:
+                    (directory / "maintenance.request").unlink(missing_ok=True)
+            else:
+                result = media_profiles(read_json(directory / "config.json"))
+            print(json.dumps({"profiles": result}))
         else:
             result = status(directory)
             if args.command == "doctor":

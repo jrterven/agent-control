@@ -402,6 +402,7 @@ class AppServices:
     session_router: HermesSessionRouter
     session_factory: Any | None = None
     push_notifications: Any | None = None
+    visual_media: Any | None = None
     profile_creation_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     profile_route_locks: dict[tuple[str, str], ProfileMutationBarrier] = field(
         default_factory=dict
@@ -3476,6 +3477,10 @@ class SessionService:
             references.extend(embedded)
             if content_key is not None:
                 safe_item[content_key] = normalizer.sanitize_data(projected_content)
+            from .visual_media import get_visual_media_service
+            image_media = get_visual_media_service(self.services).project(db, row, projected_content)
+            if image_media:
+                safe_item.setdefault("controlMedia", []).extend(image_media)
             if references:
                 base = f"/api/v1/sessions/{row.id}/email-references"
                 projected_references: list[dict[str, Any]] = []
@@ -3524,14 +3529,14 @@ class SessionService:
                     [marker for marker, _ in playable],
                 )
             )
-            safe_item["controlMedia"] = [
+            safe_item.setdefault("controlMedia", []).extend([
                 {
                     "id": asset.media_id,
                     "kind": "audio",
                     "mediaType": asset.media_type,
                 }
                 for _, asset in playable
-            ]
+            ])
         return list(sanitized)
 
     @staticmethod
@@ -3707,9 +3712,24 @@ class SessionService:
         actor: User,
         row: SessionLink,
         media_id: str,
+        variant: str = "full",
     ) -> SessionMediaAsset:
         if not _SAFE_MEDIA_ID.fullmatch(media_id):
             raise NotFoundError("Voice note not found")
+        from .visual_media import get_visual_media_service
+        visual = get_visual_media_service(self.services)
+        image = visual.authorized(db, actor, row, media_id)
+        if image is not None:
+            try:
+                content, media_type = await asyncio.to_thread(visual.content, image, variant)
+            except Exception:
+                raise NotFoundError("Image unavailable") from None
+            return SessionMediaAsset(media_id=media_id, path=None, media_type=media_type, content=content)
+        from .models import VisualMedia
+        if db.get(VisualMedia, media_id) is not None:
+            raise NotFoundError("Image unavailable")
+        if variant != "full":
+            raise NotFoundError("Image unavailable")
         gateway = db.get(Gateway, row.gateway_id)
         if gateway is not None and gateway.transport_kind == "connector":
             if row.owner_id != actor.id or gateway.owner_id != actor.id or not gateway.enabled:

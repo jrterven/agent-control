@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     Boolean,
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -335,6 +336,62 @@ class SessionLink(Base, Timestamped):
     replay_epoch: Mapped[str | None] = mapped_column(String(100))
     last_sequence: Mapped[int] = mapped_column(Integer, default=0)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class VisualMedia(Base, Timestamped):
+    """Immutable assets use the durable Hermes route, including unimported cron runs.
+
+    No cascade may erase object-storage references before retention/GC runs.
+    Authorization always joins a currently owned session and connector instead.
+    """
+    __tablename__ = "visual_media"
+    __table_args__ = (
+        Index("ix_visual_media_route", "owner_id", "gateway_id", "profile_name", "stored_session_id"),
+        CheckConstraint("status IN ('pending', 'ready', 'failed')", name="ck_visual_media_status"),
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(36), index=True)
+    gateway_id: Mapped[str] = mapped_column(String(36))
+    profile_name: Mapped[str] = mapped_column(String(120))
+    stored_session_id: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    request_hash: Mapped[str] = mapped_column(String(64))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    thumbnail_hash: Mapped[str] = mapped_column(String(64))
+    byte_size: Mapped[int] = mapped_column(BigInteger)
+    thumbnail_byte_size: Mapped[int] = mapped_column(BigInteger)
+    media_type: Mapped[str] = mapped_column(String(32))
+    width: Mapped[int] = mapped_column(Integer)
+    height: Mapped[int] = mapped_column(Integer)
+    alt: Mapped[str] = mapped_column(String(1000))
+    caption: Mapped[str | None] = mapped_column(String(2000))
+    source_url: Mapped[str | None] = mapped_column(String(2048))
+    source_title: Mapped[str | None] = mapped_column(String(300))
+    provenance: Mapped[str] = mapped_column(String(16))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class VisualMediaRouteTombstone(Base):
+    __tablename__ = "visual_media_route_tombstones"
+    owner_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    gateway_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    profile_name: Mapped[str] = mapped_column(String(120), primary_key=True)
+    stored_session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+@event.listens_for(SessionLink, "before_delete")
+def _tombstone_session_visual_media(mapper, connection, target):
+    # Apply to every ORM deletion path, including profile removal. Keep route
+    # tombstones after GC so a disconnected connector cannot resurrect assets.
+    route = dict(owner_id=target.owner_id, gateway_id=target.gateway_id,
+                 profile_name=target.profile_name, stored_session_id=target.stored_session_id)
+    table = VisualMediaRouteTombstone.__table__
+    if connection.execute(table.select().filter_by(**route)).first() is None:
+        connection.execute(table.insert().values(**route, deleted_at=utc_now()))
+    connection.execute(VisualMedia.__table__.update().filter_by(**route).values(deleted_at=utc_now()))
 
 
 class LiveTranscript(Base, Timestamped):

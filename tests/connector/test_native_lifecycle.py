@@ -45,6 +45,8 @@ def test_native_cli_version_status_and_failure_exit_codes(native_command,tmp_pat
     def invoke(*args):
         return subprocess.run([*command,*args],env=environment,cwd=tmp_path,capture_output=True,text=True,timeout=20)
     assert invoke("--version").stdout.strip() == "0.1.0"
+    media = invoke("check-media")
+    assert media.returncode == 0 and media.stdout.strip() == "ok", media.stderr
     status=invoke("status","--data-dir",str(tmp_path/"unpaired"))
     assert status.returncode == 0
     assert json.loads(status.stdout)["activeWork"] is None

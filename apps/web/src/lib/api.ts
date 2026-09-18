@@ -1,4 +1,4 @@
-import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, EmailReferencePreview, Gateway, Profile, PushNotificationConfig, RealtimeEvent, SearchResult, SessionSummary, VoiceProvider, Workspace } from "../types";
+import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, EmailReferencePreview, Gateway, ImageMediaMetadata, Profile, PushNotificationConfig, RealtimeEvent, SearchResult, SessionSummary, VoiceProvider, Workspace } from "../types";
 import type { OPENAI_LIVE_VOICES } from "./openaiLiveVoices";
 import type { AuthMethods, ConnectorList, ConnectorPairing, ConnectorView } from "@hermes-control/shared-types";
 import { useAppStore } from "../store/appStore";
@@ -529,7 +529,8 @@ export const api = {
       headers: mutationHeaders(csrfToken),
     },
   ).then((row) => sessionFromWire(row)),
-  sessionMediaUrl: (sessionId: string, mediaId: string) => `/api/v1/sessions/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(mediaId)}`,
+  sessionMediaUrl: (sessionId: string, mediaId: string, variant?: "thumbnail" | "full") => `/api/v1/sessions/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(mediaId)}${variant ? `?variant=${variant}` : ""}`,
+  imageMetadata: (sessionId: string, mediaId: string, signal?: AbortSignal) => request<ImageMediaMetadata>(`/sessions/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(mediaId)}/metadata`, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000), cache: "no-store" }),
   emailReferencePreview: (sessionId: string, referenceId: string) => request<EmailReferencePreview>(
     `/sessions/${encodeURIComponent(sessionId)}/email-references/${encodeURIComponent(referenceId)}`,
   ),

@@ -18,6 +18,8 @@ import urllib.request
 
 
 def exercise(root: Path, work: Path) -> None:
+    from agent_control_connector.visual_media import media_self_test
+    media_self_test()
     work.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="http-smoke-", dir=work) as temporary:
         home = Path(temporary)
