@@ -146,6 +146,26 @@ describe("GPT-Live WebRTC", () => {
     expect(options.onPhase).toHaveBeenLastCalledWith("stopping");
   });
 
+  it("keeps a restored paused microphone disabled through startup until the user resumes", async () => {
+    const options = setup();
+    client.dispose();
+    client = new OpenAILiveClient({ ...options, initiallyPaused: true });
+    await client.start();
+    expect(track.enabled).toBe(false);
+    Peer.latest.dispatchEvent(new Event("connectionstatechange"));
+    expect(options.onPhase).toHaveBeenLastCalledWith("connecting");
+    Peer.latest.channel.emit({ type: "session.started" });
+    expect(track.enabled).toBe(false);
+    expect(options.onPhase).toHaveBeenLastCalledWith("paused");
+    expect(CueContext.latest.createOscillator).not.toHaveBeenCalled();
+    Peer.latest.channel.emit({ type: "session.started" });
+    expect(track.enabled).toBe(false);
+    client.setPaused(false);
+    expect(track.enabled).toBe(true);
+    expect(options.onPhase).toHaveBeenLastCalledWith("listening");
+    expect(CueContext.latest.createOscillator).toHaveBeenCalledOnce();
+  });
+
   it("times out an unready media connection without ever signalling listening", async () => {
     const options = setup();
     await client.start();

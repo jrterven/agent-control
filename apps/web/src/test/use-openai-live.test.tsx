@@ -15,17 +15,20 @@ type Options = {
   onIssue: (issue: LiveIssue) => void;
   onDelegation: (context: string, signal: AbortSignal, progress: (content: string) => void) => Promise<string>;
   initialCommentary?: string;
+  initiallyPaused?: boolean;
 };
 const mocks = vi.hoisted(() => ({ calls: [] as MockClient[], flush: vi.fn(), append: vi.fn(), drain: vi.fn() }));
 class MockClient {
   options: Options;
   controller = new AbortController();
-  start = vi.fn(async () => { this.options.onPhase("connecting"); await this.options.negotiate("offer", this.controller.signal); this.options.onPhase("listening"); });
+  paused: boolean;
+  started = false;
+  start = vi.fn(async () => { this.options.onPhase("connecting"); await this.options.negotiate("offer", this.controller.signal); this.started = true; this.options.onPhase(this.paused ? "paused" : "listening"); });
   stop = vi.fn(() => { this.options.onPhase("stopping"); });
   dispose = vi.fn(() => { this.controller.abort(); });
-  setPaused = vi.fn();
+  setPaused = vi.fn((paused: boolean) => { this.paused = paused; if (this.started) this.options.onPhase(paused ? "paused" : "listening"); });
   play = vi.fn();
-  constructor(options: Options) { this.options = options; mocks.calls.push(this); }
+  constructor(options: Options) { this.options = options; this.paused = options.initiallyPaused ?? false; mocks.calls.push(this); }
   closed() { this.controller.abort(); this.options.onPhase("idle"); }
   fail(issue: LiveIssue) { this.controller.abort(); this.options.onIssue(issue); this.options.onPhase("error"); }
   delegate(context = "User: Busca el informe") { return this.options.onDelegation(context, this.controller.signal, vi.fn()); }
@@ -369,5 +372,33 @@ describe("Live consent, task suspension and verified resumption", () => {
     await tick();
     expect(mocks.calls).toHaveLength(2);
     expect(api.createLiveSession).toHaveBeenLastCalledWith(expect.objectContaining({ purpose: "resume" }), options.csrfToken, expect.any(AbortSignal));
+  });
+
+  it("preserves microphone pause across automatic result resumption until an explicit resume gesture", async () => {
+    const { result } = renderHook(() => useOpenAILive(options));
+    await act(async () => { await result.current.start(); });
+    const first = mocks.calls[0];
+    let delegated!: Promise<string>;
+    await act(async () => { delegated = first.delegate(); result.current.pause(); });
+    expect(result.current.phase).toBe("paused");
+    await tick(15_000);
+    await act(async () => { first.closed(); complete(); await delegated; });
+    await tick();
+    expect(mocks.calls).toHaveLength(2);
+    expect(mocks.calls[1].options.initiallyPaused).toBe(true);
+    expect(result.current.phase).toBe("paused");
+    expect(result.current.pendingResult).toBeNull();
+    expect(submitPrompt).toHaveBeenCalledOnce();
+    await act(async () => { result.current.resume(); });
+    expect(mocks.calls[1].setPaused).toHaveBeenLastCalledWith(false);
+    expect(result.current.phase).toBe("listening");
+  });
+
+  it("resets microphone pause when the user explicitly starts a new call after stopping", async () => {
+    const { result } = renderHook(() => useOpenAILive(options));
+    await act(async () => { await result.current.start(); result.current.pause(); result.current.stop(); mocks.calls[0].closed(); });
+    await act(async () => { await result.current.start(); });
+    expect(mocks.calls[1].options.initiallyPaused).toBe(false);
+    expect(result.current.phase).toBe("listening");
   });
 });

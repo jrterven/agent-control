@@ -169,6 +169,8 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
   close acknowledgment (or the client's bounded teardown) before opening a new
   call with the verified result. Auto-resume requires the same authenticated
   owner, profile and chat, a visible online app, and voice still enabled.
+  Preserve a paused microphone across automatic resumption: the result may be
+  spoken, but capture stays disabled until the user explicitly resumes it.
   After transport teardown, allow at most two seconds for captured transcript
   fragments to finish saving before loading the next call's context. Saving
   failures retain normal retries and cannot indefinitely block an explanation.

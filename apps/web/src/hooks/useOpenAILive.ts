@@ -121,6 +121,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken }: { en
   const mountedRef = useRef(true);
   const epochRef = useRef(0);
   const intentRef = useRef(false);
+  const pausedRef = useRef(false);
   const callRef = useRef<Call | undefined>(undefined);
   const closingRef = useRef<Promise<void> | undefined>(undefined);
   const taskRef = useRef<AgentTask | undefined>(undefined);
@@ -149,6 +150,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken }: { en
   const suspend = (network = false) => {
     epochRef.current += 1;
     intentRef.current = false;
+    pausedRef.current = false;
     setActive(false);
     setExplainingMessageId(undefined);
     setResumable(Boolean(taskRef.current || resultRef.current));
@@ -186,6 +188,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken }: { en
     const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
     const call = { recorder, closed, resolveClosed, closing: false } as Call;
     const client = new OpenAILiveClient({
+      initiallyPaused: pausedRef.current,
       negotiate: (sdp, signal) => api.createLiveSession({ sdp, sessionId, profileId, ...(focusMessageId ? { focusMessageId, purpose } : {}) }, csrfToken, signal),
       initialCommentary: focus ? "Explain the verified answer selected in the startup context naturally and concisely. Do not repeat its task or claim any new action. Then listen for the user's follow-up." : undefined,
       onPhase: (next) => {
@@ -211,7 +214,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken }: { en
           setPhase(taskRef.current || resultRef.current ? "waiting" : next);
         } else {
           setPhase(next);
-          if (next === "listening") {
+          if (next === "listening" || next === "paused") {
             setResumable(false);
             if (focus && resultRef.current === focus) rememberResult(null);
           }
@@ -302,6 +305,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken }: { en
   useEffect(() => {
     mountedRef.current = true;
     intentRef.current = false;
+    pausedRef.current = false;
     setActive(false);
     setCaptureActive(false);
     setPhase("idle");
@@ -351,6 +355,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken }: { en
     if (!taskRef.current && useAppStore.getState().streamingBySession[sessionId]) return;
     const epoch = ++epochRef.current;
     intentRef.current = true;
+    pausedRef.current = false;
     setActive(true);
     setIssue(null);
     setResumable(false);
@@ -366,6 +371,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken }: { en
     if (!permitted() || message.sessionId !== sessionId || message.role !== "assistant" || message.streaming || !message.content.trim() || taskRef.current) return;
     const epoch = ++epochRef.current;
     intentRef.current = true;
+    pausedRef.current = false;
     setActive(true);
     setIssue(null);
     setResumable(false);
@@ -380,8 +386,8 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken }: { en
     resumeAvailable: !active && resumable, explainingMessageId,
     transcripts, start, explain,
     stop: () => suspend(),
-    pause: () => callRef.current?.client.setPaused(true),
-    resume: () => callRef.current?.client.setPaused(false),
+    pause: () => { if (intentRef.current) { pausedRef.current = true; callRef.current?.client.setPaused(true); } },
+    resume: () => { pausedRef.current = false; callRef.current?.client.setPaused(false); },
     play: () => callRef.current?.client.play(),
   };
 }

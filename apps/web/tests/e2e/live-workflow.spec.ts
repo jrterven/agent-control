@@ -16,6 +16,7 @@ async function mockLive(page: Page) {
     const channels: Channel[] = [];
     let closed = 0;
     let liveTracks = 0;
+    const tracks: { enabled: boolean; readyState: string }[] = [];
     class Channel extends EventTarget {
       readyState = "open";
       send(data: string) {
@@ -43,10 +44,11 @@ async function mockLive(page: Page) {
     Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia: async () => {
       liveTracks += 1;
       const track = Object.assign(new EventTarget(), { enabled: true, muted: false, readyState: "live", stop() { if (this.readyState === "live") liveTracks -= 1; this.readyState = "ended"; } });
+      tracks.push(track);
       return { getTracks: () => [track], getAudioTracks: () => [track] };
     } } });
     Object.assign(window, { voiceWorkflow: {
-      state: () => ({ closed, liveTracks }),
+      state: () => ({ closed, liveTracks, enabledTracks: tracks.filter((track) => track.readyState === "live" && track.enabled).length }),
       delegate: () => {
         const channel = channels.at(-1)!;
         channel.emit({ type: "session.input_transcript.delta", event_id: "request-text", delta: "Prepara el informe detallado.", start_ms: 100, end_ms: 1000 });
@@ -57,7 +59,8 @@ async function mockLive(page: Page) {
   return calls;
 }
 
-for (const stopManually of [false, true]) test(`closes during a long task and ${stopManually ? "explains its result after returning" : "resumes only when its result arrives"}`, async ({ page }, testInfo) => {
+for (const mode of ["resume", "explain", "paused"]) test(`closes during a long task and ${mode === "explain" ? "explains its result after returning" : mode === "paused" ? "keeps the microphone paused when resuming" : "resumes only when its result arrives"}`, async ({ page }, testInfo) => {
+  const stopManually = mode === "explain";
   const calls = await mockLive(page);
   await page.clock.install();
   const history: { id: string; role: string; content: string; timestamp: number }[] = [];
@@ -82,10 +85,11 @@ for (const stopManually of [false, true]) test(`closes during a long task and ${
   await page.evaluate(() => (window as unknown as { voiceWorkflow: { delegate(): void } }).voiceWorkflow.delegate());
   await page.clock.runFor(800);
   await expect.poll(() => prompts).toBe(1);
+  if (mode === "paused") await page.getByRole("button", { name: "Pausar micrófono" }).click();
   await page.clock.fastForward(16_000);
   await expect(page.getByText("Esperando respuesta…", { exact: true })).toBeVisible();
-  const capture = () => page.evaluate(() => (window as unknown as { voiceWorkflow: { state(): { closed: number; liveTracks: number } } }).voiceWorkflow.state());
-  await expect.poll(capture).toEqual({ closed: 1, liveTracks: 0 });
+  const capture = () => page.evaluate(() => (window as unknown as { voiceWorkflow: { state(): { closed: number; liveTracks: number; enabledTracks: number } } }).voiceWorkflow.state());
+  await expect.poll(capture).toEqual({ closed: 1, liveTracks: 0, enabledTracks: 0 });
   expect(calls).toHaveLength(1);
   await page.screenshot({ path: testInfo.outputPath("waiting-without-voice-session.png"), fullPage: true });
   if (stopManually) {
@@ -111,6 +115,12 @@ for (const stopManually of [false, true]) test(`closes during a long task and ${
   }
   await expect.poll(() => calls.length).toBe(2);
   expect(calls[1]).toMatchObject({ sessionId: "session-e2e", purpose: stopManually ? "explain" : "resume", focusMessageId: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) });
+  if (mode === "paused") {
+    await expect(page.getByRole("button", { name: "Reanudar micrófono" })).toBeVisible();
+    await expect.poll(capture).toEqual({ closed: 1, liveTracks: 1, enabledTracks: 0 });
+    await page.getByRole("button", { name: "Reanudar micrófono" }).click();
+    await expect.poll(capture).toEqual({ closed: 1, liveTracks: 1, enabledTracks: 1 });
+  }
   await expect(page.getByText("Escuchando · ya puedes hablar")).toBeVisible();
   expect(prompts).toBe(1);
   expect(interrupts).toBe(0);

@@ -15,6 +15,7 @@ type LiveOptions = {
   initialCommentary?: string;
   disableDelegation?: boolean;
   startupTimeoutMs?: number;
+  initiallyPaused?: boolean;
 };
 
 export function liveSupported() {
@@ -65,6 +66,7 @@ export class OpenAILiveClient {
   private queue: Promise<void> = Promise.resolve();
 
   constructor(private options: LiveOptions) {
+    this.paused = options.initiallyPaused ?? false;
     this.audio.autoplay = true;
     this.audio.setAttribute("playsinline", "");
   }
@@ -103,7 +105,7 @@ export class OpenAILiveClient {
     // Disabled tracks send silence, so startup and pause never buffer speech
     // that could be sent unexpectedly when the user resumes.
     tracks.forEach((track) => { track.enabled = connected && !this.paused; });
-    const next = this.paused ? "paused" : connected ? "listening" : "connecting";
+    const next = connected ? (this.paused ? "paused" : "listening") : "connecting";
     if (next === this.inputPhase) return;
     this.inputPhase = next;
     this.options.onPhase(next);
