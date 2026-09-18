@@ -7,6 +7,9 @@ permissions:
   contents: read
 
 jobs:
+  hermes-plugin:
+    uses: ./.github/workflows/hermes-plugin-compatibility.yml
+
   verify:
     runs-on: ubuntu-24.04
     services:
@@ -42,7 +45,7 @@ jobs:
           AGENT_CONTROL_TEST_POSTGRES_URL: postgresql+psycopg://agent_control_test:local_ci_validation@127.0.0.1:5432/agent_control_validation
 
   connector:
-    needs: verify
+    needs: [verify, hermes-plugin]
     strategy:
       fail-fast: false
       matrix:
@@ -75,7 +78,7 @@ jobs:
           if-no-files-found: error
 
   image:
-    needs: verify
+    needs: [verify, hermes-plugin]
     runs-on: ubuntu-24.04
     permissions:
       contents: read

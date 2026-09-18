@@ -170,8 +170,11 @@ def enqueue_images(home: Path, session_id: str, images: list) -> list[dict]:
                 db.execute("INSERT INTO images(id,session_id,turn_id,metadata,source_url,content,created_at) VALUES(?,?,?,?,?,?,?)",
                     (identifier, session_id, turn_id, json.dumps(metadata), source_url, content, time.time()))
             db.execute("UPDATE turns SET image_count=image_count+?,updated_at=? WHERE session_id=?", (len(prepared), time.time(), session_id))
-        return [{"id": identifier, "status": "pending", "markdown": f"![{re.sub(r'[\[\]\\\n\r]', ' ', metadata['alt'])}](ac-media:{identifier})"}
-                for identifier, metadata, _, _ in prepared]
+        references = []
+        for identifier, metadata, _, _ in prepared:
+            alt = re.sub(r'[\[\]\\\n\r]', ' ', metadata["alt"])
+            references.append({"id": identifier, "status": "pending", "markdown": f"![{alt}](ac-media:{identifier})"})
+        return references
     finally:
         db.close()
 

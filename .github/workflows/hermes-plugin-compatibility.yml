@@ -1,0 +1,24 @@
+name: Existing Hermes plugin compatibility
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  copied-plugin:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # The copied plugin is stdlib-only. Installing the connector here would
+      # test its bundled Python requirement instead of external Hermes Python.
+      - name: Import and execute the copied native plugin
+        run: python -I tests/connector/test_hermes_plugin_runtime.py

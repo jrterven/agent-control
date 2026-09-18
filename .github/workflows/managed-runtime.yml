@@ -7,7 +7,11 @@ permissions:
   contents: read
 
 jobs:
+  hermes-plugin:
+    uses: ./.github/workflows/hermes-plugin-compatibility.yml
+
   build:
+    needs: hermes-plugin
     strategy:
       fail-fast: false
       matrix:

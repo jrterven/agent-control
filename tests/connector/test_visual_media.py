@@ -1,3 +1,4 @@
+import ast
 import asyncio
 from contextlib import closing
 import io
@@ -40,6 +41,19 @@ def enqueue(home, *, session="session", path=None, url=None, count=1):
         path.write_bytes(image_bytes())
     image = {"alt": "Chart", "provenance": "web" if url else "generated", **({"url": url} if url else {"path": str(path)})}
     return plugin.enqueue_images(home, session, [image.copy() for _ in range(count)])
+
+
+@pytest.mark.parametrize("version", [(3, 10), (3, 11)])
+def test_native_plugin_supports_existing_hermes_python_versions(version):
+    path = Path(plugin.__file__)
+    source = path.read_text(encoding="utf-8")
+    syntax = ast.parse(source, filename=str(path), feature_version=version)
+    # feature_version is best-effort: Python 3.12+ still accepts PEP 701
+    # backslashes inside f-string expressions when parsing an older grammar.
+    for node in ast.walk(syntax):
+        if isinstance(node, ast.FormattedValue):
+            assert "\\" not in ast.get_source_segment(source, node.value)
+    compile(syntax, str(path), "exec")
 
 
 @pytest.mark.parametrize("format,media_type", [("PNG", "image/png"), ("JPEG", "image/jpeg"), ("WEBP", "image/png")])
