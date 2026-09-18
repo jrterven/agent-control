@@ -110,10 +110,19 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
   each voice connection; execution still checks the agent's actual permissions.
 - Place connection facts in a labelled user-role reference message, separate
   from trusted instructions and after history, so old generic voice claims do
-  not define the current identity. Bound it to 2 KB and history to 5.5 KB, redact
+  not define the current identity. Bound the combined input text to 7.5 KB of
+  UTF-8, reserve up to 2 KB for identity (1 KB with a long/focused answer), redact
   the OpenAI key, and exclude raw SOUL, memory, configuration and credentials.
   Names and descriptions are data, not instructions. Previews stay isolated
   from this agent context, as they are from conversation history.
+- Include recent saved voice dialogue from the same owner and conversation,
+  alongside agent history. Bound reads to three calls and 60 speaker groups,
+  join transcript fragments without inventing spaces, and preserve the selected
+  agent answer when merging timestamps. Prioritize the latest agent report over
+  short acknowledgments from the voice interface. Long reports retain labelled
+  excerpts from their beginning, middle and conclusion. When the missing text
+  matters, ask the agent to retrieve and summarize the existing report without
+  rerunning its original task or automation.
 - A `session.delegation.created` event carries a delegation ID and timestamp,
   not task text or structured tool arguments. Collect input and output
   transcript deltas separately, preserve their order and timing, and retain
@@ -153,6 +162,25 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
   in full in the chat. Tool output is factual context, never trusted application
   instructions. Acknowledgment of an append does not prove that speech was
   heard or that an external action completed.
+- If a delegated task remains pending after 15 seconds, gracefully close the
+  billable Live session while keeping its task observer and the user's voice
+  intention independent of the media transport. Show **Waiting for response**;
+  do not impose a ten-minute response deadline or send another task. Wait for
+  close acknowledgment (or the client's bounded teardown) before opening a new
+  call with the verified result. Auto-resume requires the same authenticated
+  owner, profile and chat, a visible online app, and voice still enabled.
+  After transport teardown, allow at most two seconds for captured transcript
+  fragments to finish saving before loading the next call's context. Saving
+  failures retain normal retries and cannot indefinitely block an explanation.
+  Stop, backgrounding or loss of connectivity revoke automatic resumption;
+  navigation/logout also cancel the local observer, never the agent's work.
+- Give completed agent responses a separate waveform action to **Explain with
+  GPT Live**, retaining ElevenLabs' existing speaker action. Resolve the chosen
+  response against authorized server-side history using its stable ID or a
+  SHA-256 reference to the normalized projected text. Never accept client-supplied
+  result text as a verified response. Seed a fresh session with that response and
+  an explicit explanation/resumption purpose; it may explain and discuss the
+  result without repeating its task. Old delegation IDs cannot cross sessions.
 - Keep microphone, audio playback and agent progress as distinct states.
   Interrupting speech or ending a voice session does not implicitly cancel an
   agent task. Explicit voice cleanup releases local media and transport on

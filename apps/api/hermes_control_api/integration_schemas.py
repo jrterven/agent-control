@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 
 from .schemas import ApiModel
 from .integrations import ELEVENLABS_TTS_MODEL_ID, ElevenLabsTtsModelId
 from .openai_live import VoiceProvider
+from .live_context import LiveResponsePurpose
 from .openai_voices import OpenAILivePreviewLanguage, OpenAILiveVoiceId
 
 
@@ -48,6 +49,16 @@ class LiveSDPOffer(ApiModel):
 class LiveSessionRequest(LiveSDPOffer):
     profile_id: str = Field(min_length=1, max_length=36)
     session_id: str | None = Field(default=None, min_length=1, max_length=36)
+    focus_message_id: str | None = Field(default=None, min_length=1, max_length=255)
+    purpose: LiveResponsePurpose | None = None
+
+    @model_validator(mode="after")
+    def scoped_response_focus(self) -> LiveSessionRequest:
+        if self.focus_message_id is not None and self.session_id is None:
+            raise ValueError("A conversation is required to explain a response")
+        if self.purpose is not None and self.focus_message_id is None:
+            raise ValueError("A selected response is required for this voice action")
+        return self
 
 
 class LiveVoicePreviewRequest(LiveSDPOffer):

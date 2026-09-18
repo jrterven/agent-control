@@ -242,6 +242,18 @@ use the retained image/backup according to schema compatibility; do not claim
 completion or blindly downgrade the live database. Keep the old release checkout
 available with its Caddy/Compose files as well as the previous image digest.
 
+Retain the previous PWA's hashed assets while installed clients finish using
+their current shell. The API's existing sibling-release fallback requires a
+static path shaped as `releases/<revision>/apps/api/static`. For a container
+deployment, extract and verify the new static directory from the exact CI image
+digest, retain the preceding image's assets in a sibling release directory, and
+mount that releases directory read-only. Set `HERMES_CONTROL_STATIC_DIR` to the
+new release's static path in the prepared Compose file. Keep the selected image
+pinned to its digest and confirm the mounted files are byte-identical to that
+image. Verify a preceding hashed asset and a missing-asset 404 as well as the new
+PWA; never replace an existing immutable directory or expose deployment secrets
+through the asset mount. Preserve the site's existing proxy and download routes.
+
 For rollback, pause incoming requests, stop Control, retain a fresh copy of the
 failed database and confirm whether the previous binary supports its schema.
 If not, restore the validated pre-release dump into a separate database, select

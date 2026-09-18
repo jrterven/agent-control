@@ -103,6 +103,23 @@ transcript storage must never send a prompt or open another provider session.
 Keep captions outside the compact composer and keep Privacy information in
 settings. Acoustic latency is not established by simulated browser tests.
 
+For the Live waiting/explanation workflow, verify that a pending delegation
+closes its provider session after 15 seconds, releases microphone tracks and
+continues observing the same agent task for more than 20 minutes. A completed
+result may open a fresh session only after the previous close handshake and
+while voice remains enabled in the same visible chat. Check stop, background,
+offline, logout, scope changes and result/close races; none may repeat or cancel
+the agent task. After returning, the response's waveform action must explain
+the stored result and the existing speaker action must retain TTS behavior.
+
+Verify chat/automation and saved voice context with an oversized report,
+explicit partial-context markers, owner isolation and an invalid response
+reference. Refreshing durable history must never select an unfinished optimistic
+answer for resumption. These changes need no additional schema migration;
+deployments older than the repository head still require the normal backup and
+migration rehearsal before activation. Simulated WebRTC checks validate the
+lifecycle and input contract, not the provider's exact wording or acoustic timing.
+
 ## Transcription integration change
 
 ElevenLabs Scribe is independent from the Hermes release stream. Before

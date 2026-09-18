@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { submitPrompt } from "../hooks";
 import { delegateLiveRequest } from "../hooks/useOpenAILive";
 import { liveDelegationConversation } from "../lib/liveDelegation";
@@ -16,6 +16,25 @@ describe("Live delegation to the selected agent", () => {
         { id: "voice-answer", sessionId: "session-papers", role: "assistant", content: "", streaming: true, createdAt: "now" },
       ], streamingBySession: { "session-papers": "voice-answer" } });
     });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("keeps observing beyond twenty minutes through temporary offline auth and returns the verified message", async () => {
+    vi.useFakeTimers();
+    const observed = { submitted: vi.fn(), result: vi.fn() };
+    const finished = vi.fn();
+    const result = delegateLiveRequest("session-papers", "profile-newton", "User: Trabajo largo", new AbortController().signal, vi.fn(), observed).then((value) => { finished(value); return value; });
+    await Promise.resolve();
+    useAppStore.setState({ authState: "offline" });
+    await vi.advanceTimersByTimeAsync(25 * 60_000);
+    expect(finished).not.toHaveBeenCalled();
+    expect(observed.submitted).toHaveBeenCalledOnce();
+    useAppStore.setState({ authState: "authenticated" });
+    useAppStore.getState().updateMessage("voice-answer", { content: "Trabajo completado y verificado", streaming: false });
+    useAppStore.getState().setStreamingMessageId("session-papers", undefined);
+    expect(await result).toContain("Trabajo completado y verificado");
+    expect(observed.result).toHaveBeenCalledWith(expect.objectContaining({ id: "voice-answer", role: "assistant", content: "Trabajo completado y verificado" }));
+    expect(submitPrompt).toHaveBeenCalledOnce();
   });
 
   it("waits for the matching agent result instead of claiming the dispatch receipt completed work", async () => {
@@ -93,6 +112,32 @@ describe("Live delegation to the selected agent", () => {
     controller.abort();
     expect(await result).toContain("voice session ended");
     expect(useAppStore.getState().streamingBySession["session-papers"]).toBe("voice-answer");
+    expect(submitPrompt).toHaveBeenCalledOnce();
+  });
+
+  it("uses the durable final answer when rehydration clears streaming before replacing optimistic text", async () => {
+    const observed = { result: vi.fn() };
+    const result = delegateLiveRequest("session-papers", "profile-newton", "User: Consulta estado", new AbortController().signal, vi.fn(), observed);
+    await Promise.resolve();
+    const prompt = vi.mocked(submitPrompt).mock.calls[0][0];
+    useAppStore.getState().updateMessage("voice-answer", { content: "Respuesta parcial", streaming: false });
+    useAppStore.getState().setStreamingMessageId("session-papers", undefined);
+    useAppStore.getState().setMessagesForSession("session-papers", [
+      { id: "durable-user", role: "user", sessionId: "session-papers", content: prompt, createdAt: "now" },
+      { id: "durable-answer", role: "assistant", sessionId: "session-papers", content: "Resultado final completo y confirmado", createdAt: "now" },
+    ]);
+    expect(await result).toContain("Resultado final completo y confirmado");
+    expect(observed.result).toHaveBeenCalledOnce();
+    expect(observed.result).toHaveBeenCalledWith(expect.objectContaining({ id: "durable-answer", content: "Resultado final completo y confirmado" }));
+  });
+
+  it("returns immediately without arming a task observer if submitPrompt cannot insert a request", async () => {
+    vi.mocked(submitPrompt).mockResolvedValueOnce(undefined);
+    const observed = { submitted: vi.fn(), result: vi.fn() };
+    const result = await delegateLiveRequest("session-papers", "profile-newton", "User: Consulta estado", new AbortController().signal, vi.fn(), observed);
+    expect(result).toContain("No new task was submitted");
+    expect(observed.submitted).not.toHaveBeenCalled();
+    expect(observed.result).not.toHaveBeenCalled();
     expect(submitPrompt).toHaveBeenCalledOnce();
   });
 });

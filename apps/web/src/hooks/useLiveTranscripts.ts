@@ -54,6 +54,7 @@ export function useLiveTranscripts(sessionId: string, csrfToken: string | undefi
         writer.append(fragments);
       },
       flush: () => { void writer.flush(); },
+      drain: () => writer.drain(),
     };
   };
   return {

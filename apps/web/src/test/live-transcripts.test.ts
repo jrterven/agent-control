@@ -55,4 +55,55 @@ describe("passive Live transcripts", () => {
     expect(save).toHaveBeenLastCalledWith(fragments, 0);
     expect(status).toHaveBeenLastCalledWith("saved");
   });
+
+  it("drains the final fragments after a previously started save before reconnecting", async () => {
+    vi.useFakeTimers();
+    let finish!: () => void;
+    const save = vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; })).mockResolvedValue(undefined);
+    const writer = new LiveTranscriptWriter(save, vi.fn());
+    writer.append([part("Primera", 0, 100)]);
+    await vi.advanceTimersByTimeAsync(1000);
+    writer.append([part("Primera", 0, 100), part(" última", 1, 400)]);
+    const ready = vi.fn();
+    const drained = writer.drain().then(ready);
+    await Promise.resolve();
+    expect(ready).not.toHaveBeenCalled();
+    finish();
+    await drained;
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith([part(" última", 1, 400)], 1);
+    expect(ready).toHaveBeenCalledOnce();
+  });
+
+  it("bounds caption draining to two seconds without cancelling its pending save", async () => {
+    vi.useFakeTimers();
+    let finish!: () => void;
+    const save = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const status = vi.fn();
+    const writer = new LiveTranscriptWriter(save, status);
+    writer.append([part("Última frase", 0, 100)]);
+    const ready = vi.fn();
+    const drained = writer.drain().then(ready);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(ready).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await drained;
+    expect(ready).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledOnce();
+    finish();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(status).toHaveBeenLastCalledWith("saved");
+  });
+
+  it("does not block a new explanation on a failed save and retains the ordinary retry", async () => {
+    vi.useFakeTimers();
+    const save = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);
+    const writer = new LiveTranscriptWriter(save, vi.fn());
+    writer.append([part("No perder", 0, 100)]);
+    await writer.drain();
+    expect(save).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(save).toHaveBeenCalledTimes(2);
+  });
 });

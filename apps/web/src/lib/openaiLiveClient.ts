@@ -1,6 +1,6 @@
 // GPT-Live uses its own event protocol, separate from the Realtime API.
 // https://developers.openai.com/api/docs/guides/voice-webrtc
-export type LivePhase = "idle" | "connecting" | "listening" | "paused" | "stopping" | "error";
+export type LivePhase = "idle" | "connecting" | "listening" | "paused" | "stopping" | "waiting" | "error";
 export type LiveIssue = "permissionDenied" | "auth" | "quota" | "network" | "generic" | "unconfirmed" | "contextFull";
 export type LiveFragment = { role: "user" | "assistant"; text: string; start: number; end: number; order: number };
 export type LiveInput = { stream: MediaStream; release: () => void };

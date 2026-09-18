@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { webcrypto } from "node:crypto";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatView } from "../components/ChatView";
@@ -60,6 +61,7 @@ function chooseLive() {
 
 describe("live voice in the chat", () => {
   beforeEach(async () => {
+    vi.stubGlobal("crypto", webcrypto);
     await i18n.changeLanguage("es");
     await db.drafts.clear();
     transport.Client.instances = [];
@@ -82,7 +84,42 @@ describe("live voice in the chat", () => {
   afterEach(async () => {
     cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     await db.drafts.clear();
+  });
+
+  it("offers a separate Live explanation of a saved response without starting speech playback or submitting work", async () => {
+    const create = vi.spyOn(api, "createLiveSession").mockResolvedValue({ session: { id: "explanation" }, transport: { type: "webrtc", sdp: "answer" } });
+    const speech = vi.spyOn(api, "streamSpeech");
+    const user = userEvent.setup();
+    render(<ChatView />);
+    const button = screen.getByRole("button", { name: "Explicar con GPT Live" });
+    expect(button).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Escuchar esta respuesta" })).toBeEnabled();
+    await user.click(button);
+    await waitFor(() => expect(transport.Client.instances).toHaveLength(1));
+    const client = transport.Client.instances[0];
+    await act(() => client.options.negotiate("offer", new AbortController().signal));
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "session-papers", profileId: "profile-newton", purpose: "explain", focusMessageId: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    }), "csrf-memory", expect.any(AbortSignal));
+    expect(speech).not.toHaveBeenCalled();
+    expect(button).toHaveClass("is-selected");
+    expect(screen.getByRole("button", { name: "Terminar conversación de voz" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Terminar conversación de voz" }));
+    expect(screen.getByRole("button", { name: "Escuchar esta respuesta" })).toBeEnabled();
+  });
+
+  it("hides Live explanation when unconfigured and blocks it while dictation is capturing", async () => {
+    const user = userEvent.setup();
+    render(<ChatView />);
+    await user.click(screen.getByRole("button", { name: "Dictar por voz" }));
+    expect(screen.getByRole("button", { name: "Explicar con GPT Live" })).toBeDisabled();
+    expect(transport.Client.instances).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "Detener dictado" }));
+    act(() => useAppStore.setState({ features: { ...features, live: { ...features.live, available: false } } }));
+    expect(screen.queryByRole("button", { name: "Explicar con GPT Live" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Escuchar esta respuesta" })).toBeVisible();
   });
 
   it("shows only dialogue from an internal voice prompt, including after durable history replaces it", async () => {
@@ -121,7 +158,7 @@ describe("live voice in the chat", () => {
     });
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     fireEvent(document, new Event("visibilitychange"));
-    expect(client.dispose).toHaveBeenCalledOnce();
+    expect(client.stop).toHaveBeenCalledOnce();
     expect(interrupt).not.toHaveBeenCalled();
     expect(useAppStore.getState().streamingBySession["session-papers"]).toBe("pending-voice-result");
     vi.spyOn(api, "sessionHistory").mockResolvedValue({ items: [{ id: "durable-result", role: "assistant", content: "Necesito tu confirmación para continuar.", timestamp: Date.now() / 1000 + 1 }], sessionStatus: "ready", activeOperation: null });
@@ -336,7 +373,7 @@ describe("live voice in the chat", () => {
       if (transition === "key") useAppStore.setState({ features: { ...features, live: { ...features.live, available: false } } });
       if (transition === "unmount") view.unmount();
     });
-    await waitFor(() => expect(client.dispose).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(client.stop).toHaveBeenCalledTimes(1));
     expect(usePwaUpdateStore.getState().blockers.dictation).toBe(false);
     expect(transport.Client.instances).toHaveLength(1);
     expect(client.start).toHaveBeenCalledTimes(1);

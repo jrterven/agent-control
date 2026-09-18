@@ -101,6 +101,19 @@ describe("GPT-Live WebRTC", () => {
     expect(CueContext.latest.createOscillator).toHaveBeenCalledOnce();
   });
 
+  it("starts a fresh explanation only after session.started with no previous delegation id", async () => {
+    const options = setup();
+    client.dispose();
+    client = new OpenAILiveClient({ ...options, initialCommentary: "Explain the verified answer in the startup context; do not repeat its task." });
+    await client.start();
+    expect(Peer.latest.channel.send).not.toHaveBeenCalled();
+    Peer.latest.channel.emit({ type: "session.started" });
+    Peer.latest.channel.emit({ type: "session.started" });
+    const events = Peer.latest.channel.send.mock.calls.map(([event]) => JSON.parse(event));
+    expect(events).toEqual([expect.objectContaining({ type: "session.commentary.append", delegation_id: null, content: "Explain the verified answer in the startup context; do not repeat its task." })]);
+    expect(options.onDelegation).not.toHaveBeenCalled();
+  });
+
   it("silences microphone tracks while paused and resumes the same session with no renegotiation", async () => {
     const options = setup();
     await client.start();

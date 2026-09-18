@@ -535,7 +535,7 @@ export const api = {
     body: JSON.stringify({ fragments, offset }),
     signal,
   }),
-  createLiveSession: (payload: { sdp: string; profileId: string; sessionId?: string | null }, csrfToken?: string, signal?: AbortSignal) => request<OpenAILiveSessionView>("/realtime/live-session", {
+  createLiveSession: (payload: { sdp: string; profileId: string; sessionId?: string | null; focusMessageId?: string; purpose?: "explain" | "resume" }, csrfToken?: string, signal?: AbortSignal) => request<OpenAILiveSessionView>("/realtime/live-session", {
     method: "POST",
     headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
     body: JSON.stringify(payload),

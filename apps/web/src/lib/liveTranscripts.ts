@@ -32,7 +32,7 @@ export function groupLiveFragments(fragments: LiveFragment[]) {
 export class LiveTranscriptWriter {
   private fragments: LiveFragment[] = [];
   private saved = 0;
-  private inFlight = false;
+  private inFlight?: Promise<void>;
   private timer?: ReturnType<typeof setTimeout>;
   private attempts = 0;
 
@@ -44,27 +44,47 @@ export class LiveTranscriptWriter {
     if (!this.timer && !this.inFlight) this.timer = setTimeout(() => { this.timer = undefined; void this.flush(); }, 1000);
   }
 
-  async flush() {
+  flush(): Promise<void> {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
-    if (this.inFlight || this.saved >= this.fragments.length) return;
-    this.inFlight = true;
+    if (this.inFlight) return this.inFlight;
+    if (this.saved >= this.fragments.length) return Promise.resolve();
     const snapshot = this.fragments;
     this.status("saving");
-    try {
-      await this.save(snapshot.slice(this.saved), this.saved);
+    const inFlight = Promise.resolve().then(() => this.save(snapshot.slice(this.saved), this.saved)).then(() => {
       this.saved = snapshot.length;
       this.attempts = 0;
       this.status(this.saved === this.fragments.length ? "saved" : "saving");
-    } catch {
+    }).catch(() => {
       this.attempts += 1;
       this.status("failed");
-    } finally {
-      this.inFlight = false;
+    }).finally(() => {
+      if (this.inFlight === inFlight) this.inFlight = undefined;
       if (this.saved < this.fragments.length && this.attempts < 3) {
         this.timer = setTimeout(() => { this.timer = undefined; void this.flush(); }, this.attempts ? this.attempts * 2000 : 1000);
       }
-    }
+    });
+    this.inFlight = inFlight;
+    return inFlight;
+  }
+
+  /** Briefly settle captured captions before a new call loads its context.
+   * Ordinary append/flush stay independent of audio; failures retain their
+   * normal retry schedule and never prevent the next verified explanation. */
+  async drain(timeoutMs = 2000) {
+    const target = this.fragments.length;
+    if (this.saved >= target || this.attempts > 0) return;
+    let expired = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(() => { expired = true; resolve(); }, timeoutMs);
+    });
+    const settle = async () => {
+      if (this.inFlight) await this.inFlight;
+      while (!expired && this.saved < target && this.attempts === 0) await this.flush();
+    };
+    await Promise.race([settle(), deadline]);
+    clearTimeout(timer);
   }
 
   retry() { this.attempts = 0; void this.flush(); }

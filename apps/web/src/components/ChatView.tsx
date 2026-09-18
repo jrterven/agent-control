@@ -450,6 +450,13 @@ type MessageSpeech = {
   setRate: (rate: number) => void;
 };
 
+type MessageLiveExplanation = {
+  available: boolean;
+  disabled: boolean;
+  activeMessageId?: string;
+  explain: (message: ChatMessage) => void;
+};
+
 function SpeechPlayer({ speech }: { speech: MessageSpeech }) {
   const { t } = useTranslation();
   return <div className="speech-player" role="group" aria-label={t("speech.player")}>
@@ -513,7 +520,7 @@ function AutomationInstructionMessage({ message }: { message: ChatMessage }) {
   );
 }
 
-function Message({ message, profile, agentName, speech, automationInstruction = false }: { message: ChatMessage; profile?: Profile; agentName: string; speech: MessageSpeech; automationInstruction?: boolean }) {
+function Message({ message, profile, agentName, speech, liveExplanation, automationInstruction = false }: { message: ChatMessage; profile?: Profile; agentName: string; speech: MessageSpeech; liveExplanation?: MessageLiveExplanation; automationInstruction?: boolean }) {
   const { t } = useTranslation();
   if (message.role === "user") {
     const conversation = liveDelegationConversation(message.content);
@@ -570,9 +577,10 @@ function Message({ message, profile, agentName, speech, automationInstruction = 
             ))}
           </div>
         ) : null}
-        {speech.available && !message.streaming && message.content.trim() ? <div className="message-speech">
-          <IconButton className="message-speech__button" label={t("speech.readResponse")} selected={speech.activeMessageId === message.id} icon={<SpeakerHigh weight="fill" />} onClick={() => void speech.speak(message)} />
-          {speech.activeMessageId === message.id ? <SpeechPlayer speech={speech} /> : null}
+        {(speech.available || liveExplanation?.available) && !message.streaming && message.content.trim() ? <div className="message-speech">
+          {speech.available ? <IconButton className="message-speech__button" label={t("speech.readResponse")} selected={speech.activeMessageId === message.id} icon={<SpeakerHigh weight="fill" />} onClick={() => void speech.speak(message)} /> : null}
+          {liveExplanation?.available ? <IconButton className="message-speech__button" label={t("liveVoice.explainResponse")} selected={liveExplanation.activeMessageId === message.id} disabled={liveExplanation.disabled} icon={<Waveform weight="bold" />} onClick={() => liveExplanation.explain(message)} /> : null}
+          {speech.available && speech.activeMessageId === message.id ? <SpeechPlayer speech={speech} /> : null}
         </div> : null}
       </div>
     </article>
@@ -681,7 +689,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
   };
 
   const startLive = async () => {
-    if (startingCaptureRef.current || live.active || dictation.active || !live.available || value.trim() || attachments.length || streamingMessageId) return;
+    if (startingCaptureRef.current || live.active || dictation.active || !live.available || value.trim() || attachments.length || (streamingMessageId && !(live.resumeAvailable && live.working))) return;
     startingCaptureRef.current = true;
     try { await live.start(); } finally { startingCaptureRef.current = false; }
   };
@@ -694,9 +702,9 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
 
   useEffect(() => {
     setUpdateBlocker("dictation", dictation.active || live.active);
-    onCaptureChange(dictation.active || live.active);
+    onCaptureChange(dictation.active || live.captureActive);
     return () => { setUpdateBlocker("dictation", false); onCaptureChange(false); };
-  }, [dictation.active, live.active, setUpdateBlocker, onCaptureChange]);
+  }, [dictation.active, live.active, live.captureActive, setUpdateBlocker, onCaptureChange]);
 
   useEffect(() => {
     setUpdateBlocker("draft", Boolean(value.trim()) || attachments.length > 0);
@@ -830,15 +838,18 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           </div>
           {dictation.partial ? <em className="dictation-state__announcement">{t("dictation.provisional", { text: dictation.partial })}</em> : null}
         </div> : null}
-        {!dictation.active && (live.active || live.issue || live.waitingApproval || live.working) ? <div className={`dictation-state live-voice-state${live.issue ? " dictation-state--error" : ""}`} data-live-phase={live.phase}>
+        {!dictation.active && (live.active || live.resumeAvailable || live.issue || live.waitingApproval || live.working) ? <div className={`dictation-state live-voice-state${live.issue ? " dictation-state--error" : ""}`} data-live-phase={live.phase}>
           <div className="live-voice-state__row">
             <span className="live-voice-state__status" role={live.issue ? "alert" : "status"} aria-live={live.issue ? "assertive" : "polite"}>
-              {!live.issue ? live.phase === "connecting" ? <CircleNotch className="spin" aria-hidden="true" /> : live.phase === "paused" ? <MicrophoneSlash weight="fill" aria-hidden="true" /> : live.phase === "listening" ? <span className="live-voice-state__dot" aria-hidden="true" /> : null : null}
-              {live.issue ? t(`liveVoice.${live.issue}`) : live.phase === "connecting" ? t("liveVoice.connecting") : live.phase === "stopping" ? t("liveVoice.stopping") : live.phase === "paused" ? t("liveVoice.paused") : t("liveVoice.listening")}
+              {!live.issue ? live.phase === "connecting" ? <CircleNotch className="spin" aria-hidden="true" /> : live.phase === "waiting" || live.resumeAvailable ? <Waveform aria-hidden="true" /> : live.phase === "paused" ? <MicrophoneSlash weight="fill" aria-hidden="true" /> : live.phase === "listening" ? <span className="live-voice-state__dot" aria-hidden="true" /> : null : null}
+              {live.issue ? t(`liveVoice.${live.issue}`) : live.resumeAvailable ? t(live.pendingResult ? "liveVoice.ready" : "liveVoice.suspended") : live.phase === "waiting" ? t("liveVoice.waiting") : live.phase === "connecting" ? t("liveVoice.connecting") : live.phase === "stopping" ? t("liveVoice.stopping") : live.phase === "paused" ? t("liveVoice.paused") : t("liveVoice.listening")}
             </span>
             {!live.issue && (live.phase === "listening" || live.phase === "paused") ? <Button className="live-voice-state__pause" variant="ghost" size="sm" leadingIcon={live.phase === "paused" ? <Microphone /> : <Pause />} onClick={live.phase === "paused" ? live.resume : live.pause}>{t(live.phase === "paused" ? "liveVoice.resume" : "liveVoice.pause")}</Button> : null}
+            {live.resumeAvailable ? <Button className="live-voice-state__pause" variant="ghost" size="sm" leadingIcon={<Waveform />} disabled={!live.available || (Boolean(streamingMessageId) && !live.working)} onClick={() => void live.start()}>{t("liveVoice.resumeConversation")}</Button> : null}
           </div>
           {live.phase === "paused" && !live.issue ? <small>{t("liveVoice.pausedHint")}</small> : null}
+          {live.phase === "waiting" && live.active && !live.issue ? <small>{t("liveVoice.waitingHint")}</small> : null}
+          {live.resumeAvailable && !live.issue ? <small>{t("liveVoice.suspendedHint")}</small> : null}
           {!live.issue && (live.waitingApproval || live.working) ? <small role="status">{t(live.waitingApproval ? "liveVoice.waitingApproval" : "liveVoice.working", { agent: agentName })}</small> : null}
         </div> : null}
         <div className="composer__actions">
@@ -850,7 +861,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
             selected={live.active}
             label={t(live.active ? "liveVoice.stop" : "liveVoice.start")}
             icon={live.active ? <Stop size={20} weight="fill" /> : <Waveform size={21} weight="bold" />}
-            disabled={live.phase === "stopping" || (!live.active && (!live.available || dictation.active || Boolean(streamingMessageId) || Boolean(value.trim()) || attachments.length > 0))}
+            disabled={live.phase === "stopping" || (!live.active && (!live.available || dictation.active || (Boolean(streamingMessageId) && !(live.resumeAvailable && live.working)) || Boolean(value.trim()) || attachments.length > 0))}
             onClick={() => { if (live.active) live.stop(); else void startLive(); }}
           /> : null}
           {!offline && dictationConfigured ? <IconButton className="dictation-button" data-voice-provider="elevenlabs" data-live-phase={dictation.phase} selected={dictation.active} label={t(dictation.active ? "dictation.stop" : "dictation.start")} icon={dictation.active ? <Stop size={20} weight="fill" /> : <Microphone size={21} weight="fill" />} disabled={dictation.phase === "stopping" || (!dictation.active && (!dictation.available || live.active || Boolean(streamingMessageId)))} onClick={() => { if (dictation.active) dictation.stop(); else beginDictation(); }} /> : null}
@@ -983,7 +994,7 @@ export function ChatView() {
         <div className="date-divider"><span>{t("chat.fixedDate")}</span></div>
         <div className="message-list">
           {live.transcripts.hasMore || live.transcripts.historyError ? <div className="live-transcript__history"><Button size="sm" variant="ghost" disabled={live.transcripts.loading} onClick={() => { followLatestRef.current = false; live.transcripts.loadMore(); }}>{t(live.transcripts.historyError ? "liveVoice.transcriptLoadError" : "liveVoice.transcriptOlder")}</Button></div> : null}
-          {timeline.length ? timeline.map((item) => item.kind === "transcript" ? <LiveTranscript key={item.id} call={item.call} agentName={profile?.displayName ?? t("chat.agent")} retry={() => live.transcripts.retrySave(item.id)} /> : <Message key={item.id} message={item.message} profile={profile} agentName={profile?.displayName ?? t("chat.agent")} automationInstruction={session?.automationGenerated === true && item.id === firstUserMessageId} speech={{ available: canUseSpeech, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : <div className="empty-chat"><ProfileAvatar profile={profile} size="lg" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
+          {timeline.length ? timeline.map((item) => item.kind === "transcript" ? <LiveTranscript key={item.id} call={item.call} agentName={profile?.displayName ?? t("chat.agent")} retry={() => live.transcripts.retrySave(item.id)} /> : <Message key={item.id} message={item.message} profile={profile} agentName={profile?.displayName ?? t("chat.agent")} automationInstruction={session?.automationGenerated === true && item.id === firstUserMessageId} liveExplanation={{ available: liveConfigured && live.available && !offline, activeMessageId: live.explainingMessageId, disabled: live.active || voiceCaptureActive || Boolean(streamingMessageId), explain: (message) => { speech.stop(); void live.explain(message); } }} speech={{ available: canUseSpeech, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : <div className="empty-chat"><ProfileAvatar profile={profile} size="lg" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
           <InteractionCards approvals={approvals} clarifications={clarifications} offline={offline} canApprove={canApprove} canClarify={canClarify} />
           {streamingMessageId ? waitingForResponse
             ? <p className="typing-state typing-state--waiting" role="status"><WarningCircle /><span>{t("chat.waitingForResponse", { agent: profile?.displayName ?? "Hermes" })}</span></p>

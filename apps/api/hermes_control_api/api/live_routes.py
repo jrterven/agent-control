@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Request, Response
@@ -18,8 +19,8 @@ from ..integration_schemas import (
     VoiceSettingsView,
 )
 from ..integrations import IntegrationError
-from ..live_context import live_agent_context
-from ..models import AuthSession, Gateway, OpenAIProfileVoicePreference, ProfileRef, SessionLink, User
+from ..live_context import live_agent_context, merge_spoken_history, resolve_response_focus
+from ..models import AuthSession, Gateway, LiveTranscript, OpenAIProfileVoicePreference, ProfileRef, SessionLink, User
 from ..openai_live import (
     OpenAIIntegrationService,
     openai_voice_id,
@@ -57,6 +58,43 @@ def _audit(
         outcome="failure" if failed else "success",
         request_id=getattr(request.state, "request_id", None),
     )
+
+
+def _spoken_history(
+    db: Session, request: Request, owner: User, conversation: SessionLink,
+) -> list[dict[str, object]]:
+    # Reuse the existing encryption AAD and validated transcript projection.
+    # A local import avoids importing API modules from the context helpers.
+    from .live_transcript_routes import _snapshot
+
+    rows = db.scalars(select(LiveTranscript).where(
+        LiveTranscript.owner_id == owner.id,
+        LiveTranscript.session_link_id == conversation.id,
+    ).order_by(LiveTranscript.created_at.desc(), LiveTranscript.id.desc()).limit(3)).all()
+    result: list[dict[str, object]] = []
+    for row in reversed(rows):
+        try:
+            fragments = _snapshot(request, row).fragments
+        except ValueError:
+            # An unreadable optional recording must not leak ciphertext or
+            # prevent a conversation backed by available agent history.
+            continue
+        baseline = min(part.start for part in fragments)
+        created = row.created_at.replace(tzinfo=row.created_at.tzinfo or timezone.utc)
+        grouped: list[dict[str, object]] = []
+        previous = None
+        for part in sorted(fragments, key=lambda fragment: (fragment.start, fragment.order)):
+            if previous is not None and previous["role"] == part.role and part.start - previous["end"] <= 1_200:
+                previous["content"] += part.text
+                previous["end"] = max(previous["end"], part.end)
+            else:
+                previous = {
+                    "role": part.role, "content": part.text, "end": part.end,
+                    "timestamp": (created + timedelta(milliseconds=part.start - baseline)).isoformat(),
+                }
+                grouped.append(previous)
+        result.extend(grouped[-60:])
+    return result[-60:]
 
 
 @router.get("/integrations/voice", response_model=VoiceSettingsView)
@@ -247,12 +285,22 @@ async def create_live_session(
             history = await SessionService(request.app.state.services).history(
                 db, owner, conversation
             )
+        response_focus = None
+        if payload.focus_message_id is not None:
+            response_focus = resolve_response_focus(
+                history, payload.focus_message_id, payload.purpose or "explain",
+            )
+        if conversation is not None:
+            spoken = _spoken_history(db, request, owner, conversation)
+            if spoken:
+                history, response_focus = merge_spoken_history(history, spoken, response_focus)
         result = await request.app.state.openai_live_client.create_session(
             api_key=api_key, sdp=payload.sdp, history=history,
             voice_id=openai_voice_id(db, owner, profile.id),
             agent_context=await live_agent_context(
                 db, request.app.state.services, owner, profile, conversation,
             ),
+            response_focus=response_focus,
         )
     except IntegrationError:
         _audit(db, request, owner, "integration.openai.live.create", failed=True)
