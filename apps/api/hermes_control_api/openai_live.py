@@ -331,6 +331,7 @@ class OpenAILiveClient:
         instructions: str = LIVE_INSTRUCTIONS,
         agent_context: LiveAgentContext | None = None,
         response_focus: LiveResponseFocus | None = None,
+        context_events: bool = False,
     ) -> dict[str, object]:
         session_input = live_conversation_input(
             history, api_key=api_key, agent_context=agent_context, response_focus=response_focus,
@@ -357,8 +358,8 @@ class OpenAILiveClient:
                             "data_channel": {
                                 "allowed_client_events": [
                                     "session.commentary.append",
-                                    "session.instructions.append",
-                                    "session.thinking.append",
+                                    *(["session.instructions.append", "session.thinking.append"]
+                                      if context_events else []),
                                     "session.close",
                                 ],
                                 "allowed_server_events": "all",
@@ -441,13 +442,13 @@ class OpenAILiveClient:
             return await self._create_with_client(
                 self._http_client, api_key=api_key, sdp=sdp,
                 history=history or [], voice_id=voice_id, agent_context=agent_context,
-                response_focus=response_focus,
+                response_focus=response_focus, context_events=True,
             )
         async with httpx.AsyncClient(follow_redirects=False, trust_env=False) as client:
             return await self._create_with_client(
                 client, api_key=api_key, sdp=sdp,
                 history=history or [], voice_id=voice_id, agent_context=agent_context,
-                response_focus=response_focus,
+                response_focus=response_focus, context_events=True,
             )
 
     async def create_voice_preview(
