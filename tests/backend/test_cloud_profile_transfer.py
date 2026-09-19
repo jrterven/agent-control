@@ -399,3 +399,15 @@ def test_cloud_last_shared_agent_is_rejected_before_native_transfer(cloud_transf
     response = move(fixture)
     assert response.status_code == 409 and "Share another agent" in response.json()["message"]
     assert_source_unchanged(fixture)
+
+
+def test_cloud_delete_requires_retirement_aware_connector_before_native_mutation(cloud_transfer):
+    fixture = cloud_transfer
+    fixture.older_connectors.add(fixture.alice[1])
+    response = fixture.client.request(
+        "DELETE", f"/api/v1/profiles/{fixture.alice[2]}",
+        headers=mutation_headers(fixture.alice[5], "old-cloud-delete"),
+        json={"confirmation": "control-dev"},
+    )
+    assert response.status_code == 409, response.text
+    assert_source_unchanged(fixture)

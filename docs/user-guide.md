@@ -336,7 +336,8 @@ the middle of an export or cutover.
 
 In cloud mode, both computers must belong to your account, remain connected,
 and run updated connectors that advertise `connector.profileTransferV2`.
-Older connectors must be updated before moving agents. Both cloud computers
+Older connectors must be updated before moving or deleting agents; this keeps
+the local and cloud sharing lists consistent after confirmed deletion. Both cloud computers
 need Hermes 0.21.2 revision `939e45c9…` and verified export/import and
 rollback support. An offline gateway cannot be selected; if it disconnects
 before confirmation, reconnect it or choose another compatible destination.

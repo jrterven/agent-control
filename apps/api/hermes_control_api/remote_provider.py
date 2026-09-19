@@ -212,7 +212,7 @@ class RemoteProvider:
         if "connector.profileTransferV2" in value.features:
             return value
         return CapabilitySet(protocol=value.protocol, version=value.version, source_sha=value.source_sha,
-                             methods=value.methods - {"profiles.transfer", "profiles.export", "profiles.import"},
+                             methods=value.methods - {"profiles.delete", "profiles.transfer", "profiles.export", "profiles.import"},
                              features=value.features - {"profiles.transfer"})
 
     async def transfer_profile_to(self, destination, *, name):

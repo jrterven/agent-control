@@ -1908,6 +1908,9 @@ class ProfileService:
                 retiring_profile=technical_name,
                 methods=frozenset({"profiles.delete"}),
             )
+            if (self.services.settings.deployment_mode == "cloud"
+                    and "connector.profileTransferV2" not in manager_capabilities.features):
+                raise ConflictError("Update the connector before deleting an agent")
             source_sha = trusted_gateway_source_sha(
                 db, self.services, source_gateway_id
             )

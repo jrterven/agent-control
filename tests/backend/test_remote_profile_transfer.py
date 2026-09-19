@@ -136,11 +136,12 @@ async def test_import_identity_mismatch_is_uncertain_not_safe_to_delete(relay):
 
 
 @pytest.mark.asyncio
-async def test_old_connector_cannot_advertise_cloud_transfer(relay):
+@pytest.mark.parametrize("old_features", [frozenset({"profiles.transfer"}), frozenset({"profiles.transfer", "connector.profileTransferV1"})])
+async def test_old_connector_cannot_advertise_cloud_transfer_or_delete(relay, old_features):
     source, destination, source_peer, peer = relay
-    peer.caps = replace(peer.caps, features=frozenset({"profiles.transfer"}))
+    peer.caps = replace(peer.caps, methods=peer.caps.methods | {"profiles.delete"}, features=old_features)
     caps = await destination.capabilities()
-    assert not {"profiles.transfer", "profiles.import", "profiles.export"}.intersection(caps.methods)
+    assert not {"profiles.delete", "profiles.transfer", "profiles.import", "profiles.export"}.intersection(caps.methods)
     with pytest.raises(ProfileTransferNotImported, match="Update both connectors"):
         await source.transfer_profile_to(destination, name="Control.dev")
     assert all(call[0] == "capabilities" for call in source_peer.calls + peer.calls)
