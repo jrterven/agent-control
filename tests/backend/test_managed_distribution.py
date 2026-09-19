@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import signal
 import subprocess
@@ -215,6 +216,119 @@ def test_bootstrap_invalid_arguments_fail_before_network(args):
 
 def test_bootstrap_shell_syntax():
     subprocess.run(["sh", "-n", str(REPO / "deploy/managed/install.sh")], check=True)
+
+
+def signed_bootstrap_fixture(tmp_path: Path, signing_key: Path, architecture: str, *, tamper: str | None = None):
+    """Exercise the actual shell, archive extraction and signed runtime verifier.
+
+    Platform detection and downloads are fixtures; tar, OpenSSL and the verifier
+    run normally. The tiny Python launcher uses the test interpreter so the same
+    archive-permission regression can run on macOS and both Linux architectures.
+    """
+    target = "linux-" + ("arm64" if architecture == "aarch64" else architecture)
+    root = runtime(tmp_path / "runtime", target)
+    public_key = subprocess.run(["openssl", "pkey", "-in", str(signing_key), "-pubout"],
+                                check=True, capture_output=True).stdout
+    for package, module in (("agent_control_connector", "managed_manifest"), ("hermes_client", "compatibility")):
+        destination = root / "connector" / package
+        destination.mkdir()
+        (destination / "__init__.py").write_text("")
+        source = REPO / "packages" / ("connector" if package == "agent_control_connector" else "hermes-client")
+        shutil.copyfile(source / package / f"{module}.py", destination / f"{module}.py")
+    # Replace only the external trust/platform inputs. The production verifier's
+    # signature, inventory, size, permission and content checks stay unmodified.
+    (root / "python/bin/python3").write_text(f"#!{sys.executable}\n"
+        "import sys\nfrom agent_control_connector import managed_manifest\n"
+        f"managed_manifest.PUBLIC_KEY = {public_key!r}\n"
+        f"managed_manifest.current_platform = lambda: {target!r}\n"
+        "position = sys.argv.index('-c')\ncode = sys.argv[position + 1]\n"
+        "sys.argv = ['-c', *sys.argv[position + 2:]]\nexec(code)\n")
+    # Explicit modes make the signed fixture independent of the test runner's umask.
+    for path in root.rglob("*"):
+        path.chmod(0o755 if path.is_dir() or path.relative_to(root).as_posix() in
+                   {"python/bin/python3", "bin/agent-control-setup"} else 0o644)
+    manifest.create_manifest(root, REVISION, target)
+    manifest.sign_manifest(root, signing_key)
+    if tamper == "mode":
+        (root / "hermes/uv.lock").chmod(0o640)
+    elif tamper == "content":
+        (root / "hermes/uv.lock").write_text("TEST runtime fixture\n")  # Same length; exercises the hash check.
+    elif tamper == "signature":
+        signature = root / "runtime-manifest.json.sig"
+        signature.write_bytes(b"\0" * signature.stat().st_size)
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    archive = downloads / f"agent-control-runtime-{target}.tar.gz"
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.add(root, arcname="agent-control-runtime")
+    checksums = downloads / "SHA256SUMS"
+    checksums.write_text(f"{build.digest(archive)}  {archive.name}\n")
+    subprocess.run(["openssl", "dgst", "-sha256", "-sign", str(signing_key), "-out",
+                    str(downloads / "SHA256SUMS.sig"), str(checksums)], check=True, capture_output=True)
+    (downloads / "VERSION").write_text(REVISION + "\n")
+    installer = tmp_path / "install.sh"
+    installer.write_text((REPO / "deploy/managed/install.sh").read_text().replace(
+        "__MANAGED_RELEASE_PUBLIC_KEY__", public_key.decode().strip()))
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    stubs = {
+        "uname": f'#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo {architecture} ;; *) exit 2 ;; esac\n',
+        "systemctl": "#!/bin/sh\nexit 0\n",
+        "curl": f"#!{sys.executable}\nimport pathlib, shutil, sys\n"
+            f"source = pathlib.Path({str(downloads)!r}) / sys.argv[-1].rsplit('/', 1)[-1]\n"
+            "if '--output' in sys.argv:\n    shutil.copyfile(source, sys.argv[sys.argv.index('--output') + 1])\n"
+            "else:\n    sys.stdout.write(source.read_text())\n",
+        "awk": '#!/bin/sh\nfor arg; do last=$arg; done\nif [ "$last" = /etc/os-release ]; then\n'
+            'case "$*" in *VERSION_ID*) echo 24.04 ;; *) echo ubuntu ;; esac\nelse\n'
+            f'exec {shlex.quote(shutil.which("awk"))} "$@"\nfi\n',
+    }
+    if sys.platform != "linux":
+        # Only Linux-specific host preflight/locking needs substitutes on macOS.
+        stubs["stat"] = f"#!{sys.executable}\nimport os, sys\nassert sys.argv[1:3] == ['-c', '%u']\nprint(os.stat(sys.argv[3]).st_uid)\n"
+        stubs["flock"] = "#!/bin/sh\nexit 0\n"
+    for name, content in stubs.items():
+        utility = tools / name
+        utility.write_text(content)
+        utility.chmod(0o755)
+    return installer, {**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"]}
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="Non-root extraction reproduces the user's umask filtering")
+@pytest.mark.parametrize("architecture", ["x86_64", "aarch64"])
+@pytest.mark.parametrize("initial_umask", [0o022, 0o077])
+def test_bootstrap_preserves_signed_modes_under_restrictive_umask(tmp_path, signing_key, architecture, initial_umask):
+    installer, env = signed_bootstrap_fixture(tmp_path, signing_key, architecture)
+    managed = tmp_path / "managed"
+    result = subprocess.run(["sh", str(installer), "--data-dir", str(managed)], env=env,
+                            capture_output=True, text=True, timeout=20, start_new_session=True, umask=initial_umask)
+    # A headless bootstrap must reach the interactive setup handoff, without
+    # starting services, asking for credentials, or pairing the test machine.
+    assert result.returncode == 2 and "Runtime verified." in result.stdout, result.stderr
+    assert "Open an interactive terminal and run:" in result.stderr
+    release = managed / "releases" / REVISION
+    expected = json.loads((release / "runtime-manifest.json").read_text())["files"]
+    assert manifest.file_inventory(release) == expected
+    assert (release / "hermes/uv.lock").stat().st_mode & 0o777 == 0o644
+    assert (release / "python/bin/python3").stat().st_mode & 0o777 == 0o755
+    assert managed.stat().st_mode & 0o777 == 0o700
+    assert (managed / "releases").stat().st_mode & 0o777 == 0o700
+    assert (managed / ".install.lock").stat().st_mode & 0o777 == 0o600
+    assert not list(managed.glob(".download.*"))
+    assert not (managed / "current").exists()
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="Non-root extraction reproduces the user's umask filtering")
+@pytest.mark.parametrize("tamper, error", [("mode", "Runtime file metadata changed"),
+    ("content", "Runtime integrity check failed"), ("signature", "Release signature is not from Agent Control")])
+def test_bootstrap_still_rejects_tampered_signed_runtime(tmp_path, signing_key, tamper, error):
+    installer, env = signed_bootstrap_fixture(tmp_path, signing_key, "x86_64", tamper=tamper)
+    managed = tmp_path / "managed"
+    result = subprocess.run(["sh", str(installer), "--data-dir", str(managed)], env=env,
+                            capture_output=True, text=True, timeout=20, start_new_session=True, umask=0o077)
+    assert result.returncode != 0 and error in result.stderr
+    assert "Runtime verified." not in result.stdout
+    assert not (managed / "releases" / REVISION).exists()
+    assert not list(managed.glob(".download.*"))
 
 
 @pytest.mark.skipif(sys.platform != "linux" or os.getuid() == 0 or shutil.which("flock") is None,

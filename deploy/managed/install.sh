@@ -74,7 +74,9 @@ tar -tzf "$stage/$archive" > "$stage/members"
 if awk '$0 !~ /^agent-control-runtime\// || $0 ~ /(^|\/)\.\.(\/|$)/ || $0 ~ /\\/ {bad=1} END {exit !bad}' "$stage/members"; then echo 'Unsafe release archive path' >&2; exit 2; fi
 tar -tvzf "$stage/$archive" > "$stage/types"
 if awk 'substr($0,1,1) != "-" && substr($0,1,1) != "d" {bad=1} END {exit !bad}' "$stage/types"; then echo 'Release contains links or special files' >&2; exit 2; fi
-tar -xzf "$stage/$archive" -C "$stage"
+# Preserve the signed file modes instead of filtering them through umask 077.
+# The enclosing download and installation directories remain private (0700).
+tar -xpzf "$stage/$archive" -C "$stage"
 candidate="$stage/agent-control-runtime"
 verify_runtime() {
     unset PYTHONHOME PYTHONSTARTUP

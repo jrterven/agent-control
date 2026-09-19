@@ -19,6 +19,15 @@ shell utilities, but no host Python, Git, Node or compiler. It checks lingering
 and reports an administrator action if the session cannot persist after SSH
 closes. Never treat a failed lingering check as successful installation.
 
+The bootstrap preserves the archive's signed file permissions during extraction,
+including when it runs with `umask 077`. Installation and temporary download
+directories remain private (`0700`). Do not relax the manifest checks or change
+runtime permissions to work around a verification failure.
+
+If an earlier installer failed with `Runtime file metadata changed` before setup,
+rerun the published command. It verifies a fresh download before continuing;
+there is no need to revoke the computer or remove existing Hermes data.
+
 Build/import/container checks and actual localhost Hermes startup are automated.
 Fresh-machine login, OS background-service permissions, real provider accounts,
 and first-message usability still require the acceptance matrix below; an import
