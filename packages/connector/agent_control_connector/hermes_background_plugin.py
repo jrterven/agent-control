@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import functools
+import importlib
 import json
 import os
 from pathlib import Path
@@ -18,13 +19,17 @@ import types
 from uuid import uuid4
 
 PLUGIN_NAME = "agent-control-background"
-PLUGIN_VERSION = "1.0.1"
+PLUGIN_VERSION = "1.0.2"
 AUDITED_SOURCE_SHA = "939e45c91d751fadd94dcd1b873ac3cb44846213"
 DELIVERY_SHIM = "profile-delivery-939e-v1"
 DELIVERY_SOURCE_HASHES = {
     "tui_gateway/session_notifications.py": "f71b9dac8722e74cbf2fda89fd49263a1ef89df468f13ef4dbc79888b7f25cfa",
     "tools/async_delegation.py": "a837e0c5decadfb304d76cc8fe23c2c8bb56275ec38645125eaf1322f75db0a0",
     "hermes_constants.py": "d26e0db65ed08561a061db3bf6a51e4446938dc8d90737a9ba9c52e1983d15f2",
+}
+DELIVERY_BOOTSTRAP_HASHES = {
+    "hermes_cli/main.py": "dc7a6eda3caebab994e8dd2c05a4a8c8b2331f4472313c675efc9e7305b5d6aa",
+    "tui_gateway/server.py": "ba5e2ee2271acc9cd50aa7aeb0244d9b9f3d0fca8a2a71b4812c451f5d65ccb8",
 }
 INTERACTIVE_PLATFORMS = frozenset({"tui", "desktop", "cli"})
 INSTRUCTIONS = """Agent Control conversational multitasking: keep this conversation available while independent, time-consuming tasks run. When native delegate_task is available and the task can be completed independently with the information and permissions already given, delegate it with a clear goal, relevant context and output language. Give only the context the worker needs. Use the native tool; do not build a background executor or change schedules. After a confirmed background dispatch, briefly say what is running and END YOUR TURN promptly so the user can keep chatting. Do not wait, poll transcripts, or repeatedly call list to await completion. Hermes delivers the result to this same conversation between turns; report the result once when it arrives, distinguishing success, failure and uncertain outcomes. If dispatch falls back to synchronous execution, do not claim the chat has been freed. Keep immediate answers and tasks needing clarification in the main conversation. Workers inherit existing permissions: delegation does not authorize sending messages, deleting data or other actions beyond the user's request. Avoid concurrent changes to the same resource; pass relevant constraints to the worker. Never retry an uncertain external action automatically, or treat a worker's self-report as independently verified. A user asking about progress is not cancelling the work. Use native list/steer/stop only when needed to answer, redirect or cancel. For visual work, ask the worker to return local file paths or HTTPS image URLs with alt text and provenance, without publishing images from its child session. Publish those images yourself with publish_images in this parent conversation before inserting the returned Markdown. Do not reuse ac-media references published in a child conversation; media access is conversation-scoped. Running subagents do not survive stopping/resetting their session or exiting Hermes; do not promise restart durability. Cron and other finite runs retain their native behavior."""
@@ -95,6 +100,48 @@ def runtime_available(config) -> bool:
     return any("delegate_task" in resolve_toolset(name) for name in selected)
 
 
+def _verify_native_sources(root, hashes):
+    for relative, expected in hashes.items():
+        source = root / relative
+        if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+            raise ValueError("Unsupported native background delivery source")
+
+
+def _delivery_server():
+    server = sys.modules.get("tui_gateway.server")
+    if server is not None:
+        return server
+    # Canonical `hermes serve` discovers plugins before importing web_server.
+    # This exact audited startup frame proves that loading the server now is
+    # part of Serve startup. Merely seeing "serve" in argv is not authority to
+    # import it in CLI, gateway, cron or another plugin's registration.
+    frame = sys._getframe(1)
+    try:
+        for _ in range(64):
+            if frame is None:
+                return None
+            module_name = frame.f_globals.get("__name__")
+            canonical = module_name == "hermes_cli.main" or (
+                module_name == "__main__"
+                and getattr(frame.f_globals.get("__spec__"), "name", None) == "hermes_cli.main")
+            prepare = frame.f_globals.get("_dashboard_prepare_runtime")
+            if (canonical and isinstance(prepare, types.FunctionType)
+                    and frame.f_code is prepare.__code__
+                    and prepare.__globals__ is frame.f_globals):
+                root = Path(frame.f_globals["__file__"]).resolve().parent.parent
+                if Path(frame.f_code.co_filename).resolve() != root / "hermes_cli/main.py":
+                    raise ValueError("Unsupported native background startup handler")
+                _verify_native_sources(root, {**DELIVERY_SOURCE_HASHES, **DELIVERY_BOOTSTRAP_HASHES})
+                server = importlib.import_module("tui_gateway.server")
+                if Path(server.__file__).resolve().parent.parent != root:
+                    raise ValueError("Native background startup source mismatch")
+                return server
+            frame = frame.f_back
+        return None
+    finally:
+        del frame
+
+
 def _verified_delivery_dispatch(server):
     """Only wrap the reviewed native body, never another plugin's replacement."""
     dispatch = getattr(server, "_notif_dispatch_event", None)
@@ -103,10 +150,7 @@ def _verified_delivery_dispatch(server):
     if not isinstance(dispatch, types.FunctionType) or dispatch.__globals__ is not vars(server):
         raise ValueError("Unsupported native background delivery handler")
     root = Path(server.__file__).resolve().parent.parent
-    for relative, expected in DELIVERY_SOURCE_HASHES.items():
-        source = root / relative
-        if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
-            raise ValueError("Unsupported native background delivery source")
+    _verify_native_sources(root, DELIVERY_SOURCE_HASHES)
     native_path = root / "tui_gateway/session_notifications.py"
     if (Path(dispatch.__code__.co_filename).resolve() != native_path
             or dispatch.__code__.co_name != "_notif_dispatch_event"
@@ -126,7 +170,7 @@ def install_delivery_profile_scope(source_sha: str) -> bool:
     """
     if source_sha != AUDITED_SOURCE_SHA:
         raise ValueError("Unsupported native background delivery revision")
-    server = sys.modules.get("tui_gateway.server")
+    server = _delivery_server()
     if server is None:
         return False  # CLI needs no TUI shim; it cannot prove Serve activation.
     original = _verified_delivery_dispatch(server)

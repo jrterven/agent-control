@@ -79,6 +79,15 @@ source; it does not replace delivery, replay completions or execute tasks.
 The profile binding is restored after success or failure, and the runtime
 receipt proves that the corrected dispatch is installed.
 
+The canonical `hermes serve` command discovers plugins before importing its
+web server, and caches that discovery. The plugin recognizes only the exact
+audited Serve preparation frame, verifies the startup and delivery sources,
+and imports the native server synchronously so the shim is installed before
+Serve starts session pollers. Ordinary CLI and gateway registration do not
+trigger this import. Activation tests exercise the canonical CLI startup as
+well as delivery in a different profile; importing the server first in a test
+does not cover the launch profile's plugin lifecycle.
+
 There is no audited ID linking a live turn to a partial history row. On reopening
 mid-turn, the UI shows history and a running indicator until a verified terminal
 and history refresh, rather than guessing and duplicating partial output.

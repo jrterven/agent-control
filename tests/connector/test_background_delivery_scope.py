@@ -183,6 +183,75 @@ def test_gateway_delivery_is_distinct_from_uninitialized_serve(monkeypatch):
     assert plugin.delivery_runtime_mode(False) == "native-gateway"
     monkeypatch.setitem(sys.modules, "tui_gateway.entry", types.ModuleType("tui_gateway.entry"))
     assert plugin.delivery_runtime_mode(False) is None
+
+
+def canonical_startup(native, monkeypatch, *, module_name="hermes_cli.main"):
+    """Canonical discovery order: the plugin runs before the server import."""
+    root = Path(native.server.__file__).parent.parent
+    main_path = root / "hermes_cli/main.py"
+    main_path.parent.mkdir()
+    source = "def _dashboard_prepare_runtime(args=None, headless_backend=True):\n    return discover_plugins()\n"
+    main_path.write_text(source)
+    Path(native.server.__file__).write_text("# native server imported after discovery\n")
+    monkeypatch.setattr(plugin, "DELIVERY_BOOTSTRAP_HASHES", {
+        relative: hashlib.sha256((root / relative).read_bytes()).hexdigest()
+        for relative in plugin.DELIVERY_BOOTSTRAP_HASHES})
+    main = types.ModuleType(module_name)
+    main.__file__ = str(main_path)
+    if module_name == "__main__":
+        main.__spec__ = types.SimpleNamespace(name="hermes_cli.main")
+    main.discover_plugins = lambda: plugin.install_delivery_profile_scope(plugin.AUDITED_SOURCE_SHA)
+    exec(compile(source, str(main_path), "exec"), vars(main))
+    monkeypatch.delitem(sys.modules, "tui_gateway.server")
+    imports = []
+    def import_server(name):
+        assert name == "tui_gateway.server"
+        imports.append(name)
+        monkeypatch.setitem(sys.modules, name, native.server)
+        return native.server
+    monkeypatch.setattr(plugin.importlib, "import_module", import_server)
+    return main, imports
+
+
+@pytest.mark.parametrize("module_name", ["hermes_cli.main", "__main__"])
+def test_canonical_serve_discovery_imports_server_before_registration_finishes(native, monkeypatch, module_name):
+    main, imports = canonical_startup(native, monkeypatch, module_name=module_name)
+    assert main._dashboard_prepare_runtime() is True
+    assert imports == ["tui_gateway.server"]
+    assert plugin.delivery_runtime_mode(True) == "tui-scoped"
+    dispatch = native.server._notif_dispatch_event
+    # A later profile registration reuses the same installed native dispatcher.
+    assert plugin.install_delivery_profile_scope(plugin.AUDITED_SOURCE_SHA) is True
+    assert native.server._notif_dispatch_event is dispatch and len(imports) == 1
+    dispatch("later-profile", {"profile_home": native.homes["jarvis"]}, event(), "result")
+    assert state(native.homes["jarvis"]) == ("delivered", None, 1)
+    assert state(native.homes["default"]) == ("pending", None, 0)
+
+
+@pytest.mark.parametrize("relative", ["hermes_cli/main.py", "tui_gateway/server.py"])
+def test_changed_canonical_startup_source_is_rejected_before_import(native, monkeypatch, relative):
+    main, imports = canonical_startup(native, monkeypatch)
+    path = Path(native.server.__file__).parent.parent / relative
+    path.write_text(path.read_text() + "# changed source\n")
+    with pytest.raises(ValueError, match="source"):
+        main._dashboard_prepare_runtime()
+    assert imports == [] and "tui_gateway.server" not in sys.modules
+
+
+def test_unrelated_cli_with_serve_argument_does_not_import_native_server(native, monkeypatch):
+    main, imports = canonical_startup(native, monkeypatch)
+    monkeypatch.setitem(sys.modules, "hermes_cli.main", main)
+    monkeypatch.setattr(sys, "argv", ["hermes", "serve"])
+    assert plugin.install_delivery_profile_scope(plugin.AUDITED_SOURCE_SHA) is False
+    assert imports == [] and plugin.delivery_runtime_mode(False) is None
+
+
+def test_partial_server_after_canonical_import_cannot_claim_activation(native, monkeypatch):
+    main, imports = canonical_startup(native, monkeypatch)
+    del native.server._notif_dispatch_event
+    with pytest.raises(ValueError, match="handler"):
+        main._dashboard_prepare_runtime()
+    assert imports == ["tui_gateway.server"]
     monkeypatch.setitem(sys.modules, "tui_gateway.server", types.ModuleType("tui_gateway.server"))
     with pytest.raises(ValueError, match="handler"):
         plugin.install_delivery_profile_scope(plugin.AUDITED_SOURCE_SHA)
