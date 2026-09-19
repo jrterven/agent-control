@@ -31,12 +31,14 @@
   credentials; local files and tools are not made portable automatically.
 - Cloud agent transfer requires two connected computers owned by the same
   account and updated connectors on both sides advertising
-  `connector.profileTransferV1`, with Hermes 0.21.2 revision `939e45c9…`
+  `connector.profileTransferV2`, with Hermes 0.21.2 revision `939e45c9…`
   on both computers. The older audited pair remains private-mode only.
   Older connectors must be updated first. Archives travel through typed
   chunks of at most 1 MiB. Identity, configuration and history are preserved,
   and the source is deleted only after destination verification. The
-  `default` profile and agents with active work cannot move.
+  `default` profile and agents with active work cannot move. The source must
+  also share another agent for deletion reconciliation; its last shared
+  agent cannot be moved or deleted through cloud.
 - Hermes 0.20.6 and the audited 0.21.2 revision do not clear a previous native
   deletion marker during import. A move back to a computer that previously
   held the same technical profile name therefore needs native maintenance

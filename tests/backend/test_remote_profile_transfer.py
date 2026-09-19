@@ -24,7 +24,7 @@ class TransferPeer:
         self.tamper = None
         self.caps = CapabilitySet(
             methods=frozenset({"profiles.export", "profiles.import", "profiles.transfer"}),
-            features=frozenset({"connector.profileTransferV1", "profiles.transfer"}),
+            features=frozenset({"connector.profileTransferV2", "profiles.transfer"}),
         )
 
     async def call(self, profile, operation, args, kwargs, *, operation_id=None):

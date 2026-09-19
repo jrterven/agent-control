@@ -350,7 +350,7 @@ def test_move_restores_and_verifies_secret_free_config_before_cutover(
         client, csrf, "move-config"
     )
     agent = _create_agent(client, csrf, source_gateway_id, "move-config-agent")
-    original_get = InMemoryHermesProvider.get_config
+    original_get = InMemoryHermesProvider.get_transfer_config
     original_replace = InMemoryHermesProvider.replace_config
     restored: list[dict] = []
 
@@ -368,7 +368,7 @@ def test_move_restores_and_verifies_secret_free_config_before_cutover(
 
     monkeypatch.setattr(
         InMemoryHermesProvider,
-        "get_config",
+        "get_transfer_config",
         source_config_with_security_preference,
     )
     monkeypatch.setattr(
@@ -424,7 +424,7 @@ def test_move_rolls_back_when_destination_config_cannot_be_restored(
     )
 
     assert moved.status_code == 409, moved.text
-    assert moved.json()["code"] == "MUTATION_DELIVERY_UNKNOWN"
+    assert moved.json()["code"] == "CONFLICT"
     with app.state.session_factory() as db:
         row = db.get(ProfileRef, agent["id"])
         assert row is not None
@@ -632,11 +632,9 @@ def test_move_rolls_back_destination_when_imported_sessions_do_not_verify(
             "confirmation": "move-rollback-agent",
         },
     )
-    # The HTTP idempotency boundary intentionally turns a failed post-import
-    # mutation into a non-retryable reconcile response, even though the
-    # service has already rolled the destination back.
+    # Proven rollback is a known conflict; uncertain delivery remains separate.
     assert moved.status_code == 409, moved.text
-    assert moved.json()["code"] == "MUTATION_DELIVERY_UNKNOWN"
+    assert moved.json()["code"] == "CONFLICT"
 
     with app.state.session_factory() as db:
         row = db.get(ProfileRef, agent["id"])

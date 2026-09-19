@@ -68,7 +68,7 @@ class LocalPeer:
                 welcome = reader.feed(ws.receive_bytes())
                 assert welcome["gatewayId"] == self.runtime.gateway_id
                 assert set(self.runtime.providers) <= set(welcome["profiles"])
-                self.runtime.profile_transfer_supported = welcome.get("capabilities", {}).get("profileTransferV1") is True
+                self.runtime.profile_transfer_supported = welcome.get("capabilities", {}).get("profileTransferV2") is True
                 self.socket = SocketAdapter(ws)
                 self.client.portal.call(self.activate)
                 self.ready.set()
@@ -337,8 +337,8 @@ def test_native_archive_transfer_crosses_real_connector_wire_and_persists_only_c
     remote_destination = RemoteProvider(ProviderConnection(destination.runtime.gateway_id, "selected", "connector://destination", "connector://destination"), registry)
 
     async def transfer_profile():
-        assert "connector.profileTransferV1" in (await remote_source.capabilities()).features
-        assert "connector.profileTransferV1" in (await remote_destination.capabilities()).features
+        assert "connector.profileTransferV2" in (await remote_source.capabilities()).features
+        assert "connector.profileTransferV2" in (await remote_destination.capabilities()).features
         return await remote_source.transfer_profile_to(remote_destination, name="control-dev")
 
     if private_collision:

@@ -28,6 +28,7 @@ from .admin import (
     writable_config_projection,
 )
 from .email_references import project_email_reference_prompt
+from .transfer_config import parse_transfer_config, project_transfer_config
 from .limits import (
     UpstreamPayloadError,
     UpstreamPayloadTooLarge,
@@ -411,6 +412,7 @@ class HermesProvider(Protocol):
         confirm_expensive_model: bool = False,
     ) -> AdminResourceSnapshot: ...
     async def get_config(self) -> AdminResourceSnapshot: ...
+    async def get_transfer_config(self) -> AdminResourceSnapshot: ...
     async def update_config(self, config: dict[str, Any]) -> AdminResourceSnapshot: ...
     async def replace_config(self, config: dict[str, Any]) -> AdminResourceSnapshot: ...
     async def get_soul(self) -> AdminResourceSnapshot: ...
@@ -2667,6 +2669,18 @@ class HermesGatewayProvider:
             data=writable_config_projection(sanitized),
         )
 
+    async def get_transfer_config(self) -> AdminResourceSnapshot:
+        """Read native config without dashboard flattening or credential values."""
+        raw = await bounded_json_request(
+            self.http, "GET", "/api/config/raw",
+            params={"profile": self.connection.profile_name},
+        )
+        if not isinstance(raw, Mapping) or len(raw) > 16:
+            raise UpstreamPayloadError("Hermes raw config response must be an object")
+        return AdminResourceSnapshot(
+            resource="config", data=parse_transfer_config(raw.get("yaml")),
+        )
+
     async def update_config(self, config: dict[str, Any]) -> AdminResourceSnapshot:
         if contains_secret_fields(config):
             raise ValueError(
@@ -3761,6 +3775,9 @@ class InMemoryHermesProvider:
 
     async def get_config(self) -> AdminResourceSnapshot:
         return admin_snapshot("config", self._config)
+
+    async def get_transfer_config(self) -> AdminResourceSnapshot:
+        return AdminResourceSnapshot(resource="config", data=project_transfer_config(self._config))
 
     async def update_config(self, config: dict[str, Any]) -> AdminResourceSnapshot:
         if contains_secret_fields(config):

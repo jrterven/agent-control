@@ -234,6 +234,24 @@ def test_native_retirement_requires_exact_tombstone_empty_database_and_no_config
     assert retired_profile(tmp_path, "retired") is None
 
 
+def test_native_retirement_accepts_fully_removed_directory_only_with_owned_exact_marker(tmp_path):
+    home = retired_fixture(tmp_path)
+    (home / "state.db").unlink()
+    home.rmdir()
+    marker = tmp_path / "profiles/.deleted/retired"
+    before = marker.read_bytes()
+    result = retired_profile(tmp_path, "retired")
+    assert result["retired"] and result["complete"]
+    assert result["activeCount"] == result["pendingDeliveryCount"] == 0
+    assert not home.exists() and marker.read_bytes() == before
+    marker.unlink()
+    assert retired_profile(tmp_path, "retired") is None
+    marker.write_bytes(b"deleted\n")
+    home.symlink_to(tmp_path / "missing")
+    assert retired_profile(tmp_path, "retired") is None
+    assert retired_profile(tmp_path, "default") is None
+
+
 @pytest.mark.parametrize("bad", ["missing", "symlink", "incorrect", "state_missing", "extra_artifact"])
 def test_missing_or_aliased_retirement_evidence_remains_uncertain(tmp_path, bad):
     home = retired_fixture(tmp_path)

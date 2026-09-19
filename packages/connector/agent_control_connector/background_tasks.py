@@ -47,13 +47,25 @@ def retired_profile(root: Path, profile: str) -> dict | None:
     home = profiles / profile
     tombstone = profiles / ".deleted" / profile
     try:
-        for directory in (profiles, profiles / ".deleted", home):
+        for directory in (root, profiles, profiles / ".deleted"):
             info = directory.lstat()
             if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
                 return None
         info = tombstone.lstat()
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
                 or info.st_size != 8 or tombstone.read_bytes() != b"deleted\n"):
+            return None
+        try:
+            info = home.lstat()
+        except FileNotFoundError:
+            # Native deletion may remove the whole profile instead of leaving
+            # its empty SQLite shell. The exact owned marker and available
+            # parent directories distinguish this from a missing mount/path.
+            return {"available": False, "complete": True, "activeCount": 0,
+                "pendingDeliveryCount": 0, "totalCount": 0, "tasks": [],
+                "source": "hermes-native-delegation", "retired": True,
+                "observedAt": datetime.now(timezone.utc).isoformat()}
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
             return None
         allowed = {"state.db", "state.db-shm", "state.db-wal", "state.db.fts_rebuild.lock"}
         entries = list(home.iterdir())

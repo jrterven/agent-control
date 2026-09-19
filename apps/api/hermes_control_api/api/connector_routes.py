@@ -302,7 +302,7 @@ async def connector_socket(websocket: WebSocket):
         media = get_visual_media_service(websocket.app.state.services)
         settings = websocket.app.state.settings
         await send_message(link.send_bytes, link.lock, {"v": VERSION, "type": "welcome", "gatewayId": gateway_id, "profiles": sorted(profiles),
-            "capabilities": {"visualMediaV1": media.configured, "backgroundTasksV1": True, "profileTransferV1": True},
+            "capabilities": {"visualMediaV1": media.configured, "backgroundTasksV1": True, "profileTransferV2": True},
             "visualMediaLimits": {
                 "maxBytes": settings.visual_media_max_bytes,
                 "maxPixels": settings.visual_media_max_pixels,

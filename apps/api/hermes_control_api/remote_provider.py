@@ -209,7 +209,7 @@ class RemoteProvider:
         value = await self._call("capabilities")
         if not isinstance(value, CapabilitySet):
             raise ProtocolError("Invalid connector capabilities")
-        if "connector.profileTransferV1" in value.features:
+        if "connector.profileTransferV2" in value.features:
             return value
         return CapabilitySet(protocol=value.protocol, version=value.version, source_sha=value.source_sha,
                              methods=value.methods - {"profiles.transfer", "profiles.export", "profiles.import"},
@@ -226,7 +226,7 @@ class RemoteProvider:
             source_caps, destination_caps = await self.capabilities(), await destination.capabilities()
         except BaseException as error:
             raise ProfileTransferNotImported("Could not verify transfer capabilities") from error
-        if any("connector.profileTransferV1" not in caps.features for caps in (source_caps, destination_caps)):
+        if any("connector.profileTransferV2" not in caps.features for caps in (source_caps, destination_caps)):
             raise ProfileTransferNotImported("Update both connectors before moving an agent")
 
         # Only one bounded chunk is held in cloud memory. The independent local

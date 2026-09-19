@@ -239,6 +239,9 @@ class FailoverProvider:
     async def get_config(self):
         return await self._call("get_config")
 
+    async def get_transfer_config(self):
+        return await self._call("get_transfer_config")
+
     async def update_config(self, config):
         return await self._call("update_config", config)
 

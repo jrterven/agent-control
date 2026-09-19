@@ -335,12 +335,17 @@ configuration writes share the same lifecycle lock, so work cannot start in
 the middle of an export or cutover.
 
 In cloud mode, both computers must belong to your account, remain connected,
-and run updated connectors that advertise `connector.profileTransferV1`.
+and run updated connectors that advertise `connector.profileTransferV2`.
 Older connectors must be updated before moving agents. Both cloud computers
 need Hermes 0.21.2 revision `939e45c9…` and verified export/import and
 rollback support. An offline gateway cannot be selected; if it disconnects
 before confirmation, reconnect it or choose another compatible destination.
 Keep both computers connected while the dialog shows the transfer in progress.
+Share another agent from the source computer (usually `default`) so Control
+can verify deletion through a surviving management connection. Moving or
+deleting its last shared agent is refused before making changes.
+A confirmed rollback preserves the source and reports the failed verification
+step; an uncertain delivery still requires reconciliation before any retry.
 
 The audited Hermes import cannot reuse a profile name previously deleted on
 the destination. This also affects moving an agent back to its original

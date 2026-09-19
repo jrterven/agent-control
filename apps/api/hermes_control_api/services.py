@@ -1390,6 +1390,7 @@ class ProfileService:
         *,
         gateway_id: str,
         methods: frozenset[str],
+        retiring_profile: str | None = None,
     ) -> tuple[ProfileRef, Any, CapabilitySet]:
         profiles = list(
             db.scalars(
@@ -1398,6 +1399,14 @@ class ProfileService:
         )
         if not profiles:
             raise NotFoundError("Gateway profiles were not found")
+        if retiring_profile and self.services.settings.deployment_mode == "cloud":
+            # Keep a shared management route alive for the authoritative
+            # presence check even if the delete response is lost.
+            profiles = [item for item in profiles if item.profile_name != retiring_profile]
+            if not profiles:
+                raise ConflictError(
+                    "Share another agent (such as default) from this computer before moving or deleting its last shared agent"
+                )
         last_conflict: ConflictError | None = None
         for candidate in sorted(
             profiles,
@@ -1674,6 +1683,21 @@ class ProfileService:
                 warnings.append("A stale realtime route will expire naturally.")
         return warnings
 
+    def _retire_connector_profile(self, db: Session, gateway_id: str, profile_name: str) -> None:
+        """Remove a grant only after authoritative native deletion was proven."""
+        if self.services.settings.deployment_mode != "cloud":
+            return
+        from .connector_models import Connector
+        connector = db.scalar(select(Connector).where(
+            Connector.gateway_id == gateway_id, Connector.revoked_at.is_(None),
+        ))
+        if connector is not None:
+            connector.profiles = [name for name in connector.profiles if name != profile_name]
+        registry = self.services.connector_registry
+        if registry is not None and registry.online(gateway_id):
+            link = registry.get(gateway_id)
+            link.profiles = link.profiles - {profile_name}
+
     async def _rollback_profile_transfer(
         self,
         *,
@@ -1881,6 +1905,7 @@ class ProfileService:
             _, manager, manager_capabilities = await self._management_provider(
                 db,
                 gateway_id=source_gateway_id,
+                retiring_profile=technical_name,
                 methods=frozenset({"profiles.delete"}),
             )
             source_sha = trusted_gateway_source_sha(
@@ -1950,6 +1975,7 @@ class ProfileService:
                         current_target = db.get(ProfileRef, profile_id)
                         if current_target is not None:
                             db.delete(current_target)
+                        self._retire_connector_profile(db, source_gateway_id, technical_name)
                         audit(
                             db,
                             actor=actor,
@@ -2090,6 +2116,7 @@ class ProfileService:
                 await self._management_provider(
                     db,
                     gateway_id=source_gateway_id,
+                    retiring_profile=technical_name,
                     methods=frozenset(
                         {
                             "profiles.delete",
@@ -2107,7 +2134,7 @@ class ProfileService:
                 )
             )
             if self.services.settings.deployment_mode == "cloud" and any(
-                "connector.profileTransferV1" not in capabilities.features
+                "connector.profileTransferV2" not in capabilities.features
                 for capabilities in (source_capabilities, destination_capabilities)
             ):
                 raise ConflictError("Update both connectors before moving an agent")
@@ -2188,7 +2215,7 @@ class ProfileService:
                     "Agent Control has sessions absent from Hermes; refresh before moving"
                 )
             source_soul = (await source_provider.get_soul()).data
-            source_config = (await source_provider.get_config()).data
+            source_config = (await source_provider.get_transfer_config()).data
             source_model = dict(
                 (await source_provider.list_models()).data.get("current") or {}
             )
@@ -2224,6 +2251,7 @@ class ProfileService:
             source_deleted = False
             cutover_cancelled = False
             post_cutover_warnings: list[str] = []
+            failure_stage = "pause_automations"
             try:
                 if enabled_automation_ids:
                     # Set before the first mutation so a partial pause is also
@@ -2257,6 +2285,7 @@ class ProfileService:
                         "Hermes did not verify the paused automation inventory"
                     )
 
+                failure_stage = "import"
                 destination_imported = True
                 try:
                     await source_manager.transfer_profile_to(
@@ -2302,22 +2331,26 @@ class ProfileService:
                         managed_by_control=True,
                     )
                 )
-                # Hermes 0.20.6's share-export redactor can rewrite the
+                # Preserve native model routing, which /api/config flattens.
+                # Hermes' share-export redactor can also rewrite the
                 # legitimate ``security.redact_secrets`` boolean as bare
                 # ``***``, leaving imported YAML unparsable. Credentials are
                 # intentionally absent from source_config; replace the staged
                 # document through Hermes' parsed raw endpoint before any
                 # verification or irreversible source deletion.
+                failure_stage = "config_restore"
                 try:
                     await destination_provider.replace_config(source_config)
                 except Exception as exc:
                     raise UpstreamUnavailableError(
                         "Hermes could not restore the imported agent config"
                     ) from exc
-                if (await destination_provider.get_config()).data != source_config:
+                failure_stage = "config_verify"
+                if (await destination_provider.get_transfer_config()).data != source_config:
                     raise UpstreamUnavailableError(
                         "Imported Hermes config does not match the source"
                     )
+                failure_stage = "model_verify"
                 if dict(
                     (await destination_provider.list_models()).data.get("current")
                     or {}
@@ -2325,6 +2358,7 @@ class ProfileService:
                     raise UpstreamUnavailableError(
                         "Imported Hermes model does not match the source"
                     )
+                failure_stage = "inventory_verify"
                 imported_sessions = await destination_provider.list_sessions()
                 if not bool(
                     getattr(destination_provider, "session_inventory_complete", False)
@@ -2348,6 +2382,7 @@ class ProfileService:
                     raise UpstreamUnavailableError(
                         "Imported Hermes automations do not match the source"
                     )
+                failure_stage = "history_verify"
                 await self._verify_session_histories(
                     source_provider,
                     destination_provider,
@@ -2356,6 +2391,7 @@ class ProfileService:
                 # Re-read the frozen source immediately before cutover. This
                 # catches external Hermes activity that bypassed Control's
                 # route lock while the archive was in transit.
+                failure_stage = "source_verify"
                 final_source_sessions = await source_provider.list_sessions()
                 if not bool(
                     getattr(source_provider, "session_inventory_complete", False)
@@ -2376,7 +2412,7 @@ class ProfileService:
                     raise ConflictError(
                         "The source SOUL changed during agent transfer"
                     )
-                if (await source_provider.get_config()).data != source_config:
+                if (await source_provider.get_transfer_config()).data != source_config:
                     raise ConflictError(
                         "The source config changed during agent transfer"
                     )
@@ -2463,6 +2499,7 @@ class ProfileService:
                             if upstream_state is not None:
                                 current_automation.enabled = upstream_state[3]
 
+                failure_stage = "cutover"
                 stage_local_cutover()
                 # Prove all local uniqueness constraints before the irreversible
                 # source deletion.  The surrounding transaction is committed
@@ -2508,6 +2545,7 @@ class ProfileService:
                     for attempt in range(3):
                         try:
                             stage_local_cutover(destination_inventory)
+                            self._retire_connector_profile(db, source_gateway_id, technical_name)
                             audit(
                                 db,
                                 actor=actor,
@@ -2611,9 +2649,34 @@ class ProfileService:
                     raise UpstreamUnavailableError(
                         "Agent move failed and rollback needs operator attention"
                     ) from rollback_errors[0]
+                # Native absence and cron restoration are confirmed. Preserve
+                # that known rollback at the HTTP idempotency boundary instead
+                # of labelling every verification failure delivery-unknown.
+                try:
+                    if destination_imported:
+                        self._retire_connector_profile(db, destination_gateway_id, technical_name)
+                    audit(
+                        db, actor=actor, action="profile.move", target_type="profile",
+                        target_id=profile_id, outcome="rolled_back",
+                        details={"profileName": technical_name,
+                                 "sourceGatewayId": source_gateway_id,
+                                 "destinationGatewayId": destination_gateway_id,
+                                 "failureStage": failure_stage},
+                    )
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    raise UpstreamUnavailableError(
+                        "Agent move was rolled back but its receipt needs reconciliation"
+                    ) from exc
                 if isinstance(exc, ProfileTransferNotImported):
                     raise ConflictError(
                         "The agent was not imported. Check both connections and that the destination name is free; the source was preserved."
+                    ) from exc
+                if isinstance(exc, Exception):
+                    raise ConflictError(
+                        "Agent move was rolled back during " + failure_stage
+                        + "; the source was preserved. Check the destination before trying another move."
                     ) from exc
                 raise
 

@@ -16,7 +16,7 @@ from sqlalchemy import select
 from hermes_client import InMemoryHermesProvider, ProviderConnection
 from hermes_client.types import HermesAutomation, HermesProfile, HermesSession
 from hermes_control_api.connector_models import Connector
-from hermes_control_api.models import Gateway, GatewayCredential, ProfileRef, SessionLink, VisualMedia, utc_now
+from hermes_control_api.models import AuditEvent, Gateway, GatewayCredential, ProfileRef, SessionLink, VisualMedia, utc_now
 from hermes_control_api.remote_provider import ConnectorLink, ProfileTransferNotImported, ProfileTransferOutcomeUnknown
 from hermes_control_api.visual_media import VisualMediaService
 
@@ -26,7 +26,7 @@ from .test_visual_media import FakeStore, picture
 
 
 HERMES_SHA = "939e45c91d751fadd94dcd1b873ac3cb44846213"
-TRANSFER_FEATURE = "connector.profileTransferV1"
+TRANSFER_FEATURE = "connector.profileTransferV2"
 
 
 @pytest.fixture
@@ -78,6 +78,7 @@ def cloud_transfer(cloud):
         source.profile_name = "control-dev"
         source.display_name = "Control Dev"
         source.managed_by_control = True
+        db.add(ProfileRef(gateway_id=alice[1], profile_name="default", display_name="Source manager"))
         source.avatar_mime_type = "image/png"
         source.avatar_data = b"preserved-avatar"
         session = db.get(SessionLink, alice[3])
@@ -96,7 +97,7 @@ def cloud_transfer(cloud):
         db.add(ProfileRef(gateway_id=destination_id, profile_name="default", display_name="Destination"))
         connector_ids = {}
         for gateway_id, owner_id, profiles in (
-            (alice[1], alice[0], ["control-dev"]),
+            (alice[1], alice[0], ["default", "control-dev"]),
             (destination_id, alice[0], ["default"]),
             (bob[1], bob[0], ["personal"]),
         ):
@@ -120,7 +121,7 @@ def cloud_transfer(cloud):
         pass
 
     for gateway_id, profile_names in (
-        (alice[1], ["control-dev"]), (destination_id, ["default"]), (bob[1], ["personal"]),
+        (alice[1], ["default", "control-dev"]), (destination_id, ["default"]), (bob[1], ["personal"]),
     ):
         app.state.connector_registry.links[gateway_id] = ConnectorLink(
             gateway_id, frozenset(profile_names), no_socket, no_socket,
@@ -129,6 +130,8 @@ def cloud_transfer(cloud):
         gateway_id=alice[1], profile_name="control-dev", rest_url=f"connector://{alice[1]}",
         ws_url=f"connector://{alice[1]}", trusted_source_sha=HERMES_SHA,
     ))
+    source_manager = factory(replace(source_provider.connection, profile_name="default"))
+    source_manager._created_profiles["control-dev"] = HermesProfile(name="control-dev", display_name="Control Dev")
     source_provider._sessions[source_stored_session_id] = HermesSession(
         stored_session_id=source_stored_session_id, runtime_session_id="old-runtime", title="Preserved conversation",
     )
@@ -177,6 +180,8 @@ def test_cloud_non_admin_can_move_own_agent_and_replay_preserves_route_and_owner
         assert profile.gateway_id == session.gateway_id == fixture.destination_id
         assert profile.profile_name == session.profile_name == "control-dev"
         assert profile.avatar_data == b"preserved-avatar"
+        assert db.get(Connector, fixture.connector_ids[fixture.alice[1]]).profiles == ["default"]
+        assert fixture.app.state.connector_registry.get(fixture.alice[1]).profiles == frozenset({"default"})
         assert session.owner_id == fixture.alice[0]
         assert session.stored_session_id == "alice"
         assert session.runtime_session_id is None
@@ -245,6 +250,9 @@ def test_cloud_move_keeps_csrf_and_exact_confirmation_requirements(cloud_transfe
 def test_cloud_move_protects_default_profile(cloud_transfer):
     fixture = cloud_transfer
     with fixture.app.state.session_factory() as db:
+        manager = db.scalar(select(ProfileRef).where(ProfileRef.gateway_id == fixture.alice[1], ProfileRef.profile_name == "default"))
+        db.delete(manager)
+        db.flush()
         db.get(ProfileRef, fixture.alice[2]).profile_name = "default"
         db.commit()
     response = move(fixture, confirmation="default")
@@ -345,3 +353,49 @@ def test_cloud_move_preserves_image_urls_and_blobs_without_exposing_another_owne
     assert fixture.client.get(own_url).status_code == 404
     assert fixture.client.get(own_url + "/metadata").status_code == 404
     assert fixture.client.get(foreign_url).status_code == 200
+
+
+def test_cloud_config_failure_has_known_rollback_receipt_and_retires_only_import_grant(cloud_transfer, monkeypatch):
+    fixture = cloud_transfer
+    original = InMemoryHermesProvider.replace_config
+
+    async def fail_destination(self, config):
+        if self.connection.gateway_id == fixture.destination_id:
+            raise RuntimeError("private upstream detail must not appear in receipt")
+        return await original(self, config)
+
+    monkeypatch.setattr(InMemoryHermesProvider, "replace_config", fail_destination)
+    # Real transport grants this future profile before dispatching its import.
+    with fixture.app.state.session_factory() as db:
+        db.get(Connector, fixture.connector_ids[fixture.destination_id]).profiles = ["default", "control-dev"]
+        db.commit()
+    link = fixture.app.state.connector_registry.get(fixture.destination_id)
+    link.profiles = frozenset({"default", "control-dev"})
+    response = move(fixture)
+    assert response.status_code == 409 and response.json()["code"] == "CONFLICT"
+    assert "config_restore" in response.json()["message"]
+    assert "private upstream" not in response.text
+    calls = list(fixture.native_calls)
+    assert calls[-1] == ("delete", fixture.destination_id, "control-dev")
+    with fixture.app.state.session_factory() as db:
+        assert db.get(ProfileRef, fixture.alice[2]).gateway_id == fixture.alice[1]
+        assert db.get(Connector, fixture.connector_ids[fixture.destination_id]).profiles == ["default"]
+        assert db.get(Connector, fixture.connector_ids[fixture.alice[1]]).profiles == ["default", "control-dev"]
+        receipt = db.scalar(select(AuditEvent).where(AuditEvent.action == "profile.move"))
+        assert receipt.outcome == "rolled_back"
+        assert receipt.details["failureStage"] == "config_restore"
+    assert link.profiles == frozenset({"default"})
+    replay = move(fixture)
+    assert replay.json() == response.json()
+    assert fixture.native_calls == calls
+
+
+def test_cloud_last_shared_agent_is_rejected_before_native_transfer(cloud_transfer):
+    fixture = cloud_transfer
+    with fixture.app.state.session_factory() as db:
+        manager = db.scalar(select(ProfileRef).where(ProfileRef.gateway_id == fixture.alice[1], ProfileRef.profile_name == "default"))
+        db.delete(manager)
+        db.commit()
+    response = move(fixture)
+    assert response.status_code == 409 and "Share another agent" in response.json()["message"]
+    assert_source_unchanged(fixture)

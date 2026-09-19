@@ -60,7 +60,9 @@ class ConnectorRuntime:
         self.gateway_id = config["gatewayId"]
         self.provider_factory = provider_factory
         profiles = config["profiles"]
-        if not 1 <= len(profiles) <= 64 or any(not isinstance(p, str) or not SAFE_PROFILE.fullmatch(p) for p in profiles):
+        # A previously paired connector can become empty after its last named
+        # profile was retired. Pairing itself still requires an approved profile.
+        if not isinstance(profiles, list) or len(profiles) > 64 or any(not isinstance(p, str) or not SAFE_PROFILE.fullmatch(p) for p in profiles):
             raise ValueError("Invalid locally approved profiles")
         self.providers = {}
         for profile in profiles:
@@ -93,7 +95,7 @@ class ConnectorRuntime:
         self.profile_transfers = ProfileTransfers(self)
 
     async def _background_events(self, profile: str, snapshot: dict):
-        if (self.websocket is None or not self.background_tasks_supported
+        if (profile not in self.providers or self.websocket is None or not self.background_tasks_supported
                 or self.background_states.get(profile, {}).get("state") != "ready"):
             return
         grouped: dict[str, list] = {}
@@ -121,6 +123,39 @@ class ConnectorRuntime:
         # Bound diagnostic caches independently of upstream lifecycle retention.
         while len(self.background_fingerprints) > 2048:
             self.background_fingerprints.pop(next(iter(self.background_fingerprints)))
+
+    async def _forget_deleted_profile(self, name: str):
+        """Drop only the local sharing state of a confirmed native deletion.
+
+        Persist first so a crash/reconnect cannot re-register this profile.
+        This never removes native files or changes another profile's grants.
+        """
+        if name == "default":
+            raise ValueError("The default profile cannot be deleted")
+        replacement = {**self.config, "profiles": [profile for profile in self.config["profiles"] if profile != name]}
+        atomic_json(self.directory / "config.json", replacement)
+        self.config = replacement
+        removed = self.providers.pop(name, None)
+        self.media_states.pop(name, None)
+        self.background_states.pop(name, None)
+        self.media_pending = {key: profile for key, profile in self.media_pending.items() if profile != name}
+        self.background_fingerprints = {key: value for key, value in self.background_fingerprints.items() if key[0] != name}
+        self.events = deque((sequence, message, size) for sequence, message, size in self.events
+                            if message["event"].profile_name != name)
+        self.event_bytes = sum(size for _, _, size in self.events)
+        self.event_changed.set()
+        if removed is not None:
+            with contextlib.suppress(Exception):
+                await removed.close()
+
+    async def _confirm_profile_deleted(self, provider, name: str):
+        # A valid native tombstone is also authoritative when the manager was
+        # the deleted profile and can no longer answer profile-scoped RPCs.
+        retired = await asyncio.to_thread(self._background_snapshot, name)
+        if retired.get("retired") is not True:
+            if name in {profile.name for profile in await provider.list_profiles()}:
+                raise ValueError("Native profile deletion is not confirmed")
+        await self._forget_deleted_profile(name)
 
     def _background_snapshot(self, profile: str, stored_session_id: str | None = None) -> dict:
         if self.config.get("sourceSha") != HERMES_0212_SHA:
@@ -173,7 +208,7 @@ class ConnectorRuntime:
         while self.websocket is websocket:
             self.event_changed.clear()
             for sequence, message, _ in tuple(self.events):
-                if sequence > sent:
+                if sequence > sent and message["event"].profile_name in self.providers:
                     await send_message(websocket.send, self.send_lock, message)
                     sent = sequence
             await self.event_changed.wait()
@@ -201,6 +236,8 @@ class ConnectorRuntime:
                     # Bind every publication to an actual stored session on this
                     # provider. Never import another profile's files or route.
                     await asyncio.wait_for(provider.history_readonly(publication["sessionId"]), 15)
+                    if self.providers.get(profile) is not provider:
+                        continue
                     self.media_pending[publication["id"]] = profile
                     await send_message(websocket.send, self.send_lock, publication)
                 except SessionHistoryNotFound:
@@ -245,6 +282,10 @@ class ConnectorRuntime:
                 if callable(observer):
                     observer(background)
                 await self._background_events(provider.connection.profile_name, background)
+                if background.get("retired") is True:
+                    # Native tombstones cover both empty SQLite shells and a
+                    # fully absent directory; do not reopen a retired runtime.
+                    continue
                 if (background.get("activeCount") or 0) > 0 or (background.get("pendingDeliveryCount") or 0) > 0:
                     active = True
                 elif not background.get("complete") and active is not True:
@@ -293,7 +334,7 @@ class ConnectorRuntime:
         ledger_key = None
         provider = self.providers.get(profile)
         try:
-            if provider is None or operation not in OPERATIONS:
+            if operation not in OPERATIONS or (provider is None and operation != "delete_profile"):
                 raise ValueError("INVALID_OPERATION")
             if not isinstance(args, tuple) or not isinstance(kwargs, dict) or len(args) > 4 or len(kwargs) > 8:
                 raise ValueError("INVALID_OPERATION")
@@ -316,7 +357,8 @@ class ConnectorRuntime:
                     raise ValueError("INVALID_OPERATION")
                 if isinstance(arg, PromptAttachment) and (len(arg.content) > 8 * 1024 * 1024 or arg.kind not in {"image", "file"}):
                     raise ValueError("INVALID_OPERATION")
-            if operation == "delete_profile" and (len(args) != 1 or args[0] not in self.providers):
+            if operation == "delete_profile" and (len(args) != 1 or not isinstance(args[0], str)
+                    or not SAFE_PROFILE.fullmatch(args[0]) or args[0] == "default"):
                 raise ValueError("INVALID_OPERATION")
             if operation == "create_profile":
                 name = kwargs.get("name")
@@ -327,9 +369,24 @@ class ConnectorRuntime:
                     raise ValueError("CONNECTOR_MAINTENANCE")
                 next_ledger_key = f"{profile}:{operation}:{operation_id}"
                 digest = hashlib.sha256(encode_message({"v": VERSION, "profile": profile, "operation": operation, "args": args, "kwargs": kwargs})).hexdigest()
+                previous = self.ledger.lookup(next_ledger_key, digest)
+                if provider is None:
+                    # A completed self-delete may be replayed after restart,
+                    # but must never reconstruct a provider for its old name.
+                    if previous is None:
+                        raise ValueError("INVALID_OPERATION")
+                    state, receipt = previous
+                    if state == "completed":
+                        response.update(decode_message(receipt))
+                        response["id"] = request_id
+                    else:
+                        response["error"] = "IDEMPOTENCY_CONFLICT" if state == "conflict" else "CONNECTOR_DELIVERY_UNKNOWN"
+                    return response
+                if operation == "delete_profile" and previous is None and args[0] not in self.providers:
+                    raise ValueError("INVALID_OPERATION")
                 if (self.config.get("sourceSha") == HERMES_0212_SHA
                         and operation in {"delete_profile", "delete_session"}
-                        and self.ledger.lookup(next_ledger_key, digest) is None):
+                        and previous is None):
                     target_profile = args[0] if operation == "delete_profile" else profile
                     route = (args[0] if args else kwargs.get("route")) if operation == "delete_session" else None
                     evidence = await asyncio.to_thread(self._background_snapshot, target_profile,
@@ -369,6 +426,8 @@ class ConnectorRuntime:
                 result = read_media(history, Path(self.config["hermesHome"]), profile, args[0], args[1])
             else:
                 result = await getattr(provider, operation)(*args, **kwargs)
+            if operation == "delete_profile":
+                await self._confirm_profile_deleted(provider, args[0])
             if operation in {"create_profile", "profile_import_finish"}:
                 name = kwargs["name"] if operation == "create_profile" else result.name
                 if result.name != name:
@@ -398,10 +457,10 @@ class ConnectorRuntime:
                         and self.config.get("sourceSha") == HERMES_0212_SHA
                         and profile_contract_supports(self.config.get("sourceSha"), result.version, "profiles.transfer")
                         and {"profiles.export", "profiles.import", "profiles.transfer"} <= result.methods):
-                    result = replace(result, features=result.features | {"connector.profileTransferV1"})
+                    result = replace(result, features=(result.features - {"connector.profileTransferV1"}) | {"connector.profileTransferV2"})
                 else:
                     result = replace(result, methods=result.methods - {"profiles.transfer", "profiles.export", "profiles.import"},
-                                     features=result.features - {"profiles.transfer", "connector.profileTransferV1"})
+                                     features=result.features - {"profiles.transfer", "connector.profileTransferV1", "connector.profileTransferV2"})
             response["result"] = result
         except RuntimeGenerationChanged:
             response["error"] = "RUNTIME_GENERATION_CHANGED"
@@ -417,8 +476,12 @@ class ConnectorRuntime:
             # Do not expose Hermes messages, tokens, or host paths over errors.
             response["error"] = "PROMPT_DELIVERY_UNKNOWN" if operation == "submit_prompt" else "CONNECTOR_OPERATION_FAILED"
         finally:
-            response["generation"] = provider.runtime_generation if provider else "unknown"
-            response["inventoryComplete"] = bool(provider and provider.session_inventory_complete)
+            if provider:
+                response["generation"] = provider.runtime_generation
+                response["inventoryComplete"] = provider.session_inventory_complete
+            else:
+                response.setdefault("generation", "unknown")
+                response.setdefault("inventoryComplete", False)
         if ledger_key:
             self.ledger.finish(ledger_key, encode_message(response))
         return response
@@ -452,7 +515,7 @@ class ConnectorRuntime:
                 await asyncio.to_thread(self._save_media_policy)
             self.visual_media_supported = visual_media_supported
             self.background_tasks_supported = isinstance(capabilities, dict) and capabilities.get("backgroundTasksV1") is True
-            self.profile_transfer_supported = isinstance(capabilities, dict) and capabilities.get("profileTransferV1") is True
+            self.profile_transfer_supported = isinstance(capabilities, dict) and capabilities.get("profileTransferV2") is True
             # Preserve known sessions to emit authoritative empty inventories
             # after reconnect, while forcing a first snapshot on this transport.
             self.background_fingerprints = {key: "" for key in self.background_fingerprints}

@@ -128,7 +128,8 @@ async def test_chunk_transfer_excludes_credentials_preserves_source_and_replays_
 async def test_transfer_capability_requires_new_cloud_and_audited_runtime(runtimes):
     runtime = runtimes[0]
     result = (await runtime.execute(message("capabilities")))["result"]
-    assert "connector.profileTransferV1" in result.features
+    assert "connector.profileTransferV2" in result.features
+    assert "connector.profileTransferV1" not in result.features
     runtime.profile_transfer_supported = False
     result = (await runtime.execute(message("capabilities")))["result"]
     assert "profiles.transfer" not in result.methods
@@ -411,6 +412,6 @@ async def test_cloud_transfer_does_not_advertise_or_dispatch_older_private_contr
     runtime.providers["manager"].export_profile_archive_to = AsyncMock()
     exposed = (await runtime.execute(message("capabilities")))["result"]
     assert "profiles.transfer" not in exposed.methods
-    assert "connector.profileTransferV1" not in exposed.features
+    assert "connector.profileTransferV2" not in exposed.features
     assert (await runtime.execute(message("profile_export", "control-dev", uuid4().hex)))["error"] == "INVALID_OPERATION"
     runtime.providers["manager"].export_profile_archive_to.assert_not_called()
