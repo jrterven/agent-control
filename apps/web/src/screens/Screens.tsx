@@ -26,6 +26,7 @@ import { InteractionCards } from "../components/ChatView";
 import { AdminConfigScreen } from "../components/AdminConfigScreen";
 import { ElevenLabsIntegration } from "../components/ElevenLabsIntegration";
 import { VoiceSettings } from "../components/VoiceSettings";
+import { VisionSettings } from "../components/VisionSettings";
 import i18n from "../i18n";
 import { useLanguagePreference } from "../hooks/useLanguagePreference";
 import { APP_VERSION, checkForPwaUpdate, hasPwaUpdateBlockers, requestPwaUpdate, usePwaUpdateStore } from "../lib/pwaUpdate";
@@ -1247,6 +1248,7 @@ export function SettingsScreen() {
         </div>
       </Panel>
       <VoiceSettings />
+      <VisionSettings />
       <ElevenLabsIntegration />
       <Panel id="privacy" className="settings-section privacy-settings" aria-labelledby="privacy-title">
         <header><ShieldCheck aria-hidden="true" /><div><strong id="privacy-title">{t("dictation.privacyTitle")}</strong><p>{t("dictation.privacyDescription")}</p></div></header>

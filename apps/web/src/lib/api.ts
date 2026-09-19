@@ -296,7 +296,7 @@ async function refreshRejectedCsrf(scope: CsrfScope): Promise<string | undefined
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const { headers: suppliedHeaders, ...rest } = init ?? {};
   const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const state = useAppStore.getState();

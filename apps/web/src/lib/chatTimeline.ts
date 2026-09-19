@@ -1,3 +1,4 @@
+import type { VisionObservation } from "@hermes-control/shared-types";
 import type { ChatMessage } from "../types";
 import type { LiveTranscript } from "./liveTranscripts";
 
@@ -12,15 +13,19 @@ export function absoluteTimestamp(value: unknown): string | undefined {
 
 type TimelineItem =
   | { kind: "message"; id: string; message: ChatMessage }
-  | { kind: "transcript"; id: string; call: LiveTranscript };
+  | { kind: "transcript"; id: string; call: LiveTranscript }
+  | { kind: "vision"; id: string; observation: VisionObservation };
 
 /** Insert whole voice calls at their start, preserving Hermes' canonical order. */
-export function conversationTimeline(messages: ChatMessage[], calls: LiveTranscript[]): TimelineItem[] {
+export function conversationTimeline(messages: ChatMessage[], calls: LiveTranscript[], observations: VisionObservation[] = []): TimelineItem[] {
   const time = (value: unknown) => {
     const timestamp = absoluteTimestamp(value);
     return timestamp ? Date.parse(timestamp) : Number.NEGATIVE_INFINITY;
   };
-  const orderedCalls = [...calls].sort((a, b) => time(a.createdAt) - time(b.createdAt));
+  const inserts = [
+    ...calls.map((call) => ({ time: time(call.createdAt), item: { kind: "transcript", id: `voice-${call.id}`, call } as TimelineItem })),
+    ...observations.map((observation) => ({ time: time(observation.capturedAt), item: { kind: "vision", id: `vision-${observation.id}`, observation } as TimelineItem })),
+  ].sort((a, b) => a.time - b.time);
   const result: TimelineItem[] = [];
   let callIndex = 0;
   let messageTime = Number.NEGATIVE_INFINITY;
@@ -28,12 +33,11 @@ export function conversationTimeline(messages: ChatMessage[], calls: LiveTranscr
     // Older cached messages can have only a localized clock label. Keep their
     // relative position; never parse that label as a date or move a tool row.
     messageTime = Math.max(messageTime, time(message.timestamp ?? message.createdAt));
-    while (callIndex < orderedCalls.length && time(orderedCalls[callIndex].createdAt) <= messageTime) {
-      const call = orderedCalls[callIndex++];
-      result.push({ kind: "transcript", id: `voice-${call.id}`, call });
+    while (callIndex < inserts.length && inserts[callIndex].time <= messageTime) {
+      result.push(inserts[callIndex++].item);
     }
     result.push({ kind: "message", id: message.id, message });
   }
-  for (const call of orderedCalls.slice(callIndex)) result.push({ kind: "transcript", id: `voice-${call.id}`, call });
+  for (const insert of inserts.slice(callIndex)) result.push(insert.item);
   return result;
 }

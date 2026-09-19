@@ -31,6 +31,9 @@ from hermes_control_api.security import SecretVault
 REPO = Path(__file__).resolve().parents[2]
 INITIAL_MIGRATION = REPO / "apps" / "api" / "alembic" / "versions" / "0001_initial.py"
 APPLICATION_TABLES = {
+    "vision_preferences",
+    "vision_observations",
+    "vision_request_receipts",
     "visual_media",
     "visual_media_route_tombstones",
     "external_identities",
@@ -287,7 +290,8 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0026_background_tasks"
+        ).scalar_one() == "0027_camera_vision"
+    assert {"vision_preferences", "vision_observations", "vision_request_receipts"} <= set(schema.get_table_names())
     assert {"visual_media", "visual_media_route_tombstones"} <= set(schema.get_table_names())
     for table in ("connectors", "connector_device_authorizations"):
         assert {"installation_kind", "hermes_version"} <= {column["name"] for column in schema.get_columns(table)}

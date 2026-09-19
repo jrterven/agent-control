@@ -2816,6 +2816,8 @@ class SearchService:
                         if not isinstance(safe, dict) or safe.get("omitted"):
                             continue
                         safe_content = str(safe.get("content") or "")
+                        from .vision_context import project_camera_prompt
+                        safe_content = project_camera_prompt(safe_content)
                         safe_content, _ = project_email_reference_prompt(safe_content)
                         if "hermes-control-email-" in safe_content.casefold():
                             safe_content = ""
@@ -3445,7 +3447,8 @@ class SessionService:
             if raw_item.get("role") == "user":
                 if content_key is None:
                     continue
-                projected_content, attachments = project_attachment_prompt(raw_content)
+                from .vision_context import project_camera_prompt
+                projected_content, attachments = project_attachment_prompt(project_camera_prompt(raw_content))
                 projected_content, _ = project_email_reference_prompt(projected_content)
                 safe_item[content_key] = normalizer.sanitize_data(projected_content)
                 if attachments:
@@ -3946,6 +3949,12 @@ class SessionService:
             control_prompt = self._prompt_with_email_protocol(
                 prompt,
                 baseline_history,
+            )
+            from .vision import vision_context
+            from .vision_context import with_camera_context
+            control_prompt = with_camera_context(
+                control_prompt,
+                vision_context(db, self.services.vault, actor.id, row.id),
             )
         except asyncio.CancelledError:
             raise

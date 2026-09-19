@@ -1,0 +1,6 @@
+.vision-observation { align-self: stretch; margin: 8px 0; padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); color: var(--text); font-size: 14px; overflow-wrap: anywhere; }
+.vision-observation header, .vision-observation footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.vision-observation header > svg { flex: 0 0 auto; }
+.vision-observation header > span, .vision-observation footer, .vision-observation__uncertainties { color: var(--muted); font-size: 12px; }
+.vision-observation p { margin: 8px 0; white-space: pre-wrap; }
+.vision-observation footer { justify-content: space-between; }

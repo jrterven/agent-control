@@ -416,6 +416,61 @@ class LiveTranscript(Base, Timestamped):
     payload_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class VisionPreference(Base, Timestamped):
+    """Camera choices and an atomic, cross-worker inference lease per owner."""
+
+    __tablename__ = "vision_preferences"
+    __table_args__ = (
+        CheckConstraint("model_id IN ('gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol')", name="ck_vision_model"),
+        CheckConstraint("interval_seconds IN (2, 5, 10)", name="ck_vision_interval"),
+    )
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    model_id: Mapped[str] = mapped_column(String(40), default="gpt-5.6-luna")
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=5)
+    active_request_id: Mapped[str | None] = mapped_column(String(36))
+    busy_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_analysis_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_intent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class VisionObservationRecord(Base, Timestamped):
+    """Textual camera observations only; frames never enter persistent storage."""
+
+    __tablename__ = "vision_observations"
+    __table_args__ = (
+        ForeignKeyConstraint(["session_link_id", "owner_id"], ["session_links.id", "session_links.owner_id"], ondelete="CASCADE", name="fk_vision_observation_session_owner"),
+        CheckConstraint("payload_ciphertext LIKE 'v1.%'", name="ck_vision_observation_encrypted"),
+        Index("ix_vision_observation_session_created", "session_link_id", "created_at", "id"),
+        Index("ix_vision_observation_activation", "owner_id", "session_link_id", "activation_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    owner_id: Mapped[str] = mapped_column(String(36))
+    session_link_id: Mapped[str] = mapped_column(String(36))
+    activation_id: Mapped[str] = mapped_column(String(36))
+    payload_ciphertext: Mapped[str] = mapped_column(Text)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class VisionRequestReceipt(Base, Timestamped):
+    """Durable request UUID tombstones; only encrypted textual results are replayed."""
+
+    __tablename__ = "vision_request_receipts"
+    __table_args__ = (
+        ForeignKeyConstraint(["session_link_id", "owner_id"], ["session_links.id", "session_links.owner_id"], ondelete="CASCADE", name="fk_vision_receipt_session_owner"),
+        CheckConstraint("kind IN ('intent', 'analysis')", name="ck_vision_receipt_kind"),
+        CheckConstraint("state IN ('in_progress', 'completed', 'failed', 'expired')", name="ck_vision_receipt_state"),
+        CheckConstraint("result_ciphertext IS NULL OR result_ciphertext LIKE 'v1.%'", name="ck_vision_receipt_encrypted"),
+        Index("ix_vision_receipt_expiry", "owner_id", "result_expires_at"),
+    )
+    request_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_link_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(12), primary_key=True)
+    state: Mapped[str] = mapped_column(String(16), default="in_progress")
+    result_ciphertext: Mapped[str | None] = mapped_column(Text)
+    result_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class EmailReferenceCache(Base, Timestamped):
     """Encrypted, short-lived projection of one session-owned mail citation."""
 

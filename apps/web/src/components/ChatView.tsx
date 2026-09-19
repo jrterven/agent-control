@@ -12,6 +12,9 @@ import { conversationTimeline } from "../lib/chatTimeline";
 import { liveDelegationConversation } from "../lib/liveDelegation";
 import { activeResponseId, useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
+import { useCameraVision, type CameraVisionState } from "../hooks/useCameraVision";
+import { CameraVision } from "./CameraVision";
+import { VisionObservationCard, visionInteractionCopy } from "./VisionObservationCard";
 import { useOpenAILive } from "../hooks/useOpenAILive";
 import { useSpeechPlayback, type LiveSpeechStatus, type SpeechPlaybackStatus } from "../hooks/useSpeechPlayback";
 import { usePwaUpdateStore } from "../lib/pwaUpdate";
@@ -624,9 +627,19 @@ export function insertTranscriptAtSelection(value: string, transcript: string, s
   return { value: `${before}${insertion}${after}`, caret: before.length + insertion.length };
 }
 
-function Composer({ agentName, sessionId, canInterrupt, offline = false, speechAvailable, liveSpeechEnabled, liveSpeechStatus, onLiveSpeechChange, onCaptureChange, live }: { live: ReturnType<typeof useOpenAILive>; agentName: string; sessionId: string; canInterrupt: boolean; offline?: boolean; speechAvailable: boolean; liveSpeechEnabled: boolean; liveSpeechStatus: LiveSpeechStatus; onLiveSpeechChange: (enabled: boolean) => void; onCaptureChange: (active: boolean) => void }) {
+function Composer({ agentName, sessionId, canInterrupt, offline = false, speechAvailable, liveSpeechEnabled, liveSpeechStatus, onLiveSpeechChange, onCaptureChange, live, camera }: { camera: CameraVisionState; live: ReturnType<typeof useOpenAILive>; agentName: string; sessionId: string; canInterrupt: boolean; offline?: boolean; speechAvailable: boolean; liveSpeechEnabled: boolean; liveSpeechStatus: LiveSpeechStatus; onLiveSpeechChange: (enabled: boolean) => void; onCaptureChange: (active: boolean) => void }) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
+  const { i18n } = useTranslation();
+  const visionCopy = visionInteractionCopy(i18n.language);
+  const [preparingVision, setPreparingVision] = useState(false);
+  const [visionIssue, setVisionIssue] = useState("");
+  const visionRequestRef = useRef<AbortController | null>(null);
+  const composerOwnerId = useAppStore((state) => state.userId);
+  useEffect(() => {
+    setPreparingVision(false); setVisionIssue("");
+    return () => { visionRequestRef.current?.abort(); visionRequestRef.current = null; };
+  }, [sessionId, composerOwnerId]);
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachmentIssue, setAttachmentIssue] = useState<"tooMany" | "tooLarge" | "tooMuchTotal" | "unsupported" | undefined>();
@@ -749,7 +762,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }, [displayedValue]);
 
-  const addAttachments = (selected: FileList | null, kind: "image" | "file") => {
+  const addAttachments = (selected: FileList | File[] | null, kind: "image" | "file") => {
     setAttachmentMenuOpen(false);
     if (!selected?.length) return;
     const incoming = Array.from(selected);
@@ -778,21 +791,45 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
     setAttachmentIssue(undefined);
   };
 
-  const onSubmit = async () => {
-    const next = value.trim();
-    if ((!next && !attachments.length) || streamingMessageId || offline || dictation.active || live.active) return;
-    // submitPrompt marks the session as streaming synchronously before its
-    // first await. Start it before clearing the draft so an update queued for
-    // a safe moment cannot slip into the hand-off between typing and sending.
-    const selectedAttachments = attachments;
-    const submission = submitPrompt(next, selectedAttachments);
-    setValue("");
-    setAttachments([]);
-    setAttachmentMenuOpen(false);
-    setAttachmentIssue(undefined);
-    await draft.clear();
-    await submission;
+  const submit = async (look = false) => {
+    const next = value.trim() || (look ? visionCopy.defaultQuestion : "");
+    if ((!next && !attachments.length) || streamingMessageId || offline || dictation.active || visionRequestRef.current || (live.active && !look)) return;
+    const state = useAppStore.getState();
+    if (state.approvalsBySession[sessionId]?.length || state.clarificationsBySession[sessionId]?.length) { setVisionIssue(visionCopy.wait); return; }
+    const request = new AbortController(); visionRequestRef.current = request;
+    const ownerId = state.userId; const profileId = state.selectedProfileId;
+    const liveWasActive = live.active;
+    const scoped = () => {
+      const current = useAppStore.getState();
+      return !request.signal.aborted && current.authState === "authenticated" && current.userId === ownerId && current.selectedSessionId === sessionId && current.selectedProfileId === profileId && !activeResponseId(current, sessionId);
+    };
+    setVisionIssue("");
+    setPreparingVision(true);
+    try {
+      if (look) {
+        if (!await camera.analyze(next, request.signal) || !scoped()) return;
+      } else if (camera.phase === "active" && next) {
+        const visual = await camera.onLiveRequest(next, request.signal);
+        if (!scoped()) return;
+        if (visual.intent === "unclear") { setVisionIssue(visionCopy.clarify); return; }
+        if (visual.intent === "visual" && !visual.observation) { setVisionIssue(visionCopy.failed); return; }
+      }
+      if (!scoped() && !useAppStore.getState().demoMode) return;
+      if (look && liveWasActive) {
+        const accepted = await live.ask(next);
+        if (accepted && !request.signal.aborted) { setValue(""); await draft.clear(); }
+        return;
+      }
+      // The normal task path preserves approvals, operation IDs and reconciliation.
+      const submission = submitPrompt(next, attachments);
+      setValue(""); setAttachments([]); setAttachmentMenuOpen(false); setAttachmentIssue(undefined);
+      await draft.clear();
+      await submission;
+    } finally {
+      if (visionRequestRef.current === request) { visionRequestRef.current = null; setPreparingVision(false); }
+    }
   };
+  const onSubmit = () => submit();
 
   return (
     <div className="composer-wrap">
@@ -808,11 +845,11 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           {attachments.map((attachment, index) => <span className="composer-attachment" key={`${attachment.name}-${index}`}>
             {attachment.type.startsWith("image/") ? <Image aria-hidden="true" /> : <File aria-hidden="true" />}
             <span><strong>{attachment.name}</strong><small>{attachmentSize(attachment.size)}</small></span>
-            <button type="button" aria-label={t("chat.attachments.remove", { name: attachment.name })} onClick={() => removeAttachment(index)}><X /></button>
+            <button type="button" aria-label={t("chat.attachments.remove", { name: attachment.name })} disabled={preparingVision} onClick={() => removeAttachment(index)}><X /></button>
           </span>)}
         </div> : null}
         <div className="composer-add">
-          <IconButton className="composer-add__button" label={t("chat.attachments.add")} selected={attachmentMenuOpen} disabled={offline || Boolean(streamingMessageId) || dictation.active || live.active} icon={<Plus size={22} />} onClick={() => setAttachmentMenuOpen((open) => !open)} />
+          <IconButton className="composer-add__button" label={t("chat.attachments.add")} selected={attachmentMenuOpen} disabled={preparingVision || offline || Boolean(streamingMessageId) || dictation.active || live.active} icon={<Plus size={22} />} onClick={() => setAttachmentMenuOpen((open) => !open)} />
           {attachmentMenuOpen ? <div className="composer-add__menu" role="menu" aria-label={t("chat.attachments.menu")}>
             <button type="button" role="menuitem" onClick={() => imageInputRef.current?.click()}><Image /><span><strong>{t("chat.attachments.image")}</strong><small>{t("chat.attachments.imageHint")}</small></span></button>
             <button type="button" role="menuitem" onClick={() => fileInputRef.current?.click()}><File /><span><strong>{t("chat.attachments.file")}</strong><small>{t("chat.attachments.fileHint")}</small></span></button>
@@ -824,7 +861,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           ref={textareaRef}
           rows={1}
           value={displayedValue}
-          readOnly={dictation.active || live.active}
+          readOnly={dictation.active || live.active || preparingVision}
           aria-label={t("chat.messagePlaceholder", { agent: agentName })}
           aria-describedby={streamingMessageId && value.trim() ? "composer-pending-draft" : undefined}
           placeholder={t("chat.messagePlaceholder", { agent: agentName })}
@@ -855,7 +892,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           {!live.issue && (live.waitingApproval || live.working) ? <small role="status">{t(live.waitingApproval ? "liveVoice.waitingApproval" : "liveVoice.working", { agent: agentName })}</small> : null}
         </div> : null}
         <div className="composer__actions">
-          <span />
+          <CameraVision camera={camera} disabled={offline} attachDisabled={preparingVision} lookDisabled={preparingVision || Boolean(streamingMessageId) || dictation.active || (live.active && !["listening", "paused"].includes(live.phase))} onLook={() => submit(true)} onAttach={(file) => addAttachments([file], "image")} />
           {!offline && liveConfigured ? <IconButton
             className="dictation-button"
             data-voice-provider="openai_live"
@@ -863,16 +900,17 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
             selected={live.active}
             label={t(live.active ? "liveVoice.stop" : "liveVoice.start")}
             icon={live.active ? <Stop size={20} weight="fill" /> : <Waveform size={21} weight="bold" />}
-            disabled={live.phase === "stopping" || (!live.active && (!live.available || dictation.active || (Boolean(streamingMessageId) && !(live.resumeAvailable && live.working)) || Boolean(value.trim()) || attachments.length > 0))}
-            onClick={() => { if (live.active) live.stop(); else void startLive(); }}
+            disabled={live.phase === "stopping" || (preparingVision && !live.active) || (!live.active && (!live.available || dictation.active || (Boolean(streamingMessageId) && !(live.resumeAvailable && live.working)) || Boolean(value.trim()) || attachments.length > 0))}
+            onClick={() => { if (live.active) { camera.stop(); live.stop(); } else void startLive(); }}
           /> : null}
-          {!offline && dictationConfigured ? <IconButton className="dictation-button" data-voice-provider="elevenlabs" data-live-phase={dictation.phase} selected={dictation.active} label={t(dictation.active ? "dictation.stop" : "dictation.start")} icon={dictation.active ? <Stop size={20} weight="fill" /> : <Microphone size={21} weight="fill" />} disabled={dictation.phase === "stopping" || (!dictation.active && (!dictation.available || live.active || Boolean(streamingMessageId)))} onClick={() => { if (dictation.active) dictation.stop(); else beginDictation(); }} /> : null}
+          {!offline && dictationConfigured ? <IconButton className="dictation-button" data-voice-provider="elevenlabs" data-live-phase={dictation.phase} selected={dictation.active} label={t(dictation.active ? "dictation.stop" : "dictation.start")} icon={dictation.active ? <Stop size={20} weight="fill" /> : <Microphone size={21} weight="fill" />} disabled={dictation.phase === "stopping" || preparingVision || (!dictation.active && (!dictation.available || live.active || Boolean(streamingMessageId)))} onClick={() => { if (dictation.active) dictation.stop(); else beginDictation(); }} /> : null}
           {!offline && live.playbackBlocked ? <IconButton label={t("liveVoice.playAudio")} icon={<SpeakerHigh size={21} />} onClick={() => void live.play()} /> : null}
           {offline ? <Badge tone="warning">{t("chat.offlineDraft")}</Badge> : streamingMessageId ? (canInterrupt ? <Button variant="danger" size="sm" aria-label={t(hasBackgroundWork ? "backgroundTasks.stopAll" : "chat.stop")} title={t(hasBackgroundWork ? "backgroundTasks.stopAll" : "chat.stop")} leadingIcon={<Stop weight="fill" />} onClick={() => void stopPrompt()}>{t("chat.stop")}</Button> : <Badge tone="info">{t("chat.running")}</Badge>) : <>
-            <IconButton className="send-button" label={t("chat.sendMessage")} disabled={(!value.trim() && !attachments.length) || dictation.active || live.active} icon={<PaperPlaneTilt size={22} weight="fill" />} onClick={() => void onSubmit()} />
+            <IconButton className="send-button" label={t("chat.sendMessage")} disabled={preparingVision || (!value.trim() && !attachments.length) || dictation.active || live.active} icon={<PaperPlaneTilt size={22} weight="fill" />} onClick={() => void onSubmit()} />
           </>}
         </div>
       </div>
+      {visionIssue ? <p className="composer-attachment-error" role="status">{visionIssue}</p> : null}
       {attachmentIssue ? <p className="composer-attachment-error" role="alert">{t(`chat.attachments.errors.${attachmentIssue}`)}</p> : null}
       {streamingMessageId && value.trim() ? <p className="composer-pending-draft" id="composer-pending-draft" role="status">{t("backgroundTasks.draft", { agent: agentName })}</p> : null}
       <p className="composer-note">{t(offline ? "chat.offlineDraftNote" : "chat.disclaimer")}</p>
@@ -881,7 +919,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
 }
 
 export function ChatView() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const cloud = useCloudConfigurationStore((state) => state.methods?.mode === "cloud");
   const connection = useAppStore((state) => state.connection);
   const sessionId = useAppStore((state) => state.selectedSessionId);
@@ -934,8 +972,19 @@ export function ChatView() {
   const canMutate = demoMode || (authState === "authenticated" && !offline && profile?.mutable === true);
   const canPrompt = canMutate && Boolean(profile?.capabilities?.prompts);
   const liveConfigured = useAppStore((state) => state.features?.live?.available === true);
-  const live = useOpenAILive({ enabled: liveConfigured && canPrompt && authState === "authenticated" && Boolean(session), sessionId, profileId, csrfToken });
-  const timeline = useMemo(() => conversationTimeline(visibleMessages, live.transcripts.calls), [visibleMessages, live.transcripts.calls]);
+  const ownerId = useAppStore((state) => state.userId);
+  const visualRequestRef = useRef<CameraVisionState["onLiveRequest"] | null>(null);
+  const live = useOpenAILive({ enabled: liveConfigured && canPrompt && authState === "authenticated" && Boolean(session), sessionId, profileId, csrfToken,
+    prepareVisualRequest: (text, signal) => visualRequestRef.current?.(text, signal) ?? Promise.resolve({ intent: "nonvisual", question: "" }),
+  });
+  const camera = useCameraVision({ ownerId, profileId, sessionId, csrfToken, offline,
+    enabled: canPrompt && authState === "authenticated" && Boolean(session),
+    configurationVersion: liveConfigured,
+    recentContext: visibleMessages.filter((message) => message.role === "user").slice(-2).map((message) => message.content).join("\n").slice(-4000),
+    onObservation: (observation) => live.appendVisualObservation(observation),
+  });
+  visualRequestRef.current = camera.onLiveRequest;
+  const timeline = useMemo(() => conversationTimeline(visibleMessages, live.transcripts.calls, camera.observations), [visibleMessages, live.transcripts.calls, camera.observations]);
   const canInterrupt = canMutate && Boolean(profile?.capabilities?.interrupt);
   const canMutateInteractions = authState === "authenticated" && profile?.mutable === true;
   const canApprove = canMutateInteractions
@@ -980,7 +1029,7 @@ export function ChatView() {
     if (viewport && followLatestRef.current) {
       viewport.scrollTo({ top: viewport.scrollHeight, behavior: streamingMessageId || live.active ? "auto" : "smooth" });
     }
-  }, [approvals, clarifications, messages, sessionId, streamingMessageId, live.transcripts.calls, live.active]);
+  }, [approvals, clarifications, messages, sessionId, streamingMessageId, live.transcripts.calls, live.active, camera.observations]);
 
   if (cloud && !profiles.length) return <CloudEmptyState />;
 
@@ -1002,7 +1051,8 @@ export function ChatView() {
         <div className="date-divider"><span>{t("chat.fixedDate")}</span></div>
         <div className="message-list">
           {live.transcripts.hasMore || live.transcripts.historyError ? <div className="live-transcript__history"><Button size="sm" variant="ghost" disabled={live.transcripts.loading} onClick={() => { followLatestRef.current = false; live.transcripts.loadMore(); }}>{t(live.transcripts.historyError ? "liveVoice.transcriptLoadError" : "liveVoice.transcriptOlder")}</Button></div> : null}
-          {timeline.length ? timeline.map((item) => item.kind === "transcript" ? <LiveTranscript key={item.id} call={item.call} agentName={profile?.displayName ?? t("chat.agent")} retry={() => live.transcripts.retrySave(item.id)} /> : <Message key={item.id} message={item.message} profile={profile} agentName={profile?.displayName ?? t("chat.agent")} automationInstruction={session?.automationGenerated === true && item.id === firstUserMessageId} liveExplanation={{ available: liveConfigured && live.available && !offline, activeMessageId: live.explainingMessageId, disabled: live.active || voiceCaptureActive || Boolean(streamingMessageId), explain: (message) => { speech.stop(); void live.explain(message); } }} speech={{ available: canUseSpeech, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : <div className="empty-chat"><ProfileAvatar profile={profile} size="lg" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
+          {camera.hasMore ? <div className="live-transcript__history"><Button size="sm" variant="ghost" disabled={camera.loadingObservations} onClick={() => { followLatestRef.current = false; void camera.loadMore(); }}>{visionInteractionCopy(i18n.language).older}</Button></div> : null}
+          {timeline.length ? timeline.map((item) => item.kind === "transcript" ? <LiveTranscript key={item.id} call={item.call} agentName={profile?.displayName ?? t("chat.agent")} retry={() => live.transcripts.retrySave(item.id)} /> : item.kind === "vision" ? <VisionObservationCard key={item.id} observation={item.observation} /> : <Message key={item.id} message={item.message} profile={profile} agentName={profile?.displayName ?? t("chat.agent")} automationInstruction={session?.automationGenerated === true && item.id === firstUserMessageId} liveExplanation={{ available: liveConfigured && live.available && !offline, activeMessageId: live.explainingMessageId, disabled: live.active || voiceCaptureActive || Boolean(streamingMessageId), explain: (message) => { speech.stop(); void live.explain(message); } }} speech={{ available: canUseSpeech, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : <div className="empty-chat"><ProfileAvatar profile={profile} size="lg" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
           <InteractionCards approvals={approvals} clarifications={clarifications} offline={offline} canApprove={canApprove} canClarify={canClarify} />
           {streamingMessageId ? waitingForResponse
             ? <p className="typing-state typing-state--waiting" role="status"><WarningCircle /><span>{t("chat.waitingForResponse", { agent: profile?.displayName ?? "Hermes" })}</span></p>
@@ -1011,7 +1061,7 @@ export function ChatView() {
         </div>
       </div>
       {readingOlder && live.transcripts.calls.length > 0 ? <Button className="live-transcript__latest" size="sm" variant="secondary" onClick={() => { followLatestRef.current = true; setReadingOlder(false); scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "auto" }); }}>{t("liveVoice.transcriptLatest")}</Button> : null}
-      {session && (canPrompt || offline) ? <Composer live={live} agentName={profile?.displayName ?? "Hermes"} sessionId={sessionId} canInterrupt={canInterrupt} offline={offline} speechAvailable={canUseSpeech} liveSpeechEnabled={speech.liveEnabled} liveSpeechStatus={speech.liveStatus} onLiveSpeechChange={speech.setLiveEnabled} onCaptureChange={setVoiceCaptureActive} /> : session ? <div className="composer-unavailable"><ShieldNotice /> {t(profile?.mutable ? "chat.promptUnavailable" : "chat.profileReadOnly")}</div> : profile && !profile.mutable ? <div className="composer-unavailable"><ShieldNotice /> {t("chat.chooseTestEnvironment")}</div> : null}
+      {session && (canPrompt || offline) ? <Composer key={`${ownerId}:${sessionId}:${profileId}`} camera={camera} live={live} agentName={profile?.displayName ?? "Hermes"} sessionId={sessionId} canInterrupt={canInterrupt} offline={offline} speechAvailable={canUseSpeech} liveSpeechEnabled={speech.liveEnabled} liveSpeechStatus={speech.liveStatus} onLiveSpeechChange={speech.setLiveEnabled} onCaptureChange={setVoiceCaptureActive} /> : session ? <div className="composer-unavailable"><ShieldNotice /> {t(profile?.mutable ? "chat.promptUnavailable" : "chat.profileReadOnly")}</div> : profile && !profile.mutable ? <div className="composer-unavailable"><ShieldNotice /> {t("chat.chooseTestEnvironment")}</div> : null}
     </section>
   );
 }

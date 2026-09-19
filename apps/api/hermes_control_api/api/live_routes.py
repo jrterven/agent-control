@@ -294,6 +294,10 @@ async def create_live_session(
             spoken = _spoken_history(db, request, owner, conversation)
             if spoken:
                 history, response_focus = merge_spoken_history(history, spoken, response_focus)
+            from ..vision import vision_context
+            visual = vision_context(db, request.app.state.services.vault, owner.id, conversation.id)
+            if visual:
+                history = [*history, {"role": "user", "content": visual}]
         result = await request.app.state.openai_live_client.create_session(
             api_key=api_key, sdp=payload.sdp, history=history,
             voice_id=openai_voice_id(db, owner, profile.id),

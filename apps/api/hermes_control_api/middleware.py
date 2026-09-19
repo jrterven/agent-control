@@ -20,6 +20,9 @@ from .security import constant_time_hash_matches
 
 
 def _request_body_limit(path: str, default: int, attachment_limit: int) -> int:
+    if path.startswith("/api/v1/sessions/") and path.rstrip("/").endswith("/vision/analyses"):
+        # Two JPEG frames, at most 1 MiB decoded each, plus base64 and bounded text.
+        return 3 * 1024 * 1024
     if path.startswith("/api/v1/sessions/") and "/live-transcripts/" in path:
         # Up to 20,000 timing fragments but only 48,000 UTF-16 text units.
         # Preserve timing/arrival metadata without rejecting a long call's tail.
@@ -131,6 +134,10 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             request.method not in {"POST", "PUT", "PATCH", "DELETE"}
             or not request.url.path.startswith("/api/v1/")
             or request.url.path.startswith("/api/v1/auth/")
+            # Camera requests use their own durable UUID receipts, storing encrypted
+            # textual results only. Never persist the body or response in this ledger.
+            or (normalized_path.startswith("/api/v1/sessions/") and "/vision/" in normalized_path)
+            or normalized_path == "/api/v1/vision/preferences"
             or normalized_path
             in {
                 "/api/v1/realtime/tickets",
@@ -389,7 +396,7 @@ class SecurityBoundaryMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = (
-            "camera=(), microphone=(self), geolocation=()"
+            "camera=(self), microphone=(self), geolocation=()"
         )
         path = request.url.path
         if path.startswith("/api/") or response.status_code >= 400:

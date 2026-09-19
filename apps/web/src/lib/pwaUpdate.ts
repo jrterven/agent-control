@@ -4,7 +4,7 @@ import { useAppStore } from "../store/appStore";
 
 export const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.1.0";
 
-export type PwaUpdateBlocker = "dictation" | "draft" | "streaming" | "speech";
+export type PwaUpdateBlocker = "dictation" | "draft" | "streaming" | "speech" | "camera";
 export type PwaUpdateStatus = "idle" | "checking" | "current" | "available" | "applying" | "error";
 
 type PwaUpdateState = {
@@ -21,6 +21,7 @@ const emptyBlockers: Record<PwaUpdateBlocker, boolean> = {
   draft: false,
   streaming: false,
   speech: false,
+  camera: false,
 };
 
 export const usePwaUpdateStore = create<PwaUpdateState>((set) => ({

@@ -10,7 +10,7 @@ type LiveOptions = {
   onIssue: (issue: LiveIssue) => void;
   onTranscript?: (fragments: LiveFragment[]) => void;
   onPlaybackBlocked: (blocked: boolean) => void;
-  onDelegation?: (context: string, signal: AbortSignal, progress: (content: string) => void) => Promise<string>;
+  onDelegation?: (context: string, signal: AbortSignal, progress: (content: string) => void, requestText: string) => Promise<string>;
   acquireInput?: (signal: AbortSignal) => Promise<LiveInput>;
   initialCommentary?: string;
   disableDelegation?: boolean;
@@ -81,6 +81,12 @@ export class OpenAILiveClient {
     if (this.disposed || this.channel?.readyState !== "open") return false;
     try { this.channel.send(JSON.stringify(event)); return true; }
     catch { return false; }
+  }
+
+  /** Passive context only; never opens or resumes a billable voice session. */
+  appendContext(content: string) {
+    if (!this.ready || this.disposed || this.closing) return false;
+    return this.send({ type: "session.commentary.append", event_id: crypto.randomUUID(), delegation_id: null, content: boundedLiveCommentary(content) });
   }
 
   private fail(issue: LiveIssue) {
@@ -266,10 +272,11 @@ export class OpenAILiveClient {
           this.send({ type: "session.commentary.append", event_id: crypto.randomUUID(), delegation_id: id, content: "No new transcribed request is available. Ask the user to repeat or clarify; do not claim a new task was submitted." });
           return;
         }
+        const requestText = snapshot.filter((part) => part.role === "user").slice(this.consumedInputs).map((part) => part.text).join("");
         this.consumedInputs = inputCount;
         const result = await onDelegation(voiceContext(snapshot), this.abort.signal, (content) => {
           if (!this.disposed && !this.closing) this.send({ type: "session.commentary.append", event_id: crypto.randomUUID(), delegation_id: id, content: boundedLiveCommentary(content) });
-        });
+        }, requestText);
         if (this.disposed || this.closing) return;
         this.send({ type: "session.commentary.append", event_id: crypto.randomUUID(), delegation_id: id, content: boundedLiveCommentary(result) });
       }).catch(() => { if (!this.disposed && !this.closing) this.fail("generic"); });

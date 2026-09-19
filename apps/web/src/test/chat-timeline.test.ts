@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { conversationTimeline } from "../lib/chatTimeline";
+import type { VisionObservation } from "@hermes-control/shared-types";
 import type { ChatMessage } from "../types";
 
 const message = (id: string, timestamp?: string): ChatMessage => ({ id, sessionId: "chat", role: "user", content: id, createdAt: "12:01 a. m.", timestamp });
@@ -17,4 +18,12 @@ describe("mixed voice and text history", () => {
     const messages = [message("cached"), message("prompt", "2026-09-13T19:12:00Z"), message("tool"), message("answer", "2026-09-13T19:11:59Z")];
     expect(conversationTimeline(messages, [call("voice", "2026-09-13T19:10:00Z")]).map((item) => item.id)).toEqual(["cached", "voice-voice", "prompt", "tool", "answer"]);
   });
+  it("interleaves visual evidence without moving undated tool rows or exposing image fields", () => {
+    const observations = [{ id: "one", capturedAt: "2026-09-13T19:11:00Z", summary: "a book" }] as VisionObservation[];
+    const messages = [message("cached"), message("prompt", "2026-09-13T19:12:00Z"), message("tool")];
+    const timeline = conversationTimeline(messages, [call("call", "2026-09-13T19:10:00Z")], observations);
+    expect(timeline.map((item) => item.id)).toEqual(["cached", "voice-call", "vision-one", "prompt", "tool"]);
+    expect(timeline[2]).toEqual({ kind: "vision", id: "vision-one", observation: observations[0] });
+  });
+
 });

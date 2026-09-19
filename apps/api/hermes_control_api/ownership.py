@@ -43,6 +43,7 @@ def scope_cloud_session(db: Session, owner_id: str) -> None:
                   m.EmailReferenceCache, m.PushSubscription, m.Tag, m.SessionTag,
                   m.AttachmentReference, m.Draft, m.UserIntegration,
                   m.UserVoicePreference, m.OpenAIProfileVoicePreference,
+                  m.VisionPreference, m.VisionObservationRecord, m.VisionRequestReceipt,
                   m.VisualMedia, m.VisualMediaRouteTombstone):
         if hasattr(model, "owner_id"):
             policy.append(with_loader_criteria(model, model.owner_id == owner_id, include_aliases=True))

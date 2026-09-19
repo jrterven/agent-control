@@ -23,6 +23,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from .api import router
 from .cloud_auth import router as cloud_auth_router
 from .api.connector_routes import router as connector_router
+from .api.vision_routes import router as vision_router
 from .remote_provider import BackgroundTasksBusyError, ConnectorRegistry
 from .cloud_operations import CloudMetrics, CloudOperationsMiddleware, router as cloud_operations_router
 from .config import Settings, get_settings
@@ -40,6 +41,7 @@ from .middleware import BodySizeLimitMiddleware, IdempotencyMiddleware, Security
 from .models import Automation, Gateway
 from .notifications import PushNotificationService
 from .openai_live import LiveSessionLimiter, OpenAILiveClient
+from .vision import VisionService
 from .providers import build_provider_pool
 from .realtime import persist_normalized_event
 from .prompt_reconciliation import PromptHistoryReconciler
@@ -434,6 +436,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.elevenlabs_scribe_client = ElevenLabsScribeClient()
     app.state.elevenlabs_speech_client = ElevenLabsSpeechClient()
     app.state.openai_live_client = OpenAILiveClient()
+    app.state.vision_service = VisionService(vault)
     app.state.live_session_limiter = LiveSessionLimiter(limit=6, window_seconds=60)
     app.state.transcription_token_limiter = TranscriptionTokenLimiter(
         limit=settings.transcription_token_rate_limit,
@@ -469,6 +472,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(router)
     app.include_router(cloud_auth_router)
     app.include_router(connector_router)
+    app.include_router(vision_router)
     app.include_router(cloud_operations_router)
 
     @app.exception_handler(NotFoundError)
@@ -533,6 +537,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
+        # Unknown JSON keys are caller-controlled too. Camera inputs may contain
+        # frame bytes even in an extra field name, so don't echo validation paths.
+        camera_input = (
+            request.url.path.startswith("/api/v1/sessions/")
+            and "/vision/" in request.url.path
+        ) or request.url.path.startswith("/api/v1/vision/")
         return JSONResponse(
             status_code=422,
             content={
@@ -540,7 +550,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "message": "Request validation failed",
                 "requestId": getattr(request.state, "request_id", None),
                 "retryable": False,
-                "fields": [
+                "fields": [] if camera_input else [
                     {"path": ".".join(str(item) for item in error["loc"]), "type": error["type"]}
                     for error in exc.errors()
                 ],

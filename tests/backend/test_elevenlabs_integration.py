@@ -699,7 +699,7 @@ def test_integration_test_endpoint_shares_the_owner_token_rate_limit(
 def test_security_headers_allow_only_required_voice_origins_and_self_microphone(client):
     response = client.get("/api/v1/health")
     assert response.headers["Permissions-Policy"] == (
-        "camera=(), microphone=(self), geolocation=()"
+        "camera=(self), microphone=(self), geolocation=()"
     )
     csp = response.headers["Content-Security-Policy"]
     assert "connect-src 'self' wss://api.elevenlabs.io" in csp

@@ -45,7 +45,7 @@ describe("GPT-Live WebRTC", () => {
     const options = {
       negotiate: vi.fn(async () => ({ session: { id: "live_opaque" }, transport: { sdp: "answer" } })),
       onPhase: vi.fn(), onIssue: vi.fn(), onTranscript: vi.fn(), onPlaybackBlocked: vi.fn(),
-      onDelegation: vi.fn(async (_context: string, _signal: AbortSignal, _progress: (content: string) => void) => "Verified backend result"),
+      onDelegation: vi.fn(async (_context: string, _signal: AbortSignal, _progress: (content: string) => void, _requestText: string) => "Verified backend result"),
     };
     client = new OpenAILiveClient(options);
     return options;
@@ -200,7 +200,7 @@ describe("GPT-Live WebRTC", () => {
     channel.emit({ ...delegation, event_id: "event-d1-repeated" });
     await vi.advanceTimersByTimeAsync(751);
     expect(options.onDelegation).toHaveBeenCalledTimes(1);
-    expect(options.onDelegation).toHaveBeenCalledWith("User: Busca mis archivos de ayer.", expect.any(AbortSignal), expect.any(Function));
+    expect(options.onDelegation).toHaveBeenCalledWith("User: Busca mis archivos de ayer.", expect.any(AbortSignal), expect.any(Function), "Busca mis archivos de ayer.");
     expect(JSON.parse(channel.send.mock.calls[0][0])).toMatchObject({ type: "session.commentary.append", delegation_id: "item_opaque", content: "Verified backend result" });
     expect(track.enabled).toBe(true);
     expect(track.stop).not.toHaveBeenCalled();
@@ -307,6 +307,23 @@ describe("GPT-Live WebRTC", () => {
     expect(options.onDelegation.mock.calls.map((args) => args[0])).toEqual([
       "User: Primera tarea.", "User: Primera tarea. Segunda tarea.", "User: Primera tarea. Segunda tarea. Tercera tarea.",
     ]);
+    expect(options.onDelegation.mock.calls.map((args) => args[3])).toEqual(["Primera tarea.", " Segunda tarea.", " Tercera tarea."]);
+  });
+
+  it("appends camera context only to a ready existing call without delegation or connection side effects", async () => {
+    const options = setup();
+    expect(client.appendContext("Camera evidence")).toBe(false);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    await client.start();
+    expect(client.appendContext("Camera evidence")).toBe(false);
+    const channel = Peer.latest.channel;
+    channel.emit({ type: "session.started" });
+    expect(client.appendContext("Camera evidence: a book")).toBe(true);
+    expect(JSON.parse(channel.send.mock.calls.at(-1)![0])).toMatchObject({ type: "session.commentary.append", delegation_id: null, content: "Camera evidence: a book" });
+    expect(options.onDelegation).not.toHaveBeenCalled();
+    client.stop();
+    expect(client.appendContext("Late camera evidence")).toBe(false);
+    expect(options.negotiate).toHaveBeenCalledOnce();
   });
 
   it("bounds multilingual results below the 500-token append limit with an explicit excerpt notice", () => {

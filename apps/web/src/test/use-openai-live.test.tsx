@@ -13,7 +13,7 @@ type Options = {
   negotiate: (sdp: string, signal: AbortSignal) => Promise<unknown>;
   onPhase: (phase: LivePhase) => void;
   onIssue: (issue: LiveIssue) => void;
-  onDelegation: (context: string, signal: AbortSignal, progress: (content: string) => void) => Promise<string>;
+  onDelegation: (context: string, signal: AbortSignal, progress: (content: string) => void, requestText?: string) => Promise<string>;
   initialCommentary?: string;
   initiallyPaused?: boolean;
 };
@@ -28,10 +28,11 @@ class MockClient {
   dispose = vi.fn(() => { this.controller.abort(); });
   setPaused = vi.fn((paused: boolean) => { this.paused = paused; if (this.started) this.options.onPhase(paused ? "paused" : "listening"); });
   play = vi.fn();
+  appendContext = vi.fn(() => true);
   constructor(options: Options) { this.options = options; this.paused = options.initiallyPaused ?? false; mocks.calls.push(this); }
   closed() { this.controller.abort(); this.options.onPhase("idle"); }
   fail(issue: LiveIssue) { this.controller.abort(); this.options.onIssue(issue); this.options.onPhase("error"); }
-  delegate(context = "User: Busca el informe") { return this.options.onDelegation(context, this.controller.signal, vi.fn()); }
+  delegate(context = "User: Busca el informe", requestText?: string) { return this.options.onDelegation(context, this.controller.signal, vi.fn(), requestText); }
 }
 vi.mock("../lib/openaiLiveClient", () => ({ OpenAILiveClient: class { constructor(options: Options) { return new MockClient(options); } }, liveSupported: () => true }));
 vi.mock("../hooks", () => ({ submitPrompt: vi.fn() }));
@@ -69,6 +70,59 @@ describe("Live consent, task suspension and verified resumption", () => {
     });
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+  it("classifies only the new request before submitting visual work once, including task suspension and resumption", async () => {
+    let finish!: (value: { intent: "visual"; question: string; observation: any }) => void;
+    const prepareVisualRequest = vi.fn(() => new Promise<{ intent: "visual"; question: string; observation: any }>((resolve) => { finish = resolve; }));
+    const { result } = renderHook(() => useOpenAILive({ ...options, prepareVisualRequest }));
+    await act(async () => { await result.current.start(); });
+    const call = mocks.calls[0];
+    let delegated!: Promise<string>;
+    await act(async () => { delegated = call.delegate("User: Mira esto. Voice assistant: Un libro. User: ¿Y ahora?", "¿Y ahora?"); });
+    expect(prepareVisualRequest).toHaveBeenCalledWith("¿Y ahora?", expect.any(AbortSignal));
+    expect(submitPrompt).not.toHaveBeenCalled();
+    await act(async () => { finish({ intent: "visual", question: "¿Qué ves ahora?", observation: { id: "observation" } }); });
+    expect(submitPrompt).toHaveBeenCalledOnce();
+    await tick(15_000);
+    await act(async () => { call.closed(); complete(); await delegated; });
+    await tick();
+    expect(mocks.calls).toHaveLength(2);
+    expect(prepareVisualRequest).toHaveBeenCalledOnce();
+    expect(submitPrompt).toHaveBeenCalledOnce();
+  });
+
+  it.each(["unclear", "visual"] as const)("does not submit a task for %s without a current observation", async (intent) => {
+    const prepareVisualRequest = vi.fn(async () => ({ intent, question: "" }));
+    const { result } = renderHook(() => useOpenAILive({ ...options, prepareVisualRequest }));
+    await act(async () => { await result.current.start(); await mocks.calls[0].delegate("User: ¿Y eso?", "¿Y eso?"); });
+    expect(submitPrompt).not.toHaveBeenCalled();
+    expect(result.current.working).toBe(false);
+  });
+
+  it("manual hangup while classifying cannot submit a delayed task", async () => {
+    let finish!: (value: { intent: "nonvisual"; question: string }) => void;
+    const prepareVisualRequest = vi.fn(() => new Promise<{ intent: "nonvisual"; question: string }>((resolve) => { finish = resolve; }));
+    const { result } = renderHook(() => useOpenAILive({ ...options, prepareVisualRequest }));
+    await act(async () => { await result.current.start(); });
+    let delegated!: Promise<string>;
+    await act(async () => { delegated = mocks.calls[0].delegate("User: Revisa esto", "Revisa esto"); });
+    await act(async () => { result.current.stop(); finish({ intent: "nonvisual", question: "" }); await delegated; });
+    expect(submitPrompt).not.toHaveBeenCalled();
+  });
+
+  it("delivers continuous observations without opening voice or submitting tasks", async () => {
+    const { result } = renderHook(() => useOpenAILive(options));
+    const observation = { id: "vision", sessionId: options.sessionId, mode: "continuous" as const, summary: "Un libro rojo", capturedAt: "2026-09-18T12:00:00Z" } as any;
+    act(() => { result.current.appendVisualObservation(observation); });
+    expect(mocks.calls).toHaveLength(0);
+    await act(async () => { await result.current.start(); });
+    act(() => { result.current.appendVisualObservation(observation); });
+    expect(mocks.calls[0].appendContext).toHaveBeenCalledOnce();
+    expect(mocks.calls[0].appendContext).toHaveBeenCalledWith(expect.stringContaining("Un libro rojo"));
+    expect(submitPrompt).not.toHaveBeenCalled();
+    act(() => { result.current.appendVisualObservation({ ...observation, sessionId: "other" }); });
+    expect(mocks.calls[0].appendContext).toHaveBeenCalledOnce();
+  });
 
   it("keeps short tasks in the same call and only closes after 15 seconds of actual work", async () => {
     const { result } = renderHook(() => useOpenAILive(options));

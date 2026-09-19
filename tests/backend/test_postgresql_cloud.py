@@ -124,7 +124,7 @@ def test_postgresql_upgrade_preserves_private_resources_and_assigns_owner(pg_url
         assert db.execute(text("SELECT owner_id,transport_kind FROM gateways WHERE id='gateway'")).one() == ("admin", "direct")
         assert db.execute(text("SELECT id,title,last_sequence FROM session_links")).one() == ("session","Keep this title",91)
         assert db.execute(text("SELECT profile_name FROM profile_refs")).scalar_one() == "personal"
-        assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0026_background_tasks"
+        assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0027_camera_vision"
     migrate(pg_url, "0021_live_transcripts", action="downgrade")
     migrate(pg_url)
     with engine.connect() as db:

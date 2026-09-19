@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge, Button, Field, Panel } from "@hermes-control/ui";
 import { api, type OpenAIIntegrationView } from "../lib/api";
+import { VISION_PREFERENCES_CHANGED } from "../lib/vision";
 import { useAppStore } from "../store/appStore";
 import { OpenAIVoicePicker } from "./OpenAIVoicePicker";
 
@@ -38,6 +39,7 @@ export function VoiceSettings() {
   }, [demoMode, offline, t]);
 
   const refreshFeatures = async (configured: boolean) => {
+    window.dispatchEvent(new Event(VISION_PREFERENCES_CHANGED));
     // Apply confirmed mutations immediately so a failed bootstrap refresh cannot
     // leave the chat using a provider whose credential has just been removed.
     useAppStore.setState((state) => state.features ? {

@@ -56,7 +56,7 @@ beforeEach(async () => {
     addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
   })));
   useAppStore.setState({ authState: "authenticated", streamingBySession: {} });
-  usePwaUpdateStore.setState({ status: "idle", blockers: { draft: false, streaming: false, dictation: false, speech: false } });
+  usePwaUpdateStore.setState({ status: "idle", blockers: { draft: false, streaming: false, dictation: false, speech: false, camera: false } });
   usePwaInstallStore.setState({ installed: false, dismissedUntil: 0, mode: null });
 });
 
