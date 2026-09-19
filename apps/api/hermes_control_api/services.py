@@ -37,6 +37,7 @@ from hermes_client import (
 )
 from hermes_client.history import project_history_message, project_history_turn_origins
 from hermes_client.compatibility import (
+    HERMES_0212_SHA,
     PROFILE_TRANSFER_REVISIONS as _AUDITED_PROFILE_TRANSFER_REVISIONS,
     PROFILE_TRANSFER_PAIRS as _AUDITED_PROFILE_TRANSFER_PAIRS,
     profile_contract_supports,
@@ -2128,6 +2129,10 @@ class ProfileService:
                 and destination_sha is not None
                 and (source_sha, destination_sha)
                 in _AUDITED_PROFILE_TRANSFER_PAIRS
+                and (
+                    self.services.settings.deployment_mode != "cloud"
+                    or source_sha == destination_sha == HERMES_0212_SHA
+                )
                 and source_capabilities.version
                 == _AUDITED_PROFILE_TRANSFER_REVISIONS.get(source_sha)
                 and destination_capabilities.version

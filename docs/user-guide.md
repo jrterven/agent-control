@@ -336,11 +336,17 @@ the middle of an export or cutover.
 
 In cloud mode, both computers must belong to your account, remain connected,
 and run updated connectors that advertise `connector.profileTransferV1`.
-Older connectors must be updated before moving agents. Both gateways also
-need compatible, audited Hermes revisions and verified export/import and
+Older connectors must be updated before moving agents. Both cloud computers
+need Hermes 0.21.2 revision `939e45c9…` and verified export/import and
 rollback support. An offline gateway cannot be selected; if it disconnects
 before confirmation, reconnect it or choose another compatible destination.
 Keep both computers connected while the dialog shows the transfer in progress.
+
+The audited Hermes import cannot reuse a profile name previously deleted on
+the destination. This also affects moving an agent back to its original
+computer. Control rejects that destination without changing its files or
+deletion marker; use another computer or arrange native Hermes maintenance
+before retrying.
 
 Hermes profile export preserves identity, configuration, memory, sessions,
 skills, plugins and cron state, but deliberately excludes `.env`, `auth.json`

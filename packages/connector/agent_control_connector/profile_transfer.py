@@ -160,6 +160,31 @@ class ProfileTransfers:
         self.runtime = runtime
         self.root = runtime.directory / "profile-transfers"
         self.lock = asyncio.Lock()
+        self._pending: set[str] | None = None
+        self._pending_unknown = False
+
+    def has_pending(self) -> bool:
+        """Keep maintenance blocked between chunks and after ambiguous imports.
+
+        Recover once from small durable receipts, then update this inventory
+        whenever this process creates or cleans a stage. No payload is read.
+        """
+        if self._pending is None:
+            self._pending = set()
+            try:
+                if self.root.is_symlink():
+                    raise ValueError("Invalid transfer root")
+                entries = list(self.root.iterdir()) if self.root.exists() else []
+                if len(entries) > MAX_STAGE_RECEIPTS:
+                    raise ValueError("Too many transfer receipts")
+                for entry in entries:
+                    if entry.is_symlink() or not IDENTIFIER.fullmatch(entry.name):
+                        raise ValueError("Invalid transfer receipt")
+                    if read_json(entry / "meta.json").get("state") != "cleaned":
+                        self._pending.add(entry.name)
+            except (OSError, ValueError):
+                self._pending_unknown = True
+        return bool(self._pending or self._pending_unknown)
 
     @staticmethod
     def _name(name):
@@ -195,7 +220,9 @@ class ProfileTransfers:
         active = sum(read_json(entry / "meta.json").get("state") != "cleaned" for entry in entries)
         if active >= MAX_STAGES:
             raise ValueError("Too many staged transfers")
+        self.has_pending()
         path.mkdir(mode=0o700)  # existing identities are never reused
+        self._pending.add(transfer_id)
         meta = {"gateway": self.runtime.gateway_id, "manager": manager, "transferId": transfer_id,
                 "name": name, "direction": direction, "state": "preparing", "offset": 0}
         atomic_json(path / "meta.json", meta)
@@ -204,6 +231,33 @@ class ProfileTransfers:
     @staticmethod
     def _receipt(meta: dict) -> dict[str, Any]:
         return {key: meta[key] for key in ("transferId", "size", "sha256", "offset")}
+
+    def _destination_available(self, name: str) -> None:
+        """Native listings hide tombstones; import must not create a hidden copy.
+
+        The audited importer neither clears a deletion marker nor replaces a
+        retired directory. Inspect only the configured Hermes root, without
+        changing the marker, empty state database, or any existing profile.
+        """
+        self._name(name)
+        root = Path(self.runtime.config["hermesHome"])
+        if not root.is_absolute():
+            raise ValueError("Invalid local Hermes root")
+        for directory in (root, root / "profiles", root / "profiles" / ".deleted"):
+            try:
+                info = directory.lstat()
+            except FileNotFoundError:
+                if directory == root:
+                    raise ValueError("Local Hermes root is unavailable")
+                continue
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+                raise ValueError("Invalid local Hermes profile root")
+        target = root / "profiles" / name
+        marker = root / "profiles" / ".deleted" / name
+        if target.exists() or target.is_symlink():
+            raise ValueError("Destination profile path already exists")
+        if marker.exists() or marker.is_symlink():
+            raise ValueError("Destination profile name was previously deleted")
 
     async def check_export_idle(self, name: str):
         self._name(name)
@@ -259,6 +313,7 @@ class ProfileTransfers:
         if (type(size) is not int or not 0 < size <= MAX_ARCHIVE_BYTES or not isinstance(sha256, str)
                 or not SHA256.fullmatch(sha256) or len(self.runtime.providers) >= 64):
             raise ValueError("Invalid profile archive metadata")
+        self._destination_available(name)
         # Native list is intentionally unfiltered; an unshared agent is private.
         if name in {item.name for item in await self.runtime.providers[manager].list_profiles()}:
             raise ValueError("Destination profile already exists")
@@ -302,8 +357,10 @@ class ProfileTransfers:
             if _regular(archive).st_size != meta["size"] or await asyncio.to_thread(_digest, archive) != meta["sha256"]:
                 raise ValueError("Profile archive checksum mismatch")
             await asyncio.to_thread(validate_archive, archive, meta["name"])
+            self._destination_available(meta["name"])
             if meta["name"] in {item.name for item in await self.runtime.providers[manager].list_profiles()}:
                 raise ValueError("Destination profile already exists")
+            self._destination_available(meta["name"])
         except (ValueError, OSError) as error:
             raise ProfileImportRefused("Profile import was refused before dispatch") from error
         meta["state"] = "importing"
@@ -337,3 +394,5 @@ class ProfileTransfers:
         if meta["state"] != "importing":
             meta["state"] = "cleaned"
             atomic_json(path / "meta.json", meta)
+            self.has_pending()
+            self._pending.discard(transfer_id)

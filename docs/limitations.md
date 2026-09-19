@@ -31,17 +31,19 @@
   credentials; local files and tools are not made portable automatically.
 - Cloud agent transfer requires two connected computers owned by the same
   account and updated connectors on both sides advertising
-  `connector.profileTransferV1`, in addition to the audited Hermes pair.
+  `connector.profileTransferV1`, with Hermes 0.21.2 revision `939e45c9…`
+  on both computers. The older audited pair remains private-mode only.
   Older connectors must be updated first. Archives travel through typed
   chunks of at most 1 MiB. Identity, configuration and history are preserved,
   and the source is deleted only after destination verification. The
   `default` profile and agents with active work cannot move.
-- Hermes 0.20.6 can keep a same-name import hidden when that technical profile
-  name was previously deleted on the destination because the native import
-  does not clear its `.deleted-profiles` tombstone. Control fails verification,
-  keeps the source agent, and does not publish a cutover. A hidden imported
-  directory may still require native operator cleanup before retrying with a
-  different destination or technical name.
+- Hermes 0.20.6 and the audited 0.21.2 revision do not clear a previous native
+  deletion marker during import. A move back to a computer that previously
+  held the same technical profile name therefore needs native maintenance
+  first. Cloud connectors reject tombstoned destinations before importing,
+  keep the source, and never remove the marker or leftover native files.
+  Private transfers fail destination verification and preserve the source;
+  their hidden imported directory may still need native operator cleanup.
 - After a native delete, a just-finished runtime inside multiplexed `hermes
   serve` can briefly recreate a tombstoned shell containing only an empty
   `state.db` and its lock. Hermes does not list or serve that shell and the

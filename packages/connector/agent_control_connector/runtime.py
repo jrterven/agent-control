@@ -30,7 +30,7 @@ from .tls import cloud_ssl_context
 from .media_install import media_profiles
 from .background_install import background_profiles
 from .background_tasks import retired_profile, snapshot as background_snapshot, unavailable as background_unavailable
-from hermes_client.compatibility import HERMES_0212_SHA, PROFILE_TRANSFER_PAIRS, profile_contract_supports
+from hermes_client.compatibility import HERMES_0212_SHA, profile_contract_supports
 from .profile_transfer import ProfileImportRefused, ProfileTransfers, TRANSFER_OPERATIONS
 from .hermes_media_plugin import queue_directory, validate_policy
 from .visual_media import acknowledge as acknowledge_media, next_publication, profile_home
@@ -261,7 +261,7 @@ class ConnectorRuntime:
                 except Exception:
                     if active is not True:
                         active = None
-            if self.tasks:
+            if self.tasks or self.profile_transfers.has_pending():
                 active = True
             self.active_work = active
             now = asyncio.get_running_loop().time()
@@ -305,7 +305,7 @@ class ConnectorRuntime:
             else:
                 validate_arguments(operation, args, kwargs)
             if operation in TRANSFER_OPERATIONS:
-                if not self.profile_transfer_supported or (self.config.get("sourceSha"), self.config.get("sourceSha")) not in PROFILE_TRANSFER_PAIRS:
+                if not self.profile_transfer_supported or self.config.get("sourceSha") != HERMES_0212_SHA:
                     raise ValueError("INVALID_OPERATION")
                 if operation == "profile_export":
                     name = args[0] if args else kwargs.get("name")
@@ -395,6 +395,7 @@ class ConnectorRuntime:
                 result = [item for item in result if item.name in self.providers]
             if operation == "capabilities":
                 if (self.profile_transfer_supported
+                        and self.config.get("sourceSha") == HERMES_0212_SHA
                         and profile_contract_supports(self.config.get("sourceSha"), result.version, "profiles.transfer")
                         and {"profiles.export", "profiles.import", "profiles.transfer"} <= result.methods):
                     result = replace(result, features=result.features | {"connector.profileTransferV1"})

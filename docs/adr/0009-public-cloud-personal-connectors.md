@@ -18,7 +18,7 @@ capacity. Teams, billing and cloud-hosted runtimes remain outside this beta.
 
 Profile transfer between two computers owned by the same account is supported
 when both are connected, both connectors advertise `connector.profileTransferV1`,
-and the exact Hermes revisions form an audited compatible pair. Older
+and both run audited Hermes 0.21.2 revision `939e45c9…`. Older
 connectors must be updated before they can participate. The existing native
 lifecycle checks remain mandatory: the `default` profile cannot move, active
 work blocks transfer, and the source is removed only after the imported profile

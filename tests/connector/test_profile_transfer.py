@@ -310,3 +310,107 @@ def test_pax_header_decompression_is_bounded_before_tar_yields_a_member(tmp_path
     path.chmod(0o600)
     with pytest.raises(ValueError):
         transfer.validate_archive(path, "control-dev")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["begin", "finish"])
+@pytest.mark.parametrize("retired_shell", [False, True])
+async def test_deleted_destination_name_is_refused_without_touching_tombstone(runtimes, phase, retired_shell):
+    runtime = runtimes[1]
+    content = archive_bytes()
+    identifier = await stage_import(runtime, content) if phase == "finish" else uuid4().hex
+    root = Path(runtime.config["hermesHome"]) / "profiles"
+    marker = root / ".deleted" / "control-dev"
+    marker.parent.mkdir(parents=True)
+    marker.write_bytes(b"deleted\n")
+    if retired_shell:
+        shell = root / "control-dev"
+        shell.mkdir()
+        (shell / "state.db").write_bytes(b"preserve-retired-database")
+    if phase == "begin":
+        response = await runtime.execute(message("profile_import_begin", "control-dev", identifier,
+                                                len(content), hashlib.sha256(content).hexdigest()))
+        assert "error" in response
+    else:
+        response = await runtime.execute(message("profile_import_finish", identifier))
+        assert response["error"] == "PROFILE_TRANSFER_IMPORT_REFUSED"
+    runtime.providers["manager"].import_profile_archive_from.assert_not_called()
+    assert "control-dev" not in runtime.providers
+    assert marker.read_bytes() == b"deleted\n"
+    if retired_shell:
+        assert (root / "control-dev/state.db").read_bytes() == b"preserve-retired-database"
+    else:
+        assert not (root / "control-dev").exists()
+
+
+@pytest.mark.asyncio
+async def test_destination_profile_root_symlink_is_refused_without_following(runtimes, tmp_path):
+    runtime = runtimes[1]
+    elsewhere = tmp_path / "unrelated-profiles"
+    elsewhere.mkdir()
+    (Path(runtime.config["hermesHome"]) / "profiles").symlink_to(elsewhere, target_is_directory=True)
+    response = await runtime.execute(message("profile_import_begin", "control-dev", uuid4().hex, 1, "a" * 64))
+    assert "error" in response
+    assert list(elsewhere.iterdir()) == []
+    runtime.providers["manager"].import_profile_archive_from.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unfinished_stages_block_maintenance_between_chunks_and_after_restart(runtimes):
+    import asyncio
+    from contextlib import suppress
+    runtime = runtimes[1]
+    runtime._background_snapshot = lambda _: {"complete": True, "activeCount": 0, "pendingDeliveryCount": 0, "tasks": []}
+    content = archive_bytes()
+    identifier = uuid4().hex
+    response = await runtime.execute(message("profile_import_begin", "control-dev", identifier, len(content), hashlib.sha256(content).hexdigest()))
+    assert "error" not in response
+    assert not runtime.tasks  # no RPC is executing between archive chunks
+    assert runtime.profile_transfers.has_pending()
+    recovered = transfer.ProfileTransfers(runtime)
+    assert recovered.has_pending()
+    (runtime.directory / "maintenance.request").write_text("explicit-update")
+    status_task = asyncio.create_task(runtime._status_loop())
+    try:
+        for _ in range(50):
+            if (runtime.directory / "status.json").exists():
+                break
+            await asyncio.sleep(.01)
+        status = read_json(runtime.directory / "status.json")
+        assert status["maintenanceRequestId"] == "explicit-update"
+        assert status["activeWork"] is True
+    finally:
+        status_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await status_task
+    (runtime.directory / "maintenance.request").unlink()
+    assert "error" not in await runtime.execute(message("profile_archive_cleanup", identifier))
+    assert not runtime.profile_transfers.has_pending()
+    assert not transfer.ProfileTransfers(runtime).has_pending()
+
+
+@pytest.mark.asyncio
+async def test_unknown_import_keeps_maintenance_blocked_after_payload_cleanup(runtimes):
+    runtime = runtimes[1]
+    identifier = await stage_import(runtime, archive_bytes())
+    runtime.providers["manager"].import_profile_archive_from.side_effect = TimeoutError()
+    assert "error" in await runtime.execute(message("profile_import_finish", identifier))
+    assert "error" not in await runtime.execute(message("profile_archive_cleanup", identifier))
+    assert runtime.profile_transfers.has_pending()
+    assert transfer.ProfileTransfers(runtime).has_pending()
+
+
+@pytest.mark.asyncio
+async def test_cloud_transfer_does_not_advertise_or_dispatch_older_private_contract(runtimes):
+    from dataclasses import replace
+    from hermes_client.compatibility import HERMES_0206_SHA
+    runtime = runtimes[0]
+    runtime.config["sourceSha"] = HERMES_0206_SHA
+    capabilities = await runtime.providers["manager"].capabilities()
+    runtime.providers["manager"].capabilities.return_value = replace(capabilities, version="0.20.6", source_sha=HERMES_0206_SHA)
+    runtime.providers["manager"].export_profile_archive_to = AsyncMock()
+    exposed = (await runtime.execute(message("capabilities")))["result"]
+    assert "profiles.transfer" not in exposed.methods
+    assert "connector.profileTransferV1" not in exposed.features
+    assert (await runtime.execute(message("profile_export", "control-dev", uuid4().hex)))["error"] == "INVALID_OPERATION"
+    runtime.providers["manager"].export_profile_archive_to.assert_not_called()
