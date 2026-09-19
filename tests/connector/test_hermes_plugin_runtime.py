@@ -7,7 +7,9 @@ syntax feature, including backslashes in f-string expressions (PEP 701).
 """
 from __future__ import annotations
 
+import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import importlib.util
 import json
@@ -92,8 +94,31 @@ class CopiedHermesPluginRuntimeTest(unittest.TestCase):
                 with patch.dict(sys.modules, {"gateway.run": gateway}), patch.dict("os.environ", {"_HERMES_GATEWAY": "1"}):
                     plugin.register(context)
                 gateway_marker = json.loads((home / ".agent-control/background/runtime.json").read_text())
+                self.assertIsNone(gateway_marker["profileDeliveryMode"])  # Incidental import/flag are not startup.
+                self.assertIsNone(gateway_marker["profileDeliveryShim"])
+                runtime = home / "native"
+                (runtime / "hermes_cli").mkdir(parents=True)
+                (runtime / "gateway").mkdir()
+                source = ("def cmd_gateway(args):\n    pass\n"
+                          "def main():\n    args = parsed_args\n"
+                          "    with ThreadPoolExecutor(max_workers=1) as workers:\n"
+                          "        return workers.submit(plugin.register, context).result(timeout=3)\n")
+                for relative in plugin.GATEWAY_BOOTSTRAP_HASHES:
+                    (runtime / relative).write_text(source if relative == "hermes_cli/main.py" else "# native fixture\n")
+                hashes = {relative: hashlib.sha256((runtime / relative).read_bytes()).hexdigest()
+                          for relative in plugin.GATEWAY_BOOTSTRAP_HASHES}
+                main = types.ModuleType("hermes_cli.main")
+                main.__file__ = str(runtime / "hermes_cli/main.py")
+                main.plugin, main.context, main.ThreadPoolExecutor = plugin, context, ThreadPoolExecutor
+                exec(compile(source, main.__file__, "exec"), vars(main))
+                main.parsed_args = argparse.Namespace(command="gateway", gateway_command="run", func=main.cmd_gateway)
+                with patch.dict(sys.modules, {"hermes_cli.main": main}), patch.object(plugin, "GATEWAY_BOOTSTRAP_HASHES", hashes):
+                    main.main()  # Native discovery runs on a different thread before gateway.run exists.
+                gateway_marker = json.loads((home / ".agent-control/background/runtime.json").read_text())
                 self.assertEqual(gateway_marker["profileDeliveryMode"], "native-gateway")
                 self.assertIsNone(gateway_marker["profileDeliveryShim"])
+                self.assertEqual(gateway_marker["sha256"], hashlib.sha256(entry.read_bytes()).hexdigest())
+                self.assertEqual(gateway_marker["installationId"], "test-installation")
                 config_value["agent"] = {"disabled_toolsets": ["delegation"]}
                 self.assertIsNone(hook(platform="tui"))
                 del config_value["agent"]

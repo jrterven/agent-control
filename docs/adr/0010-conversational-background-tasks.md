@@ -88,6 +88,17 @@ trigger this import. Activation tests exercise the canonical CLI startup as
 well as delivery in a different profile; importing the server first in a test
 does not cover the launch profile's plugin lifecycle.
 
+The canonical `hermes gateway run` command starts plugin discovery on a daemon
+thread before importing the Gateway module. Its cached registration must not
+depend on that module already existing or on `_HERMES_GATEWAY`, which incidental
+imports also set. The plugin checks the live main-thread frame of the audited
+CLI entry, its parsed `gateway run` arguments and native command handler, and
+the pinned startup sources and loaded-module roots. This recognizes the early
+and late discovery paths without importing Gateway, setting environment flags,
+adding threads or changing its delivery. The receipt still requires native
+delegation, exact installation identity and a live process; other CLI commands
+cannot reuse a cached Gateway flag as activation evidence.
+
 There is no audited ID linking a live turn to a partial history row. On reopening
 mid-turn, the UI shows history and a running indicator until a verified terminal
 and history refresh, rather than guessing and duplicating partial output.

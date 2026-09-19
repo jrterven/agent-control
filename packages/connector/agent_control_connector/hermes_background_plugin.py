@@ -6,6 +6,7 @@ profile. The native runtime owns claims, permissions and acknowledgement.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import functools
 import importlib
@@ -14,12 +15,13 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 import types
 from uuid import uuid4
 
 PLUGIN_NAME = "agent-control-background"
-PLUGIN_VERSION = "1.0.2"
+PLUGIN_VERSION = "1.0.3"
 AUDITED_SOURCE_SHA = "939e45c91d751fadd94dcd1b873ac3cb44846213"
 DELIVERY_SHIM = "profile-delivery-939e-v1"
 DELIVERY_SOURCE_HASHES = {
@@ -30,6 +32,12 @@ DELIVERY_SOURCE_HASHES = {
 DELIVERY_BOOTSTRAP_HASHES = {
     "hermes_cli/main.py": "dc7a6eda3caebab994e8dd2c05a4a8c8b2331f4472313c675efc9e7305b5d6aa",
     "tui_gateway/server.py": "ba5e2ee2271acc9cd50aa7aeb0244d9b9f3d0fca8a2a71b4812c451f5d65ccb8",
+}
+GATEWAY_BOOTSTRAP_HASHES = {
+    "hermes_cli/main.py": "dc7a6eda3caebab994e8dd2c05a4a8c8b2331f4472313c675efc9e7305b5d6aa",
+    "hermes_cli/gateway.py": "521f22e695f6294438e4d6cdcbb5366ec3d2dfbdd1f433fadb26f5f6d7ac5757",
+    "hermes_cli/plugins.py": "9903d8d5a2f44c9f4772b28632d012b443c9fbe24a5d57df17b5ac62c33210d2",
+    "gateway/run.py": "649b0e431d5b29ef2fba9c4a0c679300dc4977f1a3f2ecdc1700359ae2fdfef8",
 }
 INTERACTIVE_PLATFORMS = frozenset({"tui", "desktop", "cli"})
 INSTRUCTIONS = """Agent Control conversational multitasking: keep this conversation available while independent, time-consuming tasks run. When native delegate_task is available and the task can be completed independently with the information and permissions already given, delegate it with a clear goal, relevant context and output language. Give only the context the worker needs. Use the native tool; do not build a background executor or change schedules. After a confirmed background dispatch, briefly say what is running and END YOUR TURN promptly so the user can keep chatting. Do not wait, poll transcripts, or repeatedly call list to await completion. Hermes delivers the result to this same conversation between turns; report the result once when it arrives, distinguishing success, failure and uncertain outcomes. If dispatch falls back to synchronous execution, do not claim the chat has been freed. Keep immediate answers and tasks needing clarification in the main conversation. Workers inherit existing permissions: delegation does not authorize sending messages, deleting data or other actions beyond the user's request. Avoid concurrent changes to the same resource; pass relevant constraints to the worker. Never retry an uncertain external action automatically, or treat a worker's self-report as independently verified. A user asking about progress is not cancelling the work. Use native list/steer/stop only when needed to answer, redirect or cancel. For visual work, ask the worker to return local file paths or HTTPS image URLs with alt text and provenance, without publishing images from its child session. Publish those images yourself with publish_images in this parent conversation before inserting the returned Markdown. Do not reuse ac-media references published in a child conversation; media access is conversation-scoped. Running subagents do not survive stopping/resetting their session or exiting Hermes; do not promise restart durability. Cron and other finite runs retain their native behavior."""
@@ -201,6 +209,55 @@ def install_delivery_profile_scope(source_sha: str) -> bool:
     return True
 
 
+def _canonical_gateway_startup() -> bool:
+    """Recognize native Gateway startup even from its early discovery thread.
+
+    The audited CLI starts daemon plugin discovery before importing gateway.run.
+    Inspect only its live main-thread call chain, never argv or a cached flag:
+    incidental gateway imports also set _HERMES_GATEWAY. This neither starts a
+    gateway nor imports it, and a later unrelated CLI cannot reuse this proof.
+    """
+    frame = sys._current_frames().get(threading.main_thread().ident)
+    try:
+        for _ in range(64):
+            if frame is None:
+                return False
+            module_name = frame.f_globals.get("__name__")
+            if module_name == "__main__":
+                module_name = getattr(frame.f_globals.get("__spec__"), "name", None)
+            name = frame.f_code.co_name
+            function = frame.f_globals.get(name)
+            if (module_name == "hermes_cli.main" and name == "main"
+                    and isinstance(function, types.FunctionType)
+                    and frame.f_code is function.__code__
+                    and function.__globals__ is frame.f_globals):
+                root = Path(frame.f_globals["__file__"]).resolve().parent.parent
+                expected_path = root / (module_name.replace(".", "/") + ".py")
+                if Path(frame.f_code.co_filename).resolve() != expected_path:
+                    raise ValueError("Unsupported native gateway startup handler")
+                args = frame.f_locals.get("args")
+                handler = frame.f_globals.get("cmd_gateway")
+                if (not isinstance(args, argparse.Namespace)
+                        or vars(args).get("command") != "gateway"
+                        or vars(args).get("gateway_command") != "run"
+                        or vars(args).get("func") is not handler
+                        or not isinstance(handler, types.FunctionType)
+                        or handler.__globals__ is not frame.f_globals
+                        or Path(handler.__code__.co_filename).resolve() != expected_path):
+                    return False
+                _verify_native_sources(root, GATEWAY_BOOTSTRAP_HASHES)
+                for imported_name in ("hermes_cli.main", "hermes_cli.gateway", "gateway.run"):
+                    imported = sys.modules.get(imported_name)
+                    if imported is not None and Path(imported.__file__).resolve() != (
+                            root / (imported_name.replace(".", "/") + ".py")):
+                        raise ValueError("Native gateway startup source mismatch")
+                return True
+            frame = frame.f_back
+        return False
+    finally:
+        del frame
+
+
 def delivery_runtime_mode(delivery_scoped: bool) -> str | None:
     if delivery_scoped:
         return "tui-scoped"
@@ -208,7 +265,7 @@ def delivery_runtime_mode(delivery_scoped: bool) -> str | None:
     # poller. Do not confuse it with Serve importing late/partially initialized.
     if "tui_gateway.server" in sys.modules or "tui_gateway.entry" in sys.modules:
         return None
-    if "gateway.run" in sys.modules and os.environ.get("_HERMES_GATEWAY") == "1":
+    if _canonical_gateway_startup():
         return "native-gateway"
     return None  # An unrelated CLI invocation cannot certify Control activation.
 

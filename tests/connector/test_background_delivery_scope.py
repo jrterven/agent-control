@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 import hashlib
@@ -180,9 +181,100 @@ def test_gateway_delivery_is_distinct_from_uninitialized_serve(monkeypatch):
     monkeypatch.delitem(sys.modules, "tui_gateway.entry", raising=False)
     monkeypatch.setitem(sys.modules, "gateway.run", types.ModuleType("gateway.run"))
     monkeypatch.setenv("_HERMES_GATEWAY", "1")
-    assert plugin.delivery_runtime_mode(False) == "native-gateway"
+    # gateway.run sets this flag at import even for an unrelated CLI. Neither
+    # the incidental module nor the flag proves that a gateway was launched.
+    assert plugin.delivery_runtime_mode(False) is None
     monkeypatch.setitem(sys.modules, "tui_gateway.entry", types.ModuleType("tui_gateway.entry"))
     assert plugin.delivery_runtime_mode(False) is None
+
+
+@pytest.fixture
+def gateway_startup(tmp_path, monkeypatch):
+    root = tmp_path / "gateway-native"
+    (root / "hermes_cli").mkdir(parents=True)
+    (root / "gateway").mkdir()
+    source = ("def cmd_gateway(args):\n    return callback()\n"
+              "def main():\n    args = parsed_args\n    return launch(args)\n")
+    for relative in plugin.GATEWAY_BOOTSTRAP_HASHES:
+        (root / relative).write_text(source if relative == "hermes_cli/main.py" else "# audited native fixture\n")
+    monkeypatch.setattr(plugin, "GATEWAY_BOOTSTRAP_HASHES", {
+        relative: hashlib.sha256((root / relative).read_bytes()).hexdigest()
+        for relative in plugin.GATEWAY_BOOTSTRAP_HASHES})
+    for name in ("hermes_cli.main", "hermes_cli.gateway", "gateway.run", "tui_gateway.server", "tui_gateway.entry"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    main = types.ModuleType("hermes_cli.main")
+    main.__file__ = str(root / "hermes_cli/main.py")
+    exec(compile(source, main.__file__, "exec"), vars(main))
+    main.parsed_args = argparse.Namespace(command="gateway", gateway_command="run", func=main.cmd_gateway)
+    main.callback = lambda: plugin.delivery_runtime_mode(False)
+    main.launch = lambda args: args.func(args)
+    return types.SimpleNamespace(root=root, main=main)
+
+
+@pytest.mark.parametrize("module_name", ["hermes_cli.main", "__main__"])
+@pytest.mark.parametrize("late_import", [False, True])
+def test_gateway_discovery_thread_recognizes_canonical_startup_before_and_after_import(
+        gateway_startup, monkeypatch, module_name, late_import):
+    main = gateway_startup.main
+    main.__name__ = module_name
+    if module_name == "__main__":
+        main.__spec__ = types.SimpleNamespace(name="hermes_cli.main")
+    if late_import:
+        gateway = types.ModuleType("gateway.run")
+        gateway.__file__ = str(gateway_startup.root / "gateway/run.py")
+        monkeypatch.setitem(sys.modules, "gateway.run", gateway)
+        monkeypatch.setenv("_HERMES_GATEWAY", "1")
+    def discover_in_background(args):
+        with ThreadPoolExecutor(max_workers=1) as workers:
+            return workers.submit(main.callback).result(timeout=3)
+    main.launch = discover_in_background
+    assert main.main() == "native-gateway"
+    assert "tui_gateway.server" not in sys.modules
+    assert ("gateway.run" in sys.modules) is late_import
+    # Neither this proof nor a previously loaded native module is cached after
+    # returning from the canonical command, including a later CLI registration.
+    assert plugin.delivery_runtime_mode(False) is None
+
+
+@pytest.mark.parametrize("command,subcommand", [("gateway", "status"), ("gateway", "setup"),
+                                               ("cron", "run"), ("chat", None), ("serve", None)])
+def test_non_gateway_commands_cannot_certify_gateway_from_argv_or_cached_flag(
+        gateway_startup, monkeypatch, command, subcommand):
+    main = gateway_startup.main
+    main.parsed_args.command = command
+    main.parsed_args.gateway_command = subcommand
+    monkeypatch.setattr(sys, "argv", ["hermes", "gateway", "run"])
+    monkeypatch.setenv("_HERMES_GATEWAY", "1")
+    assert main.main() is None
+
+
+def test_gateway_command_must_dispatch_native_handler_on_main_thread(gateway_startup):
+    main = gateway_startup.main
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        assert workers.submit(main.main).result(timeout=3) is None
+    main.parsed_args.func = lambda args: main.callback()
+    assert main.main() is None
+
+
+@pytest.mark.parametrize("relative", list(plugin.GATEWAY_BOOTSTRAP_HASHES))
+def test_changed_gateway_startup_source_cannot_certify_readiness(gateway_startup, relative):
+    path = gateway_startup.root / relative
+    path.write_text(path.read_text() + "# changed native source\n")
+    with pytest.raises(ValueError, match="source"):
+        gateway_startup.main.main()
+
+
+def test_gateway_loaded_from_different_native_root_is_rejected(gateway_startup, monkeypatch):
+    gateway = types.ModuleType("gateway.run")
+    gateway.__file__ = str(gateway_startup.root.parent / "other/gateway/run.py")
+    monkeypatch.setitem(sys.modules, "gateway.run", gateway)
+    with pytest.raises(ValueError, match="source mismatch"):
+        gateway_startup.main.main()
+
+
+def test_gateway_proof_does_not_certify_uninitialized_serve(gateway_startup, monkeypatch):
+    monkeypatch.setitem(sys.modules, "tui_gateway.entry", types.ModuleType("tui_gateway.entry"))
+    assert gateway_startup.main.main() is None
 
 
 def canonical_startup(native, monkeypatch, *, module_name="hermes_cli.main"):
