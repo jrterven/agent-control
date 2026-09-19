@@ -6,8 +6,12 @@ OpenAI connection and select `gpt-5.6-luna` (default), `gpt-5.6-terra` or
 `gpt-5.6-sol`. Saving a preference does not test model access or consume inference
 quota. Provider rejection is shown without switching models.
 
-The eye menu selects on-demand or continuous observation, then opens camera
-setup. Only **Activate camera** requests device permission. The camera stream
+The eye opens camera setup in **Ask about the camera** (on-demand) mode.
+In this mode, activation, resuming and switching devices leave the preview ready without
+analyzing or describing it. Ask a question in chat or Live, or use **Look now**
+for an explicit capture. **Change mode** offers automatic continuous observation
+as an explicit opt-in; it is never remembered for the next activation after stop.
+Only **Activate camera** requests device permission. The camera stream
 is separate from Live's audio stream. Explicit hangup releases the camera;
 Live's internal task suspension and reconnection leave it running. Hiding the
 app, navigation, account/profile changes, going offline and credential/preference

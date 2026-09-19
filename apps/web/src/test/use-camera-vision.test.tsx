@@ -39,16 +39,63 @@ describe("camera permission and analysis lifecycle", () => {
   });
   afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
-  it("chooses a visible setup mode before the separate activation gesture", async () => {
+  it("opens on-demand setup by default and stays silent after the separate activation gesture", async () => {
     function Harness() { const camera = useCameraVision(options); return <CameraVision camera={camera} onLook={vi.fn()} onAttach={vi.fn()} />; }
     render(<Harness />); await tick();
     fireEvent.click(screen.getByRole("button", { name: "Cámara" }));
-    fireEvent.click(screen.getByRole("button", { name: /Consulta/ }));
     expect(capture.acquireCamera).not.toHaveBeenCalled();
+    expect(screen.getByText("Preguntar sobre la cámara")).toBeInTheDocument();
+    expect(screen.queryByText("Elegir modo de cámara")).not.toBeInTheDocument();
     expect(screen.getByText("gpt-5.6-luna")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Cámara del dispositivo" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Activar cámara" })); await tick();
     expect(capture.acquireCamera).toHaveBeenCalledOnce();
+    await tick(60_000);
+    expect(capture.captureCameraFrame).not.toHaveBeenCalled();
+    expect(visionApi.intent).not.toHaveBeenCalled();
+    expect(visionApi.analyze).not.toHaveBeenCalled();
+  });
+
+  it("requires choosing automatic observation and returns to on demand after stopping", async () => {
+    function Harness() { const camera = useCameraVision(options); return <CameraVision camera={camera} onLook={vi.fn()} onAttach={vi.fn()} />; }
+    render(<Harness />); await tick();
+    fireEvent.click(screen.getByRole("button", { name: "Cámara" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cambiar modo" }));
+    expect(screen.getByRole("button", { name: /Preguntar sobre la cámara/ })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: /Seguimiento automático/ }));
+    expect(visionApi.analyze).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Activar cámara" })); await tick();
+    expect(visionApi.analyze).toHaveBeenCalledOnce();
+    expect(vi.mocked(visionApi.analyze).mock.calls[0][1].mode).toBe("continuous");
+    fireEvent.click(screen.getAllByRole("button", { name: "Apagar cámara" })[0]); await tick();
+    fireEvent.click(screen.getByRole("button", { name: "Cámara" }));
+    expect(screen.getByText("Preguntar sobre la cámara")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Activar cámara" })); await tick(60_000);
+    expect(visionApi.analyze).toHaveBeenCalledOnce();
+  });
+
+  it("captures only for visual questions in on-demand mode, including after resume and switching devices", async () => {
+    const onObservation = vi.fn();
+    const { result } = renderHook(() => useCameraVision({ ...options, onObservation })); await tick();
+    await act(async () => { await result.current.start("on_demand"); });
+    await act(async () => { await result.current.onLiveRequest("Busca el informe", new AbortController().signal); });
+    expect(capture.captureCameraFrame).not.toHaveBeenCalled();
+    const question = "¿Qué dice la etiqueta de esta taza?";
+    vi.mocked(visionApi.intent).mockResolvedValueOnce({ intent: "visual", question });
+    await act(async () => { await result.current.onLiveRequest(question, new AbortController().signal); });
+    expect(visionApi.analyze).toHaveBeenCalledOnce();
+    expect(vi.mocked(visionApi.analyze).mock.calls[0][1]).toMatchObject({ mode: "on_demand", question });
+    expect(onObservation).toHaveBeenCalledOnce();
+    await tick(60_000);
+    act(() => result.current.pause());
+    await act(async () => { await result.current.resume(); await result.current.switchDevice("rear"); });
+    await tick(60_000);
+    expect(capture.captureCameraFrame).toHaveBeenCalledOnce();
+    expect(visionApi.analyze).toHaveBeenCalledOnce();
+    vi.mocked(visionApi.intent).mockResolvedValueOnce({ intent: "visual", question: "¿Y ahora?" });
+    await act(async () => { await result.current.onLiveRequest("¿Y ahora?", new AbortController().signal); });
+    expect(visionApi.analyze).toHaveBeenCalledTimes(2);
+    expect(capture.captureCameraFrame).toHaveBeenCalledTimes(2);
   });
 
   it("never activates on mount; explicit activation blocks PWA reload and stop releases memory", async () => {

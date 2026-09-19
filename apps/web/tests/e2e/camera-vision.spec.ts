@@ -1,16 +1,17 @@
 import type { Page } from "@playwright/test";
-import type { VisionAnalysisInput, VisionObservation, VisionPreferences } from "@hermes-control/shared-types";
+import type { VisionAnalysisInput, VisionIntentInput, VisionObservation, VisionPreferences } from "@hermes-control/shared-types";
 import { bootstrapData, expect, test } from "./fixtures";
 
 test.use({ serviceWorkers: "block" });
 
 type SmokeState = { cameras: number; microphones: number; callsClosed: number; commentary: string[]; attachments: string[] };
-type SmokeWindow = Window & { cameraSmoke: { state(): SmokeState; delegate(): void } };
+type SmokeWindow = Window & { cameraSmoke: { state(): SmokeState; delegate(question?: string): void } };
 const mediaState = (page: Page) => page.evaluate(() => (window as SmokeWindow).cameraSmoke.state());
 
 async function mockCamera(page: Page) {
   let preferences: VisionPreferences = { modelId: "gpt-5.6-luna", intervalSeconds: 5, configured: true };
   const analyses: VisionAnalysisInput[] = [];
+  const intents: VisionIntentInput[] = [];
   const observations: VisionObservation[] = [];
   const prompts: { content: string; bytes: Buffer | null }[] = [];
   const calls: unknown[] = [];
@@ -26,8 +27,9 @@ async function mockCamera(page: Page) {
   });
   await page.route("**/api/v1/sessions/*/vision/observations**", (route) => route.fulfill({ json: { items: [...observations].reverse(), nextCursor: null } }));
   await page.route("**/api/v1/sessions/*/vision/intent", (route) => {
-    const text = route.request().postDataJSON().text;
-    return route.fulfill({ json: { intent: /ves|mira|c[aá]mara/i.test(text) ? "visual" : "nonvisual", question: text } });
+    const payload: VisionIntentInput = route.request().postDataJSON();
+    intents.push(payload);
+    return route.fulfill({ json: { intent: /ves|mira|c[aá]mara|taza|cuaderno/i.test(payload.text) ? "visual" : "nonvisual", question: payload.text } });
   });
   await page.route("**/api/v1/sessions/*/vision/analyses", (route) => {
     const payload: VisionAnalysisInput = route.request().postDataJSON();
@@ -77,6 +79,7 @@ async function mockCamera(page: Page) {
     const attachments: string[] = [];
     const channels: Channel[] = [];
     let callsClosed = 0;
+    let delegations = 0;
     const nativeFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
       if (String(input).includes("/prompts-with-attachments") && init?.body instanceof FormData) {
@@ -136,39 +139,51 @@ async function mockCamera(page: Page) {
     } });
     Object.assign(window, { cameraSmoke: {
       state: () => ({ cameras: cameras.filter((track) => track.readyState === "live").length, microphones: microphones.filter((track) => track.readyState === "live").length, callsClosed, commentary, attachments }),
-      delegate: () => {
+      delegate: (question = "Prepara un informe detallado.") => {
         const channel = channels.at(-1)!;
-        channel.emit({ type: "session.input_transcript.delta", event_id: "camera-task-text", delta: "Prepara un informe detallado.", start_ms: 100, end_ms: 1000 });
-        channel.emit({ type: "session.delegation.created", event_id: "camera-task", delegation: { id: "camera-report-task", target: "client" }, offset_ms: 1100 });
+        delegations += 1;
+        const offset = delegations * 2000;
+        channel.emit({ type: "session.input_transcript.delta", event_id: `camera-task-text-${delegations}`, delta: question, start_ms: offset + 100, end_ms: offset + 1000 });
+        channel.emit({ type: "session.delegation.created", event_id: `camera-task-${delegations}`, delegation: { id: `camera-report-task-${delegations}`, target: "client" }, offset_ms: offset + 1100 });
       },
     } });
   });
-  return { analyses, observations, prompts, calls, preferences: () => preferences, keepWorking: () => { keepWorking = true; } };
+  return { analyses, intents, observations, prompts, calls, preferences: () => preferences, keepWorking: () => { keepWorking = true; } };
 }
 
-async function activate(page: Page, mode: "on_demand" | "continuous") {
+async function activate(page: Page, mode: "on_demand" | "continuous" = "on_demand") {
   await page.getByRole("button", { name: "Cámara", exact: true }).click();
-  await expect(page.getByText("Elegir modo de cámara")).toBeVisible();
-  await page.getByRole("button", { name: mode === "on_demand" ? /Consulta puntual Mira cuando/ : /Seguimiento continuo Compara/ }).click();
+  await expect(page.getByText("Preguntar sobre la cámara", { exact: true })).toBeVisible();
+  if (mode === "continuous") {
+    await page.getByRole("button", { name: "Cambiar modo", exact: true }).click();
+    await expect(page.getByText("Elegir modo de cámara")).toBeVisible();
+    await page.getByRole("button", { name: /Seguimiento automático Analiza al activar/ }).click();
+  }
   expect((await mediaState(page)).cameras).toBe(0);
   await page.getByRole("button", { name: "Activar cámara", exact: true }).click();
   await expect(page.getByText("Cámara activa", { exact: true })).toBeVisible();
   await expect.poll(async () => (await mediaState(page)).cameras).toBe(1);
 }
 
-test("opens camera only after choosing a mode, analyzes on demand and releases its preview", async ({ page }, testInfo) => {
+test("defaults to questions, waits silently after activation, and looks only when requested", async ({ page }, testInfo) => {
   const mock = await mockCamera(page);
+  await page.clock.install();
   await page.goto("/chats");
   await expect(page.getByRole("button", { name: "Cámara", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Cámara", exact: true }).click();
-  await expect(page.getByText("Elegir modo de cámara")).toBeVisible();
+  await expect(page.getByText("Preguntar sobre la cámara", { exact: true })).toBeVisible();
+  await expect(page.getByText("Elegir modo de cámara")).toHaveCount(0);
   expect((await mediaState(page)).cameras).toBe(0);
-  await page.getByRole("button", { name: /Consulta puntual Mira cuando/ }).click();
-  expect((await mediaState(page)).cameras).toBe(0);
+  await page.screenshot({ path: testInfo.outputPath("camera-setup.png"), fullPage: true });
   await page.getByRole("button", { name: "Activar cámara", exact: true }).click();
   await expect(page.getByText("Cámara activa", { exact: true })).toBeVisible();
   await expect(page.locator(".camera-vision__preview video")).toBeVisible();
+  await page.clock.fastForward(30_000);
   expect(mock.analyses).toHaveLength(0);
+  expect(mock.intents).toHaveLength(0);
+  expect(mock.prompts).toHaveLength(0);
+  expect((await mediaState(page)).commentary).toHaveLength(0);
+  await expect(page.getByRole("article", { name: "Contexto visual" })).toHaveCount(0);
   await page.getByRole("button", { name: "Mirar ahora", exact: true }).click();
   await expect.poll(() => mock.analyses.length).toBe(1);
   await expect.poll(() => mock.prompts.length).toBe(1);
@@ -179,6 +194,66 @@ test("opens camera only after choosing a mode, analyzes on demand and releases i
   await page.getByRole("button", { name: "Apagar cámara", exact: true }).first().click();
   await expect.poll(async () => (await mediaState(page)).cameras).toBe(0);
   await expect(page.locator(".camera-vision__preview")).toHaveCount(0);
+});
+
+test("answers a custom written camera question with one fresh capture and one agent task", async ({ page }, testInfo) => {
+  const mock = await mockCamera(page);
+  await page.clock.install();
+  await page.goto("/chats");
+  await activate(page);
+  await page.clock.fastForward(30_000);
+  expect(mock.analyses).toHaveLength(0);
+  expect(mock.intents).toHaveLength(0);
+  expect(mock.prompts).toHaveLength(0);
+  expect((await mediaState(page)).commentary).toHaveLength(0);
+  const question = "¿De qué color es la taza que tengo enfrente?";
+  await page.getByRole("textbox", { name: "Mensaje a Newton…" }).fill(question);
+  await page.getByRole("button", { name: "Enviar mensaje" }).click();
+  await expect.poll(() => mock.prompts.length).toBe(1);
+  expect(mock.intents).toHaveLength(1);
+  expect(mock.intents[0]).toMatchObject({ text: question });
+  expect(mock.intents[0]).not.toHaveProperty("image");
+  expect(mock.analyses).toHaveLength(1);
+  expect(mock.analyses[0]).toMatchObject({ mode: "on_demand", question, image: expect.stringMatching(/^data:image\/jpeg;base64,/) });
+  expect(mock.prompts[0].content).toBe(question);
+  await expect(page.getByRole("article", { name: "Contexto visual" })).toHaveCount(1);
+  await page.clock.fastForward(30_000);
+  expect(mock.analyses).toHaveLength(1);
+  expect(mock.prompts).toHaveLength(1);
+  expect((await mediaState(page)).commentary).toHaveLength(0);
+  expect((await mediaState(page)).cameras).toBe(1);
+  await page.screenshot({ path: testInfo.outputPath("camera-written-question.png"), fullPage: true });
+});
+
+test("waits for a custom Live question before capturing and delegating exactly once", async ({ page }, testInfo) => {
+  const mock = await mockCamera(page);
+  await page.clock.install();
+  await page.goto("/chats");
+  await page.getByRole("button", { name: "Conversar con GPT-Live-1" }).click();
+  await expect(page.getByText("Escuchando · ya puedes hablar")).toBeVisible();
+  await activate(page);
+  await page.clock.fastForward(30_000);
+  expect(mock.analyses).toHaveLength(0);
+  expect(mock.intents).toHaveLength(0);
+  expect(mock.prompts).toHaveLength(0);
+  expect((await mediaState(page)).commentary).toHaveLength(0);
+  const question = "¿La taza está a la derecha o a la izquierda del cuaderno?";
+  await page.evaluate((text) => (window as SmokeWindow).cameraSmoke.delegate(text), question);
+  await page.clock.runFor(800);
+  await expect.poll(() => mock.prompts.length).toBe(1);
+  expect(mock.intents).toHaveLength(1);
+  expect(mock.intents[0]).toMatchObject({ text: question });
+  expect(mock.analyses).toHaveLength(1);
+  expect(mock.analyses[0]).toMatchObject({ mode: "on_demand", question });
+  expect(mock.prompts[0].content).toContain(question);
+  await expect.poll(async () => (await mediaState(page)).commentary.join(" ")).toContain("Backend agent result");
+  await page.clock.fastForward(30_000);
+  expect(mock.analyses).toHaveLength(1);
+  expect(mock.prompts).toHaveLength(1);
+  expect(mock.calls).toHaveLength(1);
+  expect((await mediaState(page)).commentary.some((content) => content.startsWith("Camera evidence"))).toBe(false);
+  expect((await mediaState(page)).cameras).toBe(1);
+  await page.screenshot({ path: testInfo.outputPath("camera-live-question.png"), fullPage: true });
 });
 
 test("continuous observation preserves the draft and attaches exactly the selected analyzed frame", async ({ page }, testInfo) => {

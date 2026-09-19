@@ -57,6 +57,10 @@ export function CameraVision({ camera, disabled = false, lookDisabled = false, a
     setMenu(false); setSelectedMode(nextMode);
   };
   const displayedMode = camera.mode ?? selectedMode;
+  const openCamera = () => {
+    if (!active && !selectedMode) { setSelectedMode("on_demand"); setMenu(false); }
+    else setMenu((value) => !value);
+  };
   const close = () => { camera.stop(); setSelectedMode(null); setMenu(false); };
   const attachNew = async () => {
     setWorking(true);
@@ -69,7 +73,7 @@ export function CameraVision({ camera, disabled = false, lookDisabled = false, a
     finally { setWorking(false); }
   };
   return <div className={`camera-vision${active ? " is-active" : ""}`} ref={container} style={{ "--camera-panel-bottom": `${position.bottom}px`, "--camera-panel-left": `${position.left}px` } as CSSProperties}>
-    <button ref={trigger} type="button" className="camera-vision__trigger" aria-label={copy.title} aria-expanded={menu || active || Boolean(selectedMode)} aria-haspopup="true" disabled={disabled && !active} onClick={() => setMenu((value) => !value)}>
+    <button ref={trigger} type="button" className="camera-vision__trigger" aria-label={copy.title} aria-expanded={menu || active || Boolean(selectedMode)} aria-haspopup="true" disabled={disabled && !active} onClick={openCamera}>
       <Eye size={22} weight={active ? "fill" : "regular"} aria-hidden="true" />
       {active ? <span className="camera-vision__indicator" /> : null}
     </button>
@@ -83,6 +87,9 @@ export function CameraVision({ camera, disabled = false, lookDisabled = false, a
       <header><div><span className={`camera-vision__status ${camera.phase === "active" ? "is-capturing" : ""}`} /><strong>{camera.phase === "starting" ? copy.starting : camera.phase === "paused" ? copy.paused : camera.phase === "idle" ? copy.inactive : copy.active}</strong><small>{displayedMode === "continuous" ? copy.continuous : copy.onDemand}</small></div><button type="button" onClick={close} aria-label={active ? copy.stop : copy.close}><X size={20} /></button></header>
       {active ? <div className="camera-vision__preview"><video ref={camera.videoRef} autoPlay muted playsInline aria-label={copy.title} />{camera.phase === "paused" ? <span><EyeSlash size={32} />{copy.paused}</span> : null}</div> : null}
       <div className="camera-vision__controls">
+        <p className="camera-vision__hint">{displayedMode === "continuous" ? copy.continuousHint : copy.onDemandHint}</p>
+        <button type="button" aria-expanded={menu} onClick={() => setMenu((value) => !value)}>{copy.changeMode}</button>
+        {!camera.supported ? <p className="camera-vision__hint">{copy.errors.unsupported}</p> : camera.preferences && !camera.preferences.configured ? <p className="camera-vision__hint">{copy.errors.configuration}</p> : null}
         <small>{copy.model}: <strong>{camera.preferences?.modelId ?? "…"}</strong></small>
         <label>{copy.device}<select value={camera.deviceId} disabled={camera.phase === "starting"} onChange={(event) => void camera.switchDevice(event.target.value)}><option value="">{copy.defaultDevice}</option>{camera.devices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `${copy.cameraNumber} ${index + 1}`}</option>)}</select></label>
         {active ? <div className="camera-vision__buttons"><button type="button" onClick={() => camera.phase === "paused" ? void camera.resume() : camera.pause()}>{camera.phase === "paused" ? <Play /> : <Pause />}{camera.phase === "paused" ? copy.resume : copy.pause}</button><button type="button" onClick={close}><EyeSlash />{copy.stop}</button></div> : <button type="button" className="camera-vision__look" disabled={disabled || !camera.supported || !camera.preferences?.configured || !selectedMode} onClick={() => { if (selectedMode) void camera.start(selectedMode); }}><Camera />{copy.activate}</button>}
