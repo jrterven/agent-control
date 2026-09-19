@@ -248,7 +248,10 @@ describe("administración de perfil guiada por capacidades", () => {
       sessions: [{ ...current.sessions[0], gatewayId: "gateway-2" }],
     };
     const move = vi.spyOn(api, "moveProfile").mockResolvedValue({ warnings: ["Revisa las rutas locales"] });
-    vi.spyOn(api, "bootstrap").mockResolvedValue(next);
+    let completeBootstrap!: () => void;
+    vi.spyOn(api, "bootstrap").mockImplementation(() => new Promise((resolve) => {
+      completeBootstrap = () => resolve(next);
+    }));
     const user = userEvent.setup();
 
     render(<ConfigScreen />);
@@ -266,9 +269,16 @@ describe("administración de perfil guiada por capacidades", () => {
     await user.click(confirm);
 
     await waitFor(() => expect(move).toHaveBeenCalledWith("profile-1", "gateway-2", "control-dev", "csrf-test"));
-    await waitFor(() => expect(useAppStore.getState().selectedProfileId).toBe(movedProfile.id));
-    expect(useAppStore.getState().selectedGatewayId).toBe("gateway-2");
-    expect(useAppStore.getState().sessions[0]).toMatchObject({ id: "session-preserved", profileId: "profile-1", gatewayId: "gateway-2", storedSessionId: "stored-preserved" });
+    await waitFor(() => expect(completeBootstrap).toBeTypeOf("function"));
+    expect(useAppStore.getState().selectedGatewayId).toBe("gateway-1");
+    await act(async () => completeBootstrap());
+    // The profile ID intentionally survives a move; only the destination
+    // gateway and refreshed session route prove that async hydration finished.
+    await waitFor(() => {
+      expect(useAppStore.getState().selectedProfileId).toBe(movedProfile.id);
+      expect(useAppStore.getState().selectedGatewayId).toBe("gateway-2");
+      expect(useAppStore.getState().sessions[0]).toMatchObject({ id: "session-preserved", profileId: "profile-1", gatewayId: "gateway-2", storedSessionId: "stored-preserved" });
+    });
     expect((await db.drafts.get("session-preserved"))?.content).toBe("keep this draft");
     expect(await screen.findByText("Revisa las rutas locales")).toBeInTheDocument();
   });
