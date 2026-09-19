@@ -1096,6 +1096,19 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
   .health-hero > .hc-badge { display: none; }
 }
 
+@media (max-width: 599px) {
+  .composer { grid-template-columns: 44px minmax(0, 1fr); }
+  .composer textarea { grid-column: 1 / -1; padding-inline: 8px; }
+  .composer-add { grid-row: 2; }
+  .composer__actions { min-width: 0; grid-column: 2; grid-row: 2; flex-wrap: wrap; }
+  .composer__actions > * { flex-shrink: 0; }
+  .composer .camera-vision__trigger { width: 44px; height: 44px; }
+  .dictation-state { grid-row: 3; }
+  .composer.has-attachments .composer-add,
+  .composer.has-attachments .composer__actions { grid-row: 3; }
+  .composer.has-attachments .dictation-state { grid-row: 4; }
+}
+
 @media (max-width: 420px) {
   .top-bar { padding-inline: 10px; }
   .top-bar__identity .brand-mark { width: 34px; height: 34px; }

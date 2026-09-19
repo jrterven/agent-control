@@ -1020,7 +1020,8 @@ export function ChatView() {
     }
     const viewport = scrollRef.current;
     if (viewport && followLatestRef.current) {
-      viewport.scrollTo({ top: viewport.scrollHeight, behavior: streamingMessageId || live.active ? "auto" : "smooth" });
+      // Intermediate smooth-scroll events can look like the reader moved away from the bottom.
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: "auto" });
     }
   }, [approvals, clarifications, messages, sessionId, streamingMessageId, live.transcripts.calls, live.active, camera.observations]);
 

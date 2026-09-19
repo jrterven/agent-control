@@ -1,6 +1,8 @@
 import { bootstrapData, expect, test } from "./fixtures";
 import type { LiveFragment } from "../../src/lib/openaiLiveClient";
 
+test.use({ serviceWorkers: "block" });
+
 test("shows conversation without internal delegation instructions in saved voice history", async ({ page }, testInfo) => {
   await page.route("**/api/v1/sessions/*/live-transcripts**", (route) => route.fulfill({ json: { items: [], nextCursor: null } }));
   await page.route("**/api/v1/sessions/session-e2e/messages", (route) => route.fulfill({ json: {
