@@ -24,7 +24,9 @@ export function conversationTimeline(messages: ChatMessage[], calls: LiveTranscr
   };
   const inserts = [
     ...calls.map((call) => ({ time: time(call.createdAt), item: { kind: "transcript", id: `voice-${call.id}`, call } as TimelineItem })),
-    ...observations.map((observation) => ({ time: time(observation.capturedAt), item: { kind: "vision", id: `vision-${observation.id}`, observation } as TimelineItem })),
+    // On-demand observations are evidence for the normal agent answer, not a
+    // second answer. Keep previously published continuous comments in history.
+    ...observations.filter((observation) => observation.mode === "continuous").map((observation) => ({ time: time(observation.capturedAt), item: { kind: "vision", id: `vision-${observation.id}`, observation } as TimelineItem })),
   ].sort((a, b) => a.time - b.time);
   const result: TimelineItem[] = [];
   let callIndex = 0;

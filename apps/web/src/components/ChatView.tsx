@@ -13,7 +13,7 @@ import { liveDelegationConversation } from "../lib/liveDelegation";
 import { activeResponseId, useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
 import { useCameraVision, type CameraVisionState } from "../hooks/useCameraVision";
-import { CameraVision } from "./CameraVision";
+import { CameraPreview, CameraVision } from "./CameraVision";
 import { VisionObservationCard, visionInteractionCopy } from "./VisionObservationCard";
 import { useOpenAILive } from "../hooks/useOpenAILive";
 import { useSpeechPlayback, type LiveSpeechStatus, type SpeechPlaybackStatus } from "../hooks/useSpeechPlayback";
@@ -791,14 +791,13 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
     setAttachmentIssue(undefined);
   };
 
-  const submit = async (look = false) => {
-    const next = value.trim() || (look ? visionCopy.defaultQuestion : "");
-    if ((!next && !attachments.length) || streamingMessageId || offline || dictation.active || visionRequestRef.current || (live.active && !look)) return;
+  const submit = async () => {
+    const next = value.trim();
+    if ((!next && !attachments.length) || streamingMessageId || offline || dictation.active || visionRequestRef.current || live.active) return;
     const state = useAppStore.getState();
     if (state.approvalsBySession[sessionId]?.length || state.clarificationsBySession[sessionId]?.length) { setVisionIssue(visionCopy.wait); return; }
     const request = new AbortController(); visionRequestRef.current = request;
     const ownerId = state.userId; const profileId = state.selectedProfileId;
-    const liveWasActive = live.active;
     const scoped = () => {
       const current = useAppStore.getState();
       return !request.signal.aborted && current.authState === "authenticated" && current.userId === ownerId && current.selectedSessionId === sessionId && current.selectedProfileId === profileId && !activeResponseId(current, sessionId);
@@ -806,20 +805,13 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
     setVisionIssue("");
     setPreparingVision(true);
     try {
-      if (look) {
-        if (!await camera.analyze(next, request.signal) || !scoped()) return;
-      } else if (camera.phase === "active" && next) {
+      if (camera.phase === "active" && next) {
         const visual = await camera.onLiveRequest(next, request.signal);
         if (!scoped()) return;
         if (visual.intent === "unclear") { setVisionIssue(visionCopy.clarify); return; }
         if (visual.intent === "visual" && !visual.observation) { setVisionIssue(visionCopy.failed); return; }
       }
       if (!scoped() && !useAppStore.getState().demoMode) return;
-      if (look && liveWasActive) {
-        const accepted = await live.ask(next);
-        if (accepted && !request.signal.aborted) { setValue(""); await draft.clear(); }
-        return;
-      }
       // The normal task path preserves approvals, operation IDs and reconciliation.
       const submission = submitPrompt(next, attachments);
       setValue(""); setAttachments([]); setAttachmentMenuOpen(false); setAttachmentIssue(undefined);
@@ -840,6 +832,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
         <strong>{t("speech.autoRead")}</strong>
         {liveSpeechStatus !== "idle" ? <small role="status">{t(`speech.live.${liveSpeechStatus}`)}</small> : null}
       </label> : null}
+      <CameraPreview camera={camera} disabled={offline || preparingVision} onAttach={(file) => addAttachments([file], "image")} />
       <div className={`composer${attachments.length ? " has-attachments" : ""}`}>
         {attachments.length ? <div className="composer-attachments" aria-label={t("chat.attachments.selected")}>
           {attachments.map((attachment, index) => <span className="composer-attachment" key={`${attachment.name}-${index}`}>
@@ -892,7 +885,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
           {!live.issue && (live.waitingApproval || live.working) ? <small role="status">{t(live.waitingApproval ? "liveVoice.waitingApproval" : "liveVoice.working", { agent: agentName })}</small> : null}
         </div> : null}
         <div className="composer__actions">
-          <CameraVision camera={camera} disabled={offline} attachDisabled={preparingVision} lookDisabled={preparingVision || Boolean(streamingMessageId) || dictation.active || (live.active && !["listening", "paused"].includes(live.phase))} onLook={() => submit(true)} onAttach={(file) => addAttachments([file], "image")} />
+          <CameraVision camera={camera} disabled={offline} />
           {!offline && liveConfigured ? <IconButton
             className="dictation-button"
             data-voice-provider="openai_live"

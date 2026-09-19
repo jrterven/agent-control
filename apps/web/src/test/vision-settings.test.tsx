@@ -25,8 +25,9 @@ describe("camera preferences", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("saves only the camera model and interval without inference or credential storage", async () => {
+  it("saves the camera model while preserving the legacy interval without inference or credential storage", async () => {
     const user = userEvent.setup();
+    vi.mocked(visionApi.preferences).mockResolvedValue({ ...preferences, intervalSeconds: 10 });
     const event = vi.fn();
     const intent = vi.spyOn(visionApi, "intent");
     const analyze = vi.spyOn(visionApi, "analyze");
@@ -36,10 +37,9 @@ describe("camera preferences", () => {
     const model = screen.getByRole("combobox", { name: "Modelo de la cámara" });
     await waitFor(() => expect(model).toBeEnabled());
     expect(model).toHaveValue("gpt-5.6-luna");
-    expect(screen.getByRole("combobox", { name: "Intervalo de observación continua" })).toHaveValue("5");
+    expect(screen.queryByRole("combobox", { name: "Intervalo de observación continua" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Guardar preferencias de cámara" })).toBeDisabled();
     await user.selectOptions(model, "gpt-5.6-terra");
-    await user.selectOptions(screen.getByRole("combobox", { name: "Intervalo de observación continua" }), "10");
     await user.click(screen.getByRole("button", { name: "Guardar preferencias de cámara" }));
     expect(visionApi.savePreferences).toHaveBeenCalledWith({ modelId: "gpt-5.6-terra", intervalSeconds: 10 }, "csrf-a", expect.any(AbortSignal));
     expect(await screen.findByText(/Preferencias de cámara guardadas/)).toBeVisible();
@@ -135,7 +135,8 @@ describe("camera preferences", () => {
     await i18n.changeLanguage("en");
     render(<VisionSettings />);
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Camera model" })).toBeEnabled());
-    expect(screen.getByRole("combobox", { name: "Continuous observation interval" })).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "Continuous observation interval" })).not.toBeInTheDocument();
+    expect(screen.getByText(/camera is analyzed only when you ask/)).toBeVisible();
     expect(screen.getByText(/does not guarantee zero provider retention/)).toBeVisible();
   });
 });

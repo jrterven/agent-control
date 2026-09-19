@@ -2,7 +2,7 @@ import { CheckCircle, Eye, WarningCircle } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge, Button, Panel } from "@hermes-control/ui";
-import { VISION_INTERVAL_SECONDS, type VisionIntervalSeconds, type VisionModelId, type VisionPreferences } from "@hermes-control/shared-types";
+import type { VisionModelId, VisionPreferences } from "@hermes-control/shared-types";
 import { visionApi, VISION_PREFERENCES_CHANGED } from "../lib/vision";
 import { visionSettingsCopy } from "../lib/visionSettingsCopy";
 import { useAppStore } from "../store/appStore";
@@ -26,7 +26,6 @@ function VisionSettingsEditor({ ownerId, generation }: { ownerId?: string; gener
   const [online, setOnline] = useState(() => navigator.onLine);
   const [saved, setSaved] = useState<VisionPreferences | null>(null);
   const [modelId, setModelId] = useState<VisionModelId>("gpt-5.6-luna");
-  const [intervalSeconds, setIntervalSeconds] = useState<VisionIntervalSeconds>(5);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadVersion, setLoadVersion] = useState(0);
@@ -35,7 +34,7 @@ function VisionSettingsEditor({ ownerId, generation }: { ownerId?: string; gener
   const mounted = useRef(true);
   const savingRequest = useRef<AbortController | null>(null);
   const blocked = authState !== "authenticated" || demoMode || !online;
-  const dirty = saved !== null && (modelId !== saved.modelId || intervalSeconds !== saved.intervalSeconds);
+  const dirty = saved !== null && modelId !== saved.modelId;
 
   const permitted = () => {
     const state = useAppStore.getState();
@@ -66,7 +65,6 @@ function VisionSettingsEditor({ ownerId, generation }: { ownerId?: string; gener
       if (controller.signal.aborted || !permitted()) return;
       setSaved(preferences);
       setModelId(preferences.modelId);
-      setIntervalSeconds(preferences.intervalSeconds);
     }).catch(() => {
       if (!controller.signal.aborted && permitted()) setError("load");
     }).finally(() => {
@@ -76,18 +74,17 @@ function VisionSettingsEditor({ ownerId, generation }: { ownerId?: string; gener
   }, [blocked, loadVersion]);
 
   const save = async () => {
-    if (blocked || loading || !dirty || savingRequest.current || !permitted()) return;
+    if (!saved || blocked || loading || !dirty || savingRequest.current || !permitted()) return;
     const controller = new AbortController();
     savingRequest.current = controller;
     setSaving(true);
     setError(null);
     setNotice(false);
     try {
-      const preferences = await visionApi.savePreferences({ modelId, intervalSeconds }, useAppStore.getState().csrfToken, controller.signal);
+      const preferences = await visionApi.savePreferences({ modelId, intervalSeconds: saved.intervalSeconds }, useAppStore.getState().csrfToken, controller.signal);
       if (controller.signal.aborted || !permitted()) return;
       setSaved(preferences);
       setModelId(preferences.modelId);
-      setIntervalSeconds(preferences.intervalSeconds);
       setNotice(true);
       window.dispatchEvent(new Event(VISION_PREFERENCES_CHANGED));
     } catch {
@@ -110,11 +107,6 @@ function VisionSettingsEditor({ ownerId, generation }: { ownerId?: string; gener
         <select aria-label={copy.model} value={modelId} disabled={disabled} onChange={(event) => { setModelId(event.target.value as VisionModelId); setNotice(false); }}>
           <option value="gpt-5.6-luna">{copy.luna}</option><option value="gpt-5.6-terra">{copy.terra}</option><option value="gpt-5.6-sol">{copy.sol}</option>
         </select><small>{copy.modelHint}</small>
-      </label>
-      <label className="integration-settings__model"><span>{copy.interval}</span>
-        <select aria-label={copy.interval} value={intervalSeconds} disabled={disabled} onChange={(event) => { setIntervalSeconds(Number(event.target.value) as VisionIntervalSeconds); setNotice(false); }}>
-          {VISION_INTERVAL_SECONDS.map((value) => <option key={value} value={value}>{copy.seconds(value)}</option>)}
-        </select><small>{copy.intervalHint}</small>
       </label>
     </div>
     <p className="vision-settings__disclosure">{copy.disclosure}</p>

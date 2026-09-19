@@ -1,6 +1,6 @@
 .vision-settings__connection { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
 .vision-settings__connection a { font-size: 13px; text-underline-offset: 3px; }
-.vision-settings__fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.vision-settings__fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 .vision-settings__fields .integration-settings__model { min-width: 0; }
 .vision-settings__fields select { width: 100%; }
 .vision-settings__disclosure { font-size: 13px; line-height: 1.6; color: var(--muted); }

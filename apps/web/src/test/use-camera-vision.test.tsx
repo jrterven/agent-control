@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VisionAnalysisInput, VisionAnalysisResult, VisionObservation } from "@hermes-control/shared-types";
-import { CameraVision } from "../components/CameraVision";
+import { CameraPreview, CameraVision } from "../components/CameraVision";
 import { useCameraVision } from "../hooks/useCameraVision";
 import * as capture from "../lib/cameraCapture";
 import { visionApi } from "../lib/vision";
@@ -39,39 +39,39 @@ describe("camera permission and analysis lifecycle", () => {
   });
   afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
-  it("opens on-demand setup by default and stays silent after the separate activation gesture", async () => {
-    function Harness() { const camera = useCameraVision(options); return <CameraVision camera={camera} onLook={vi.fn()} onAttach={vi.fn()} />; }
+  it("activates directly from the eye and keeps an inline preview silent until a question", async () => {
+    function Harness() { const camera = useCameraVision(options); return <><CameraVision camera={camera} /><CameraPreview camera={camera} onAttach={vi.fn()} /></>; }
     render(<Harness />); await tick();
-    fireEvent.click(screen.getByRole("button", { name: "Cámara" }));
-    expect(capture.acquireCamera).not.toHaveBeenCalled();
-    expect(screen.getByText("Preguntar sobre la cámara")).toBeInTheDocument();
-    expect(screen.queryByText("Elegir modo de cámara")).not.toBeInTheDocument();
-    expect(screen.getByText("gpt-5.6-luna")).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Cámara del dispositivo" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Vista previa de la cámara" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Activar cámara" })); await tick();
     expect(capture.acquireCamera).toHaveBeenCalledOnce();
+    expect(screen.getByRole("region", { name: "Vista previa de la cámara" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Cámara del dispositivo" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mirar ahora" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cambiar modo" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Una taza roja")).not.toBeInTheDocument();
     await tick(60_000);
     expect(capture.captureCameraFrame).not.toHaveBeenCalled();
     expect(visionApi.intent).not.toHaveBeenCalled();
     expect(visionApi.analyze).not.toHaveBeenCalled();
   });
 
-  it("requires choosing automatic observation and returns to on demand after stopping", async () => {
-    function Harness() { const camera = useCameraVision(options); return <CameraVision camera={camera} onLook={vi.fn()} onAttach={vi.fn()} />; }
+  it("lets the eye cancel a pending permission and reactivate without automatic analysis", async () => {
+    const permission = deferred<MediaStream>(); vi.mocked(capture.acquireCamera).mockReturnValueOnce(permission.promise);
+    function Harness() { const camera = useCameraVision(options); return <><CameraVision camera={camera} /><CameraPreview camera={camera} onAttach={vi.fn()} /></>; }
     render(<Harness />); await tick();
-    fireEvent.click(screen.getByRole("button", { name: "Cámara" }));
-    fireEvent.click(screen.getByRole("button", { name: "Cambiar modo" }));
-    expect(screen.getByRole("button", { name: /Preguntar sobre la cámara/ })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(screen.getByRole("button", { name: /Seguimiento automático/ }));
-    expect(visionApi.analyze).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Activar cámara" })); await tick();
-    expect(visionApi.analyze).toHaveBeenCalledOnce();
-    expect(vi.mocked(visionApi.analyze).mock.calls[0][1].mode).toBe("continuous");
-    fireEvent.click(screen.getAllByRole("button", { name: "Apagar cámara" })[0]); await tick();
-    fireEvent.click(screen.getByRole("button", { name: "Cámara" }));
-    expect(screen.getByText("Preguntar sobre la cámara")).toBeInTheDocument();
+    const eye = screen.getAllByRole("button", { name: "Apagar cámara" })[0];
+    expect(eye).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(eye); await tick();
+    const late = media(); await act(async () => permission.resolve(late.stream));
+    expect(late.track.stop).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("region", { name: "Vista previa de la cámara" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Activar cámara" })); await tick(60_000);
-    expect(visionApi.analyze).toHaveBeenCalledOnce();
+    expect(capture.acquireCamera).toHaveBeenCalledTimes(2);
+    expect(capture.captureCameraFrame).not.toHaveBeenCalled();
+    expect(visionApi.analyze).not.toHaveBeenCalled();
   });
 
   it("captures only for visual questions in on-demand mode, including after resume and switching devices", async () => {
@@ -250,13 +250,13 @@ describe("camera permission and analysis lifecycle", () => {
     const { result } = renderHook(() => useCameraVision(options)); await tick();
     await act(async () => { await result.current.start("on_demand"); await result.current.analyze(); });
     const exactFile = result.current.latestFrame!.file; const onAttach = vi.fn();
-    const view = render(<CameraVision camera={result.current} onLook={vi.fn()} onAttach={onAttach} />);
+    const view = render(<CameraPreview camera={result.current} onAttach={onAttach} />);
     fireEvent.click(screen.getByRole("button", { name: "Adjuntar captura analizada" }));
     expect(onAttach).toHaveBeenCalledWith(exactFile); expect(capture.captureCameraFrame).toHaveBeenCalledTimes(1);
-    view.rerender(<CameraVision camera={result.current} attachDisabled onLook={vi.fn()} onAttach={onAttach} />);
+    view.rerender(<CameraPreview camera={result.current} disabled onAttach={onAttach} />);
     expect(screen.getByRole("button", { name: "Adjuntar captura analizada" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Tomar y adjuntar nueva captura" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Cámara" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Tomar y adjuntar nueva captura" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apagar cámara" })).toBeEnabled();
   });
 
   it("pauses on provider failure, reports quota, and does not retry automatically", async () => {

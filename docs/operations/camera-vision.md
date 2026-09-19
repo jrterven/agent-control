@@ -6,21 +6,28 @@ OpenAI connection and select `gpt-5.6-luna` (default), `gpt-5.6-terra` or
 `gpt-5.6-sol`. Saving a preference does not test model access or consume inference
 quota. Provider rejection is shown without switching models.
 
-The eye opens camera setup in **Ask about the camera** (on-demand) mode.
-In this mode, activation, resuming and switching devices leave the preview ready without
-analyzing or describing it. Ask a question in chat or Live, or use **Look now**
-for an explicit capture. **Change mode** offers automatic continuous observation
-as an explicit opt-in; it is never remembered for the next activation after stop.
-Only **Activate camera** requests device permission. The camera stream
-is separate from Live's audio stream. Explicit hangup releases the camera;
-Live's internal task suspension and reconnection leave it running. Hiding the
-app, navigation, account/profile changes, going offline and credential/preference
-changes stop capture. Restart requires a gesture.
+The eye directly turns the camera on in on-demand mode and requests device
+permission. A small inline preview above the normal chat composer shows the
+active camera, a device selector and stop/attachment controls. There is no
+separate vision window, setup step or automatic description. Activation,
+resuming and switching cameras do not analyze a frame. Ask a question in the
+normal chat or GPT Live to capture the current view automatically.
+
+The camera stream is separate from Live's audio stream. Explicit hangup releases
+the camera; Live's internal task suspension and reconnection leave it running.
+Hiding the app, navigation, account/profile changes, going offline and credential/
+preference changes stop capture. Restart requires a gesture.
 
 On-demand requests use the normal Hermes task/approval/reconciliation path.
 With an active camera, a text-only classifier first decides whether new written
 or delegated voice requests need a current frame. Ambiguous requests ask for
-clarification. The button requests a frame directly.
+clarification. Visual follow-up questions can compare the current and previous
+analyzed frame. The agent answers in the normal chat; on-demand observations
+remain saved as evidence without appearing as a second answer in the timeline.
+
+The current chat UI does not offer continuous mode or an interval preference.
+The saved interval and continuous API/runtime remain compatible with older
+clients, and previously published continuous observations remain in history.
 
 Continuous observation waits 2, 5 (default), or 10 seconds after each completed
 analysis, with one request in flight and no image queue. It compares the current
@@ -75,6 +82,7 @@ to OpenAI.
 
 Before claiming physical-device validation, separately exercise iPhone Safari
 and installed PWA, Android Chrome, and a desktop camera: grant/deny permission,
-switch cameras, pause/stop, background/restore, and explicitly run **Look now**.
+switch cameras, stop, background/restore, and explicitly ask a visual question
+in the normal chat or Live. Check that the thumbnail leaves the composer usable.
 A successful real inference verifies only the selected model/account at that
 time. Do not infer physical-device compatibility or model access from mocks.

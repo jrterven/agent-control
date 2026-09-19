@@ -1,38 +1,23 @@
-.camera-vision { position: relative; display: inline-flex; align-items: center; }
-.camera-vision button, .camera-vision input, .camera-vision select { font: inherit; }
-.camera-vision button { cursor: pointer; }
-.camera-vision button:disabled { cursor: not-allowed; opacity: .5; }
-.camera-vision__trigger { position: relative; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--muted, #64748b); }
+.camera-vision { display: inline-flex; align-items: center; }
+.camera-vision__trigger { position: relative; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--muted, #64748b); cursor: pointer; }
 .camera-vision.is-active .camera-vision__trigger { background: var(--accent-soft, #dcfce7); color: var(--accent, #178349); }
 .camera-vision__indicator { position: absolute; width: 6px; height: 6px; right: 5px; top: 4px; border-radius: 50%; background: #168449; }
-.camera-vision__menu, .camera-vision__panel { position: fixed; z-index: 70; bottom: var(--camera-panel-bottom, 105px); left: var(--camera-panel-left, 16px); width: min(360px, calc(100vw - 40px)); border: 1px solid var(--border, #d8dee8); border-radius: 16px; background: var(--surface-1, #fff); color: var(--text, #172033); box-shadow: 0 14px 50px #0002; }
-.camera-vision__menu { max-height: calc(100dvh - var(--camera-panel-bottom, 105px) - 16px); overflow: auto; z-index: 80; display: grid; gap: 8px; padding: 14px; }
-.camera-vision__menu > button { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--border, #d8dee8); border-radius: 10px; background: transparent; color: inherit; text-align: left; }
-.camera-vision__menu > button svg { flex: 0 0 auto; margin-top: 2px; }
-.camera-vision__menu span { display: grid; gap: 3px; }
-.camera-vision__menu p, .camera-vision__menu small { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted, #667085); }
-.camera-vision__panel { overflow: auto; max-height: min(700px, calc(100dvh - var(--camera-panel-bottom, 105px) - 16px)); }
-.camera-vision__panel > header { display: flex; gap: 10px; justify-content: space-between; align-items: center; padding: 12px 14px; }
-.camera-vision__panel > header > div { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; font-size: 13px; }
-.camera-vision__panel > header small { flex-basis: 100%; margin-left: 15px; color: var(--muted, #667085); }
-.camera-vision__panel > header > button { border: 0; background: transparent; padding: 8px; color: inherit; }
-.camera-vision__status { width: 8px; height: 8px; border-radius: 50%; background: #87919f; }
-.camera-vision__status.is-capturing { background: #168449; }
-.camera-vision__preview { position: relative; aspect-ratio: 16 / 9; background: #111820; }
+.camera-vision__inline { width: min(790px, 100%); display: flex; align-items: center; gap: 10px; margin: 0 auto 8px; color: var(--text, #172033); }
+.camera-vision__preview { position: relative; flex: 0 0 120px; width: 120px; height: 78px; overflow: hidden; border-radius: 10px; background: #111820; }
 .camera-vision__preview video { display: block; width: 100%; height: 100%; object-fit: contain; }
-.camera-vision__preview > span { position: absolute; inset: 0; display: grid; align-content: center; justify-items: center; gap: 8px; color: #fff; font-size: 13px; }
-.camera-vision__controls { display: grid; gap: 10px; padding: 14px; }
-.camera-vision__controls label { display: grid; gap: 5px; font-size: 12px; font-weight: 600; }
-.camera-vision__controls select, .camera-vision__controls input { width: 100%; min-width: 0; border: 1px solid var(--border, #d8dee8); border-radius: 8px; padding: 8px; color: inherit; background: var(--surface-1, #fff); font-size: 13px; }
-.camera-vision__buttons, .camera-vision__attachments { display: flex; flex-wrap: wrap; gap: 8px; }
-.camera-vision__controls button { display: inline-flex; gap: 6px; align-items: center; justify-content: center; min-height: 36px; padding: 7px 10px; border: 1px solid var(--border, #d8dee8); border-radius: 8px; background: transparent; color: inherit; font-size: 12px; }
-.camera-vision__controls .camera-vision__look { background: var(--accent, #168449); color: #fff; border-color: transparent; }
-.camera-vision__hint { margin: 0; color: var(--muted, #667085); font-size: 11px; line-height: 1.5; }
-.camera-vision__latest { font-size: 13px; line-height: 1.5; }
-.camera-vision__latest p { margin: 4px 0 0; }
-.camera-vision__latest small { color: var(--muted, #667085); }
-.camera-vision__error { position: absolute; z-index: 85; bottom: calc(100% + 10px); left: 0; width: min(320px, calc(100vw - 40px)); margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--danger-surface, #fff0ed); color: var(--danger-text, #a32f20); font-size: 12px; line-height: 1.5; box-shadow: 0 2px 10px #0001; }
-.camera-vision.is-active .camera-vision__error { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); }
-@media (max-width: 600px) { .camera-vision__menu, .camera-vision__panel { position: fixed; left: 16px; right: 16px; width: auto; } }
-
-.camera-vision__menu > button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.camera-vision__preview > span { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; }
+.camera-vision__details { display: grid; gap: 4px; min-width: 0; max-width: 280px; flex: 1; }
+.camera-vision__state { font-size: 12px; font-weight: 600; }
+.camera-vision__details small { color: var(--muted, #667085); font-size: 11px; line-height: 1.35; }
+.camera-vision__details select { width: 100%; min-width: 0; border: 1px solid var(--border, #d8dee8); border-radius: 7px; padding: 4px; color: inherit; background: var(--surface-1, #fff); font: inherit; font-size: 12px; }
+.camera-vision__quick-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-self: flex-start; gap: 2px; max-width: 72px; }
+.camera-vision__quick-actions button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted-strong, #64748b); cursor: pointer; }
+.camera-vision__quick-actions button:hover { background: var(--surface-2); color: var(--text); }
+.camera-vision__trigger:focus-visible, .camera-vision__quick-actions button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.camera-vision button:disabled, .camera-vision__inline button:disabled, .camera-vision__inline select:disabled { cursor: not-allowed; opacity: .5; }
+.camera-vision__error { width: min(790px, 100%); margin: 0 auto 8px; color: var(--danger-text, #a32f20); font-size: 12px; line-height: 1.5; }
+@media (max-width: 600px) {
+  .camera-vision__inline { gap: 8px; }
+  .camera-vision__preview { flex-basis: 96px; width: 96px; height: 72px; }
+  .camera-vision__quick-actions { max-width: 34px; }
+}
