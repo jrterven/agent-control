@@ -200,6 +200,17 @@ class RemoteProvider:
 
     async def _call(self, operation: str, *args, **kwargs):
         link = self.registry.get(self.connection.gateway_id)
+        if operation == "delete_profile":
+            # Bind this destructive dispatch to the connection that proved it
+            # can retire its local sharing state. A reconnect/downgrade after
+            # service-level preflight must never inherit that attestation.
+            capabilities = await link.call(self.connection.profile_name, "capabilities", (), {})
+            if not isinstance(capabilities, CapabilitySet):
+                raise ProtocolError("Invalid connector capabilities")
+            if "connector.profileTransferV2" not in capabilities.features:
+                raise ValueError("Update the connector before deleting an agent")
+            if not link.online or self.registry.get(self.connection.gateway_id) is not link:
+                raise ConnectionError("Connector changed before agent deletion was sent")
         result = await link.call(self.connection.profile_name, operation, args, kwargs)
         if operation != "media" and not value_matches_type(result, type_hints(getattr(HermesProvider, operation))["return"]):
             raise ProtocolError("Invalid typed connector result")

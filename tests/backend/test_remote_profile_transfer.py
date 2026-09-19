@@ -148,6 +148,47 @@ async def test_old_connector_cannot_advertise_cloud_transfer_or_delete(relay, ol
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("features", [frozenset(), frozenset({"connector.profileTransferV1"})])
+async def test_direct_delete_refuses_old_connection_before_destructive_dispatch(relay, features):
+    source, _, peer, _ = relay
+    peer.caps = replace(peer.caps, features=features)
+    with pytest.raises(ValueError, match="Update the connector"):
+        await source.delete_profile("Control.dev")
+    assert [call[0] for call in peer.calls] == ["capabilities"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replace_link", [False, True])
+async def test_delete_never_reuses_attestation_after_disconnect_or_connection_replacement(relay, replace_link):
+    source, _, peer, _ = relay
+    replacement = TransferPeer(b"unused")
+    replacement.caps = replace(replacement.caps, features=frozenset({"connector.profileTransferV1"}))
+
+    async def attest_then_change(profile, operation, args, kwargs):
+        assert profile == "manager" and operation == "capabilities" and args == () and kwargs == {}
+        if replace_link:
+            source.registry.links["source"] = replacement
+        else:
+            peer.online = False
+        return peer.caps
+
+    peer.call = AsyncMock(side_effect=attest_then_change)
+    with pytest.raises(ConnectionError, match="before agent deletion was sent"):
+        await source.delete_profile("Control.dev")
+    peer.call.assert_awaited_once_with("manager", "capabilities", (), {})
+    assert replacement.calls == []
+
+
+@pytest.mark.asyncio
+async def test_delete_attests_and_dispatches_on_the_same_verified_connection(relay):
+    source, _, peer, _ = relay
+    peer.call = AsyncMock(side_effect=[peer.caps, None])
+    assert await source.delete_profile("Control.dev") is None
+    assert peer.call.await_args_list[0].args == ("manager", "capabilities", (), {})
+    assert peer.call.await_args_list[1].args == ("manager", "delete_profile", ("Control.dev",), {})
+
+
+@pytest.mark.asyncio
 async def test_invalid_destination_and_default_never_dispatch(relay):
     source, destination, source_peer, peer = relay
     with pytest.raises(ProfileTransferNotImported):
