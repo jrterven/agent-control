@@ -294,10 +294,9 @@ async def create_live_session(
             spoken = _spoken_history(db, request, owner, conversation)
             if spoken:
                 history, response_focus = merge_spoken_history(history, spoken, response_focus)
-            from ..vision import vision_context
-            visual = vision_context(db, request.app.state.services.vault, owner.id, conversation.id)
-            if visual:
-                history = [*history, {"role": "user", "content": visual}]
+            # A resumed call cannot infer the camera's current scene from stored
+            # observations. Its browser supplies evidence for each new visual
+            # request; ordinary history and a selected answer remain available.
         result = await request.app.state.openai_live_client.create_session(
             api_key=api_key, sdp=payload.sdp, history=history,
             voice_id=openai_voice_id(db, owner, profile.id),

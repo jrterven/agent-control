@@ -21,6 +21,7 @@ const transport = vi.hoisted(() => {
     constructor(readonly options: LiveOptions) { Client.instances.push(this); }
     start = vi.fn(async () => { this.options.onPhase("listening"); });
     stop = vi.fn(() => { this.options.onPhase("idle"); });
+    setCameraSession = vi.fn();
     setPaused = vi.fn((paused: boolean) => { this.options.onPhase(paused ? "paused" : "listening"); });
     dispose = vi.fn();
     play = vi.fn(async () => { this.options.onPlaybackBlocked(false); });

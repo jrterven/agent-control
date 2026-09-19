@@ -977,6 +977,7 @@ export function ChatView() {
     onObservation: (observation) => live.appendVisualObservation(observation),
   });
   visualRequestRef.current = camera.onLiveRequest;
+  useEffect(() => { live.setCameraSession(camera.phase === "active" ? camera.activationId : null); }, [camera.phase, camera.activationId, live.setCameraSession]);
   const timeline = useMemo(() => conversationTimeline(visibleMessages, live.transcripts.calls, camera.observations), [visibleMessages, live.transcripts.calls, camera.observations]);
   const canInterrupt = canMutate && Boolean(profile?.capabilities?.interrupt);
   const canMutateInteractions = authState === "authenticated" && profile?.mutable === true;

@@ -6,10 +6,16 @@ test.use({ serviceWorkers: "block" });
 
 type SmokeState = {
   cameras: number; endedCameras: number; cameraStarts: string[]; microphones: number;
-  callsClosed: number; commentary: string[]; attachments: string[];
+  callsClosed: number; commentary: string[]; attachments: string[]; remoteAudioTracks: number;
 };
-type SmokeWindow = Window & { cameraSmoke: { state(): SmokeState; delegate(question?: string): void } };
+type SmokeWindow = Window & { cameraSmoke: {
+  state(): SmokeState; speak(text: string): number; delegate(question?: string): void;
+  delegateTurn(turn: number, id?: string): void; scene(value: "cup" | "notebook"): void;
+} };
 const mediaState = (page: Page) => page.evaluate(() => (window as SmokeWindow).cameraSmoke.state());
+const cupSummary = "Veo una taza roja sobre una mesa.";
+const notebookSummary = "Veo un cuaderno azul y ya no hay taza.";
+const cameraAnswer = (summary: string) => `Según la captura: ${summary}`;
 
 async function mockCamera(page: Page) {
   let preferences: VisionPreferences = { modelId: "gpt-5.6-luna", intervalSeconds: 5, configured: true };
@@ -18,6 +24,7 @@ async function mockCamera(page: Page) {
   const observations: VisionObservation[] = [];
   const prompts: { content: string; bytes: Buffer | null }[] = [];
   const calls: unknown[] = [];
+  let summary = cupSummary;
   let keepWorking = false;
   let operationId = "";
   const history: { id: string; role: string; content: string; timestamp: number }[] = [];
@@ -41,7 +48,7 @@ async function mockCamera(page: Page) {
       id: `00000000-0000-4000-8000-${String(analyses.length).padStart(12, "0")}`,
       sessionId: "session-e2e", activationId: payload.activationId, capturedAt: payload.capturedAt,
       createdAt: new Date().toISOString(), modelId: preferences.modelId, mode: payload.mode,
-      summary: payload.mode === "continuous" ? "Hay una taza junto al cuaderno azul." : "Veo una taza roja sobre una mesa.",
+      summary: payload.mode === "continuous" ? "Hay una taza junto al cuaderno azul." : summary,
       meaningfulChange: analyses.length > 1, sceneReset: !payload.previousImage, uncertainties: [],
     };
     const published = payload.mode === "on_demand" || analyses.length > 1;
@@ -64,7 +71,8 @@ async function mockCamera(page: Page) {
     prompts.push({ content, bytes });
     operationId = route.request().headers()["idempotency-key"];
     history.push({ id: `user-${prompts.length}`, role: "user", content, timestamp: Date.now() / 1000 });
-    if (!keepWorking) history.push({ id: `answer-${prompts.length}`, role: "assistant", content: "La captura muestra una taza roja.", timestamp: Date.now() / 1000 });
+    if (!keepWorking) history.push({ id: `answer-${prompts.length}`, role: "assistant",
+      content: cameraAnswer(observations.at(-1)?.summary ?? "No hay una observación visual disponible."), timestamp: Date.now() / 1000 });
     return route.fulfill({ json: { operationId, status: keepWorking ? "accepted" : "completed" } });
   });
   await page.route("**/api/v1/integrations/**", (route) => {
@@ -82,8 +90,13 @@ async function mockCamera(page: Page) {
     const commentary: string[] = [];
     const attachments: string[] = [];
     const channels: Channel[] = [];
+    const remoteContexts: AudioContext[] = [];
+    const remoteTracks: MediaStreamTrack[] = [];
+    const renderers: (() => void)[] = [];
     let callsClosed = 0;
-    let delegations = 0;
+    let utterances = 0;
+    let delegationEvents = 0;
+    let scene: "cup" | "notebook" = "cup";
     const nativeFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
       if (String(input).includes("/prompts-with-attachments") && init?.body instanceof FormData) {
@@ -108,12 +121,33 @@ async function mockCamera(page: Page) {
     class Peer extends EventTarget {
       channel = new Channel(); connectionState = "connected"; iceGatheringState = "complete";
       localDescription = { type: "offer", sdp: "fake-offer" };
+      remoteContext = remoteContexts.shift()!;
+      remoteStream?: MediaStream;
+      remoteTone?: OscillatorNode;
       addTrack() {}
       createDataChannel() { channels.push(this.channel); return this.channel; }
       async createOffer() { return this.localDescription; }
       async setLocalDescription() {}
-      async setRemoteDescription() { queueMicrotask(() => this.channel.emit({ type: "session.started" })); }
-      close() {}
+      async setRemoteDescription() {
+        // Feed the real playback gate a live, silent remote audio track. Its
+        // AudioContext measures actual silence; this fixture never fakes a
+        // gate acknowledgement or an audio clock.
+        const output = this.remoteContext.createMediaStreamDestination();
+        const gain = this.remoteContext.createGain(); gain.gain.value = 0;
+        this.remoteTone = this.remoteContext.createOscillator();
+        this.remoteTone.connect(gain).connect(output); this.remoteTone.start();
+        this.remoteStream = output.stream;
+        const track = output.stream.getAudioTracks()[0]; remoteTracks.push(track);
+        const event = new Event("track");
+        Object.defineProperties(event, { track: { value: track }, streams: { value: [output.stream] } });
+        this.dispatchEvent(event);
+        queueMicrotask(() => this.channel.emit({ type: "session.started" }));
+      }
+      close() {
+        this.remoteTone?.stop();
+        this.remoteStream?.getTracks().forEach((track) => track.stop());
+        void this.remoteContext.close().catch(() => {});
+      }
     }
     Object.defineProperty(window, "RTCPeerConnection", { configurable: true, value: Peer });
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
@@ -134,10 +168,13 @@ async function mockCamera(page: Page) {
           const draw = () => {
             context.fillStyle = "#dfc69c"; context.fillRect(0, 0, 640, 480);
             context.fillStyle = "#2563eb"; context.fillRect(60, 130, 170, 230);
-            context.fillStyle = "#b91c1c"; context.beginPath(); context.arc(430, 260, 82, 0, Math.PI * 2); context.fill();
+            if (scene === "cup") {
+              context.fillStyle = "#b91c1c"; context.beginPath(); context.arc(430, 260, 82, 0, Math.PI * 2); context.fill();
+            }
             context.fillStyle = "#111827"; context.font = "22px sans-serif"; context.fillText("CAMARA DE PRUEBA", 180, 50);
           };
           draw();
+          renderers.push(draw);
           const stream = canvas.captureStream(12); cameras.push(...stream.getTracks());
           stream.getVideoTracks().forEach((track) => {
             const originalSettings = track.getSettings.bind(track);
@@ -146,28 +183,42 @@ async function mockCamera(page: Page) {
           const timer = setInterval(() => { if (stream.getTracks().every((track) => track.readyState === "ended")) clearInterval(timer); else draw(); }, 80);
           return stream;
         }
+        // Construct/resume on the same user gesture as microphone permission,
+        // including WebKit's stricter audio activation behavior.
+        const remoteContext = new AudioContext(); remoteContexts.push(remoteContext);
+        void remoteContext.resume();
         const track = Object.assign(new EventTarget(), { enabled: true, muted: false, readyState: "live", stop() { this.readyState = "ended"; } });
         microphones.push(track);
         return { getTracks: () => [track], getAudioTracks: () => [track] };
       },
     } });
+    const speak = (text: string) => {
+      const turn = ++utterances;
+      channels.at(-1)!.emit({ type: "session.input_transcript.delta", event_id: `camera-task-text-${turn}`,
+        delta: text, start_ms: turn * 2000 + 100, end_ms: turn * 2000 + 1000 });
+      return turn;
+    };
+    const delegateTurn = (turn: number, id = `camera-report-task-${turn}`) => {
+      channels.at(-1)!.emit({ type: "session.delegation.created", event_id: `camera-task-${++delegationEvents}`,
+        delegation: { id, target: "client" }, offset_ms: turn * 2000 + 1100 });
+    };
     Object.assign(window, { cameraSmoke: {
       state: () => ({
         cameras: cameras.filter((track) => track.readyState === "live").length,
         endedCameras: cameras.filter((track) => track.readyState === "ended").length,
         cameraStarts, microphones: microphones.filter((track) => track.readyState === "live").length,
-        callsClosed, commentary, attachments,
+        callsClosed, commentary, attachments, remoteAudioTracks: remoteTracks.filter((track) => track.readyState === "live").length,
       }),
-      delegate: (question = "Prepara un informe detallado.") => {
-        const channel = channels.at(-1)!;
-        delegations += 1;
-        const offset = delegations * 2000;
-        channel.emit({ type: "session.input_transcript.delta", event_id: `camera-task-text-${delegations}`, delta: question, start_ms: offset + 100, end_ms: offset + 1000 });
-        channel.emit({ type: "session.delegation.created", event_id: `camera-task-${delegations}`, delegation: { id: `camera-report-task-${delegations}`, target: "client" }, offset_ms: offset + 1100 });
-      },
+      speak, delegateTurn,
+      delegate: (question = "Prepara un informe detallado.") => delegateTurn(speak(question)),
+      scene: (value: "cup" | "notebook") => { scene = value; renderers.forEach((draw) => draw()); },
     } });
   });
-  return { analyses, intents, observations, prompts, calls, preferences: () => preferences, keepWorking: () => { keepWorking = true; } };
+  return { analyses, intents, observations, prompts, calls, preferences: () => preferences, keepWorking: () => { keepWorking = true; },
+    scene: async (value: "cup" | "notebook") => {
+      summary = value === "cup" ? cupSummary : notebookSummary;
+      await page.evaluate((next) => (window as SmokeWindow).cameraSmoke.scene(next), value);
+    } };
 }
 
 async function activate(page: Page) {
@@ -238,7 +289,7 @@ test("answers a normal written camera question with one fresh capture and one ag
   expect(mock.analyses).toHaveLength(1);
   expect(mock.analyses[0]).toMatchObject({ mode: "on_demand", question, image: expect.stringMatching(/^data:image\/jpeg;base64,/) });
   expect(mock.prompts[0].content).toBe(question);
-  await expect(page.getByText("La captura muestra una taza roja.", { exact: true })).toBeVisible();
+  await expect(page.getByText(cameraAnswer(cupSummary), { exact: true })).toBeVisible();
   await expect(page.getByRole("article", { name: "Contexto visual" })).toHaveCount(0);
   await expect(page.getByText("Veo una taza roja sobre una mesa.", { exact: true })).toHaveCount(0);
   await page.clock.fastForward(30_000);
@@ -250,7 +301,7 @@ test("answers a normal written camera question with one fresh capture and one ag
   // Persisted camera evidence must not become a second unsolicited answer on reload.
   await page.reload();
   await expect(page.getByRole("button", { name: "Activar cámara", exact: true })).toBeEnabled();
-  await expect(page.getByText("La captura muestra una taza roja.", { exact: true })).toBeVisible();
+  await expect(page.getByText(cameraAnswer(cupSummary), { exact: true })).toBeVisible();
   await expect(page.getByRole("article", { name: "Contexto visual" })).toHaveCount(0);
   await expect(page.getByText("Veo una taza roja sobre una mesa.", { exact: true })).toHaveCount(0);
   expect(mock.analyses).toHaveLength(1);
@@ -267,7 +318,8 @@ test("captures again for a visual follow-up and supplies the preceding analyzed 
   await composer.fill("¿Qué ves en la cámara?");
   await page.getByRole("button", { name: "Enviar mensaje" }).click();
   await expect.poll(() => mock.prompts.length).toBe(1);
-  await expect(page.getByText("La captura muestra una taza roja.", { exact: true })).toBeVisible();
+  await expect(page.getByText(cameraAnswer(cupSummary), { exact: true })).toBeVisible();
+  await mock.scene("notebook");
   await page.clock.fastForward(3_000);
   await composer.fill("¿Y ahora?");
   await page.getByRole("button", { name: "Enviar mensaje" }).click();
@@ -278,7 +330,9 @@ test("captures again for a visual follow-up and supplies the preceding analyzed 
   expect(mock.analyses[1]).toMatchObject({ mode: "on_demand", question: "¿Y ahora?", previousImage: mock.analyses[0].image });
   expect(mock.analyses[1].requestId).not.toBe(mock.analyses[0].requestId);
   expect(mock.analyses[1].capturedAt).not.toBe(mock.analyses[0].capturedAt);
+  expect(mock.analyses[1].image).not.toBe(mock.analyses[0].image);
   expect(mock.prompts[1].content).toBe("¿Y ahora?");
+  await expect(page.getByText(cameraAnswer(notebookSummary), { exact: true })).toBeVisible();
   await expect(page.getByRole("article", { name: "Contexto visual" })).toHaveCount(0);
   await stopCamera(page);
 });
@@ -311,7 +365,7 @@ test("switches cameras from the thumbnail, preserves the draft, and releases the
   await expect(composer).toHaveValue(draft);
 });
 
-test("waits for a custom Live question before capturing and delegating exactly once", async ({ page }, testInfo) => {
+test("a Live transcript alone triggers a fresh capture and one verified agent answer", async ({ page }, testInfo) => {
   const mock = await mockCamera(page);
   await page.clock.install();
   await page.goto("/chats");
@@ -324,15 +378,22 @@ test("waits for a custom Live question before capturing and delegating exactly o
   expect(mock.prompts).toHaveLength(0);
   expect((await mediaState(page)).commentary).toHaveLength(0);
   const question = "¿La taza está a la derecha o a la izquierda del cuaderno?";
-  await page.evaluate((text) => (window as SmokeWindow).cameraSmoke.delegate(text), question);
-  await page.clock.runFor(800);
+  await page.evaluate((text) => (window as SmokeWindow).cameraSmoke.speak(text), question);
+  await page.clock.runFor(500);
+  expect(mock.intents).toHaveLength(0);
+  await page.clock.runFor(400);
   await expect.poll(() => mock.prompts.length).toBe(1);
   expect(mock.intents).toHaveLength(1);
   expect(mock.intents[0]).toMatchObject({ text: question });
   expect(mock.analyses).toHaveLength(1);
   expect(mock.analyses[0]).toMatchObject({ mode: "on_demand", question });
   expect(mock.prompts[0].content).toContain(question);
-  await expect.poll(async () => (await mediaState(page)).commentary.join(" ")).toContain("Backend agent result");
+  expect(mock.prompts[0].content).toContain(cupSummary);
+  await expect.poll(async () => (await mediaState(page)).commentary.join(" ")).toContain(cameraAnswer(cupSummary));
+  await expect(page.locator(".live-transcript").filter({ hasText: question }).first()).toBeVisible();
+  expect((await page.locator(".live-transcript").allTextContents()).join("\n"))
+    .not.toMatch(/Current camera evidence|"capturedAt"|"summary"|"uncertainties"/);
+  expect((await mediaState(page)).remoteAudioTracks).toBe(1);
   await page.clock.fastForward(30_000);
   expect(mock.analyses).toHaveLength(1);
   expect(mock.prompts).toHaveLength(1);
@@ -344,6 +405,114 @@ test("waits for a custom Live question before capturing and delegating exactly o
   await page.screenshot({ path: testInfo.outputPath("camera-live-question.png"), fullPage: true });
 });
 
+test("a spoken visual follow-up analyzes the changed scene instead of repeating the prior observation", async ({ page }) => {
+  const mock = await mockCamera(page);
+  await page.clock.install();
+  await page.goto("/chats");
+  await page.getByRole("button", { name: "Conversar con GPT-Live-1" }).click();
+  await expect(page.getByText("Escuchando · ya puedes hablar")).toBeVisible();
+  await activate(page);
+  await page.evaluate(() => (window as SmokeWindow).cameraSmoke.speak("¿Qué ves en la cámara?"));
+  await page.clock.runFor(900);
+  await expect.poll(async () => (await mediaState(page)).commentary.join(" ")).toContain(cameraAnswer(cupSummary));
+  expect(mock.prompts).toHaveLength(1);
+  const beforeFollowup = (await mediaState(page)).commentary.length;
+  await mock.scene("notebook");
+  await page.clock.runFor(3_000);
+  await page.evaluate(() => (window as SmokeWindow).cameraSmoke.speak("¿Y ahora?"));
+  await page.clock.runFor(900);
+  await expect.poll(() => mock.prompts.length).toBe(2);
+  expect(mock.intents).toHaveLength(2);
+  expect(mock.intents[1]).toMatchObject({ text: "¿Y ahora?", recentContext: cupSummary });
+  expect(mock.analyses).toHaveLength(2);
+  expect(mock.analyses[1]).toMatchObject({ mode: "on_demand", question: "¿Y ahora?", previousImage: mock.analyses[0].image });
+  expect(mock.analyses[1].image).not.toBe(mock.analyses[0].image);
+  expect(mock.analyses[1].requestId).not.toBe(mock.analyses[0].requestId);
+  expect(mock.analyses[1].capturedAt).not.toBe(mock.analyses[0].capturedAt);
+  await expect.poll(async () => (await mediaState(page)).commentary.slice(beforeFollowup).join(" ")).toContain(cameraAnswer(notebookSummary));
+  expect((await mediaState(page)).commentary.slice(beforeFollowup).join(" ")).not.toContain(cameraAnswer(cupSummary));
+  await expect(page.getByText(cameraAnswer(notebookSummary), { exact: true })).toBeVisible();
+  expect(mock.calls).toHaveLength(1);
+});
+
+test("early and late provider delegations share the already processed spoken visual turn", async ({ page }) => {
+  const mock = await mockCamera(page);
+  await page.clock.install();
+  await page.goto("/chats");
+  await page.getByRole("button", { name: "Conversar con GPT-Live-1" }).click();
+  await expect(page.getByText("Escuchando · ya puedes hablar")).toBeVisible();
+  await activate(page);
+  const question = "Mira la taza de la cámara.";
+  const turn = await page.evaluate((text) => (window as SmokeWindow).cameraSmoke.speak(text), question);
+  // Provider delegation can precede the transcript debounce and can repeat
+  // with a new event or delegation id after the local request has completed.
+  await page.evaluate((id) => (window as SmokeWindow).cameraSmoke.delegateTurn(id), turn);
+  await page.clock.runFor(900);
+  await expect.poll(async () => (await mediaState(page)).commentary.join(" ")).toContain(cameraAnswer(cupSummary));
+  await page.evaluate((id) => {
+    (window as SmokeWindow).cameraSmoke.delegateTurn(id);
+    (window as SmokeWindow).cameraSmoke.delegateTurn(id, "duplicate-late-provider-id");
+  }, turn);
+  await page.clock.runFor(3_000);
+  expect(mock.intents).toHaveLength(1);
+  expect(mock.analyses).toHaveLength(1);
+  expect(mock.prompts).toHaveLength(1);
+  expect(mock.prompts[0].content).toContain(question);
+  expect((await mediaState(page)).commentary.filter((content) => content.includes("Backend agent result"))).toHaveLength(1);
+  expect(mock.calls).toHaveLength(1);
+});
+
+test("a nonvisual Live transcript is classified without capturing or submitting an agent task", async ({ page }) => {
+  const mock = await mockCamera(page);
+  await page.clock.install();
+  await page.goto("/chats");
+  await page.getByRole("button", { name: "Conversar con GPT-Live-1" }).click();
+  await expect(page.getByText("Escuchando · ya puedes hablar")).toBeVisible();
+  await activate(page);
+  const question = "Cuéntame un chiste corto.";
+  await page.evaluate((text) => (window as SmokeWindow).cameraSmoke.speak(text), question);
+  await page.clock.runFor(900);
+  await expect.poll(() => mock.intents.length).toBe(1);
+  expect(mock.intents[0]).toMatchObject({ text: question });
+  expect(mock.intents[0]).not.toHaveProperty("image");
+  await page.clock.runFor(3_000);
+  expect(mock.analyses).toHaveLength(0);
+  expect(mock.prompts).toHaveLength(0);
+  expect((await mediaState(page)).commentary.some((content) => content.includes("Backend agent result"))).toBe(false);
+  expect((await mediaState(page)).cameras).toBe(1);
+  expect(mock.calls).toHaveLength(1);
+});
+
+test("turning the camera off cancels a pending spoken visual classification without ending Live", async ({ page }) => {
+  const mock = await mockCamera(page);
+  let releaseIntent!: () => void;
+  const classifier = new Promise<void>((resolve) => { releaseIntent = resolve; });
+  await page.route("**/api/v1/sessions/*/vision/intent", async (route) => {
+    const payload: VisionIntentInput = route.request().postDataJSON();
+    mock.intents.push(payload);
+    await classifier;
+    await route.fulfill({ json: { intent: "visual", question: payload.text } }).catch(() => {});
+  });
+  await page.clock.install();
+  await page.goto("/chats");
+  await page.getByRole("button", { name: "Conversar con GPT-Live-1" }).click();
+  await expect(page.getByText("Escuchando · ya puedes hablar")).toBeVisible();
+  await activate(page);
+  await page.evaluate(() => (window as SmokeWindow).cameraSmoke.speak("¿Qué ves en la cámara?"));
+  await page.clock.runFor(900);
+  await expect.poll(() => mock.intents.length).toBe(1);
+  await stopCamera(page);
+  releaseIntent();
+  await page.clock.runFor(3_000);
+  expect(mock.analyses).toHaveLength(0);
+  expect(mock.prompts).toHaveLength(0);
+  expect((await mediaState(page)).commentary.some((content) => content.includes("Backend agent result"))).toBe(false);
+  expect((await mediaState(page)).microphones).toBe(1);
+  expect((await mediaState(page)).callsClosed).toBe(0);
+  expect(mock.calls).toHaveLength(1);
+  await expect(page.getByRole("button", { name: "Terminar conversación de voz" })).toBeVisible();
+});
+
 test("attaches exactly the last analyzed frame without changing the current draft or analyzing again", async ({ page }, testInfo) => {
   const mock = await mockCamera(page);
   await page.goto("/chats");
@@ -352,7 +521,7 @@ test("attaches exactly the last analyzed frame without changing the current draf
   await composer.fill("¿Qué ves?");
   await page.getByRole("button", { name: "Enviar mensaje" }).click();
   await expect.poll(() => mock.prompts.length).toBe(1);
-  await expect(page.getByText("La captura muestra una taza roja.", { exact: true })).toBeVisible();
+  await expect(page.getByText(cameraAnswer(cupSummary), { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Adjuntar captura analizada" })).toBeEnabled();
   await composer.fill("Conserva este borrador hasta enviarlo.");
   await page.getByRole("button", { name: "Adjuntar captura analizada" }).click();
@@ -374,9 +543,9 @@ test("attaches exactly the last analyzed frame without changing the current draf
 test("takes an explicitly attached photo without analysis or an unsolicited agent task", async ({ page }) => {
   const mock = await mockCamera(page);
   await page.goto("/chats");
+  await activate(page);
   const composer = page.getByRole("textbox", { name: "Mensaje a Newton…" });
   await composer.fill("Esta foto se enviará cuando yo decida.");
-  await activate(page);
   await page.getByRole("button", { name: "Tomar y adjuntar nueva captura" }).click();
   await expect(page.locator(".composer-attachment")).toHaveCount(1);
   await expect(composer).toHaveValue("Esta foto se enviará cuando yo decida.");

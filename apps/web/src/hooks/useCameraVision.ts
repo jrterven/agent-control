@@ -309,7 +309,7 @@ export function useCameraVision(options: CameraVisionOptions) {
     return () => usePwaUpdateStore.getState().setBlocker("camera", false);
   }, [phase]);
 
-  return { videoRef, phase, mode, active: phase !== "idle", error, preferences, devices, deviceId, analyzing, latestFrame, latestObservation,
+  return { videoRef, phase, mode, activationId: activation.current, active: phase !== "idle", error, preferences, devices, deviceId, analyzing, latestFrame, latestObservation,
     observations, hasMore, loadingObservations, supported: cameraSupported(), start, stop, pause, resume, switchDevice, savePreferences,
     refreshPreferences, analyze, onLiveRequest, takeNewCapture, loadMore };
 }

@@ -20,10 +20,29 @@ preference changes stop capture. Restart requires a gesture.
 
 On-demand requests use the normal Hermes task/approval/reconciliation path.
 With an active camera, a text-only classifier first decides whether new written
-or delegated voice requests need a current frame. Ambiguous requests ask for
-clarification. Visual follow-up questions can compare the current and previous
+or spoken requests need a current frame. Live groups the current input transcript
+until 750 ms without a new fragment and starts the check even if the voice model
+does not delegate. Transcript routing and provider delegation share a turn so
+late delegation cannot duplicate a capture or Hermes task. Ambiguous requests
+ask for clarification. Visual follow-up questions can compare the current and previous
 analyzed frame. The agent answers in the normal chat; on-demand observations
 remain saved as evidence without appearing as a second answer in the timeline.
+
+Live drops output audio and captions while the current camera request is checked.
+It instructs the model to wait, then measures at least 300 ms of quiet remote
+audio before sending a verified result or allowing a nonvisual answer. A provider
+command acknowledgement alone does not release playback. If output cannot be
+observed or drained, Live closes with an error; any submitted Hermes work remains
+in the chat. Verified approval notices may speak while the task is pending.
+Camera switch/off invalidates pending preparation. Existing submitted tasks keep
+their normal approval and reconciliation lifecycle. Camera history is not added
+to Live startup as current evidence; fresh evidence accompanies its exact request
+outside the displayed voice transcript.
+
+This client intervention starts when an input transcript fragment arrives; it
+cannot retract speech already heard before that event. Validate actual media and
+transcript ordering on physical devices in addition to the simulated suite.
+The protocol follows OpenAI's [transcript-driven delegation](https://developers.openai.com/api/docs/guides/live-delegation#react-to-transcript-fragments) and [client playback controls](https://developers.openai.com/api/docs/guides/voice-server-controls#control-playback-when-needed).
 
 The current chat UI does not offer continuous mode or an interval preference.
 The saved interval and continuous API/runtime remain compatible with older

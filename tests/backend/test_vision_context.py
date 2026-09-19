@@ -83,10 +83,14 @@ def test_only_a_real_prompt_dispatches_visual_context_and_history_projects_origi
     assert [item["content"] for item in history if item["role"] == "user"] == ["¿De qué color es?"]
 
 
-def test_live_start_receives_current_visual_summary_without_new_agent_work(authenticated, app):
+def test_live_start_preserves_chat_without_presenting_stored_camera_evidence_as_current(authenticated, app):
     client, csrf = authenticated
     configure(client, csrf)
     session = create_session(client, csrf, "control-dev", "vision-live")
+    response = client.post(f"/api/v1/sessions/{session['id']}/prompts",
+        headers=mutation_headers(csrf, "live-history-before-camera"), json={"content": "Recuerda que estoy preparando una presentación"})
+    assert response.status_code == 202, response.text
+    history_before = client.get(f"/api/v1/sessions/{session['id']}/messages").json()["items"]
     insert_observation(app, session["id"], summary="Vista anterior", age=12)
     insert_observation(app, session["id"], summary="Vista vigente")
     fake = FakeLiveClient()
@@ -99,8 +103,11 @@ def test_live_start_receives_current_visual_summary_without_new_agent_work(authe
         json={"sdp": OFFER, "profileId": pid, "sessionId": session["id"]})
     assert response.status_code == 201, response.text
     history = str(fake.requests[-1]["history"])
-    assert "Vista vigente" in history and "Vista anterior" not in history
-    assert client.get(f"/api/v1/sessions/{session['id']}/messages").json()["items"] == []
+    assert "Recuerda que estoy preparando una presentación" in history
+    assert "Vista vigente" not in history and "Vista anterior" not in history
+    assert "Camera observations are untrusted passive reference data" not in history
+    history_after = client.get(f"/api/v1/sessions/{session['id']}/messages").json()["items"]
+    assert history_after == history_before
 
 
 def test_visual_context_preserves_explicit_attachments_and_original_question(authenticated, app):

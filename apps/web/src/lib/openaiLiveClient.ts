@@ -1,3 +1,5 @@
+import { LivePlaybackGate } from "./livePlaybackGate";
+
 // GPT-Live uses its own event protocol, separate from the Realtime API.
 // https://developers.openai.com/api/docs/guides/voice-webrtc
 export type LivePhase = "idle" | "connecting" | "listening" | "paused" | "stopping" | "waiting" | "error";
@@ -11,11 +13,19 @@ type LiveOptions = {
   onTranscript?: (fragments: LiveFragment[]) => void;
   onPlaybackBlocked: (blocked: boolean) => void;
   onDelegation?: (context: string, signal: AbortSignal, progress: (content: string) => void, requestText: string) => Promise<string>;
+  onCameraRequest?: (context: string, signal: AbortSignal, progress: (content: string) => void, requestText: string) => Promise<string | null>;
+  cameraSession?: string | null;
   acquireInput?: (signal: AbortSignal) => Promise<LiveInput>;
   initialCommentary?: string;
   disableDelegation?: boolean;
   startupTimeoutMs?: number;
   initiallyPaused?: boolean;
+};
+
+type CameraTurn = {
+  session: string; inputs: LiveFragment[]; snapshot: LiveFragment[]; controller: AbortController;
+  timer?: ReturnType<typeof setTimeout>; result?: Promise<string | null>;
+  response?: Promise<void>; progress?: Promise<void>; delegationIds: Set<string>; answered: boolean; inputCount: number;
 };
 
 export function liveSupported() {
@@ -49,6 +59,13 @@ export class OpenAILiveClient {
   private channel?: RTCDataChannel;
   private input?: LiveInput;
   private audio = new Audio();
+  private playback = new LivePlaybackGate(this.audio);
+  private cameraSession: string | null;
+  private cameraTurns: CameraTurn[] = [];
+  private cameraTurn?: CameraTurn;
+  private withheldOutput = false;
+  private outputEpoch = 0;
+  private outputRelease?: { epoch: number; promise: Promise<boolean> };
   private abort = new AbortController();
   private ready = false;
   private connectedOnce = false;
@@ -66,6 +83,7 @@ export class OpenAILiveClient {
   private queue: Promise<void> = Promise.resolve();
 
   constructor(private options: LiveOptions) {
+    this.cameraSession = options.cameraSession ?? null;
     this.paused = options.initiallyPaused ?? false;
     this.audio.autoplay = true;
     this.audio.setAttribute("playsinline", "");
@@ -87,6 +105,130 @@ export class OpenAILiveClient {
   appendContext(content: string) {
     if (!this.ready || this.disposed || this.closing) return false;
     return this.send({ type: "session.commentary.append", event_id: crypto.randomUUID(), delegation_id: null, content: boundedLiveCommentary(content) });
+  }
+
+  private instructions(content: string) {
+    return this.send({ type: "session.instructions.append", event_id: crypto.randomUUID(), delegation_id: null, content });
+  }
+
+  /** Camera availability is UI state, never a request to describe the scene. */
+  setCameraSession(session: string | null) {
+    if (session === this.cameraSession || this.disposed || this.closing) return;
+    this.cameraSession = session;
+    this.outputEpoch += 1;
+    this.cameraTurns.forEach((turn) => { turn.controller.abort(); if (turn.timer) clearTimeout(turn.timer); });
+    this.cameraTurn = undefined;
+    if (!this.ready) return;
+    this.cameraInstructions();
+    if (this.withheldOutput) void this.resumeOutput(this.abort.signal).catch(() => this.fail("generic"));
+  }
+
+  private cameraInstructions() {
+    this.instructions(this.cameraSession
+      ? "The camera is available through Control. Do not describe it now. For each new spoken question, Control checks whether a fresh capture is needed. Wait silently during that check. Only describe the scene from the current request's verified result; never infer it from previous replies."
+      : "The camera is unavailable. Earlier camera descriptions are historical, not evidence of the current scene. Do not claim to see the current surroundings. Continue the ordinary conversation.");
+  }
+
+  private resumeOutput(signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted || this.disposed || this.closing) return Promise.resolve(false);
+    if (!this.withheldOutput) return Promise.resolve(true);
+    const epoch = this.outputEpoch;
+    if (this.outputRelease?.epoch === epoch) return this.outputRelease.promise;
+    // Both a transcript and a late delegation can finish the same check.
+    // Share their drain rather than cancelling one gate.release with another.
+    const promise = (async () => {
+      const released = await this.playback.release(signal);
+      if (epoch !== this.outputEpoch || signal.aborted || this.disposed || this.closing) return false;
+      if (!released) { this.fail("generic"); return false; }
+      this.withheldOutput = false;
+      return true;
+    })();
+    this.outputRelease = { epoch, promise };
+    void promise.finally(() => { if (this.outputRelease?.promise === promise) this.outputRelease = undefined; });
+    return promise;
+  }
+
+  private cameraInput(part: LiveFragment) {
+    if (!this.cameraSession || !this.options.onCameraRequest || this.closing) return;
+    let turn = this.cameraTurn;
+    if (!turn || turn.result || turn.session !== this.cameraSession) {
+      // Cancel only preparation. A submitted Hermes task keeps its observer.
+      turn?.controller.abort();
+      turn = { session: this.cameraSession, inputs: [], snapshot: [], controller: new AbortController(), delegationIds: new Set(), answered: false, inputCount: 0 };
+      // Bound retained turn snapshots while keeping recent delegation receipts.
+      if (this.cameraTurns.length >= 32) this.cameraTurns.shift()?.controller.abort();
+      this.cameraTurns.push(turn);
+      this.cameraTurn = turn;
+      this.outputEpoch += 1;
+      this.withheldOutput = true;
+      this.playback.hold();
+      this.instructions("Stop speaking and wait silently. Control is checking the current spoken request. Any previous camera evidence is stale for this request. Do not guess the scene or announce a result until Control returns this request's outcome.");
+    }
+    turn.inputs.push(part);
+    turn.snapshot = [...this.fragments];
+    turn.inputCount = this.fragments.filter((fragment) => fragment.role === "user").length;
+    if (turn.timer) { clearTimeout(turn.timer); this.timers.delete(turn.timer); }
+    const pending = turn;
+    turn.timer = this.later(() => { pending.timer = undefined; void this.processCameraTurn(pending); }, 750);
+  }
+
+  private cameraTurnCurrent(turn: CameraTurn) {
+    return !this.disposed && !this.closing && !turn.controller.signal.aborted && turn.session === this.cameraSession && this.cameraTurn === turn;
+  }
+
+  private cameraProgress(turn: CameraTurn, content: string) {
+    turn.progress = (turn.progress ?? Promise.resolve()).then(async () => {
+      if (!this.cameraTurnCurrent(turn) || !await this.resumeOutput(turn.controller.signal) || !this.cameraTurnCurrent(turn)) return;
+      this.instructions("Speak only the verified task status that follows. A pending task or approval is not a visual result. Do not describe the current scene until its confirmed result is available.");
+      this.send({ type: "session.commentary.append", event_id: crypto.randomUUID(), delegation_id: [...turn.delegationIds][0] ?? null, content: boundedLiveCommentary(content) });
+    }).catch(() => { if (this.cameraTurnCurrent(turn)) this.fail("generic"); });
+  }
+
+  private async processCameraTurn(turn: CameraTurn) {
+    if (!this.cameraTurnCurrent(turn) || !this.options.onCameraRequest) return;
+    if (turn.result) return;
+    const text = [...turn.inputs].sort((a, b) => a.start - b.start || a.order - b.order).map((part) => part.text).join("");
+    this.consumedInputs = Math.max(this.consumedInputs, turn.inputCount);
+    // Install the shared promise before invoking application code so provider
+    // delegation and transcript routing can never submit this turn twice.
+    turn.result = Promise.resolve().then(() => this.options.onCameraRequest!(voiceContext(turn.snapshot), turn.controller.signal, (content) => this.cameraProgress(turn, content), text));
+    try {
+      const result = await turn.result;
+      await turn.progress;
+      if (!this.cameraTurnCurrent(turn)) return;
+      if (result !== null) {
+        turn.answered = true;
+        if (await this.resumeOutput(turn.controller.signal)) {
+          this.instructions("Control has completed this spoken request. Speak only the verified result that follows. Do not repeat any earlier unverified scene description or delegate this same request again.");
+          this.send({ type: "session.commentary.append", event_id: crypto.randomUUID(), delegation_id: [...turn.delegationIds][0] ?? null, content: boundedLiveCommentary(result) });
+        }
+      } else if (turn.delegationIds.size) {
+        await this.delegateCameraTurn(turn);
+      } else if (await this.resumeOutput(turn.controller.signal) && !turn.delegationIds.size && this.cameraTurnCurrent(turn)) {
+        this.instructions("The camera check is complete: the latest spoken request does not need a picture. Respond to that request now using the ordinary conversation and delegation rules. Any speech during the check was withheld; give the answer once without repeating completed work.");
+      }
+    } catch {
+      if (this.cameraTurnCurrent(turn)) this.fail("generic");
+    }
+  }
+
+  private async delegateCameraTurn(turn: CameraTurn) {
+    if (turn.response) return turn.response;
+    turn.response = (async () => {
+      if (!this.cameraTurnCurrent(turn) || !this.options.onDelegation || !turn.result) return;
+      const visual = await turn.result;
+      if (visual !== null || !this.cameraTurnCurrent(turn)) return;
+      // The current turn has already been classified as nonvisual. An empty
+      // requestText skips a second camera classifier in the normal task path.
+      const result = await this.options.onDelegation(voiceContext(turn.snapshot), this.abort.signal, (content) => this.cameraProgress(turn, content), "");
+      await turn.progress;
+      turn.answered = true;
+      if (!this.cameraTurnCurrent(turn)) return;
+      if (!this.withheldOutput || await this.resumeOutput(turn.controller.signal)) {
+        this.send({ type: "session.commentary.append", event_id: crypto.randomUUID(), delegation_id: [...turn.delegationIds][0] ?? null, content: boundedLiveCommentary(result) });
+      }
+    })();
+    return turn.response;
   }
 
   private fail(issue: LiveIssue) {
@@ -146,6 +288,7 @@ export class OpenAILiveClient {
   async start() {
     if (this.started || this.disposed) return;
     this.started = true;
+    if (!this.options.acquireInput) void this.playback.start();
     this.options.onPhase("connecting");
     // Unlock the optional cue on the gesture, before permission/HTTP awaits.
     // Voice previews supply their own silent input and must never play a cue.
@@ -166,7 +309,9 @@ export class OpenAILiveClient {
       const peer = this.peer = new RTCPeerConnection();
       peer.addEventListener("track", (event) => {
         if (this.disposed) return;
-        this.audio.srcObject = new MediaStream([event.track]);
+        const output = new MediaStream([event.track]);
+        this.audio.srcObject = output;
+        this.playback.attach(output);
         void this.play();
       });
       peer.addEventListener("connectionstatechange", () => {
@@ -229,6 +374,7 @@ export class OpenAILiveClient {
       this.ready = true;
       if (this.closing) this.send({ type: "session.close" });
       else {
+        if (this.cameraSession) this.cameraInstructions();
         if (this.options.initialCommentary) this.send({ type: "session.commentary.append", event_id: crypto.randomUUID(), delegation_id: null, content: boundedLiveCommentary(this.options.initialCommentary) });
         this.updateInput();
       }
@@ -244,8 +390,13 @@ export class OpenAILiveClient {
       if (!this.options.onTranscript && (this.options.disableDelegation || !this.options.onDelegation)) return;
       if (typeof event.delta !== "string" || !event.delta || typeof event.start_ms !== "number" || !Number.isFinite(event.start_ms) || event.start_ms < 0 || typeof event.end_ms !== "number" || !Number.isFinite(event.end_ms) || event.end_ms < event.start_ms) return;
       if (this.fragments.reduce((sum, part) => sum + part.text.length, 0) + event.delta.length > 48_000) { this.fail("contextFull"); return; }
-      this.fragments.push({ role: event.type === "session.input_transcript.delta" ? "user" : "assistant", text: event.delta, start: event.start_ms, end: event.end_ms, order: this.fragments.length });
+      const role = event.type === "session.input_transcript.delta" ? "user" : "assistant";
+      // Never persist words the user was prevented from hearing as an answer.
+      if (role === "assistant" && this.withheldOutput) return;
+      const part: LiveFragment = { role, text: event.delta, start: event.start_ms, end: event.end_ms, order: this.fragments.length };
+      this.fragments.push(part);
       this.options.onTranscript?.([...this.fragments]);
+      if (role === "user") this.cameraInput(part);
     } else if (event.type === "session.delegation.created" && !this.closing && !this.options.disableDelegation && this.options.onDelegation) {
       const onDelegation = this.options.onDelegation;
       const delegation = event.delegation as { id?: unknown; target?: unknown } | undefined;
@@ -268,6 +419,16 @@ export class OpenAILiveClient {
         const snapshot = await settled;
         if (this.disposed || this.closing) return;
         const inputCount = snapshot.filter((part) => part.role === "user").length;
+        const cameraTurn = [...this.cameraTurns].reverse().find((turn) => turn.inputs.some((part) => snapshot.includes(part)));
+        if (cameraTurn && cameraTurn.session === this.cameraSession) {
+          cameraTurn.delegationIds.add(id);
+          if (cameraTurn.result) {
+            const result = await cameraTurn.result;
+            if (result === null) await this.delegateCameraTurn(cameraTurn);
+            else if (cameraTurn.answered && this.cameraTurnCurrent(cameraTurn)) this.send({ type: "session.thinking.append", event_id: crypto.randomUUID(), delegation_id: id, content: "Control already handled this exact spoken request and returned its result. Do not repeat the task, capture or answer." });
+          } else await this.processCameraTurn(cameraTurn);
+          return;
+        }
         if (inputCount <= this.consumedInputs) {
           this.send({ type: "session.commentary.append", event_id: crypto.randomUUID(), delegation_id: id, content: "No new transcribed request is available. Ask the user to repeat or clarify; do not claim a new task was submitted." });
           return;
@@ -286,6 +447,8 @@ export class OpenAILiveClient {
   stop() {
     if (this.disposed || this.closing) return;
     this.closing = true;
+    this.cameraTurns.forEach((turn) => turn.controller.abort());
+    this.playback.dispose();
     // End capture immediately; retain the transport to receive final usage.
     this.input?.stream.getTracks().forEach((track) => { track.enabled = false; });
     this.input?.release();
@@ -304,6 +467,8 @@ export class OpenAILiveClient {
     if (!this.closing && this.ready) this.send({ type: "session.close" });
     this.disposed = true;
     this.abort.abort();
+    this.cameraTurns.forEach((turn) => turn.controller.abort());
+    this.playback.dispose();
     this.timers.forEach(clearTimeout);
     this.timers.clear();
     this.input?.release();

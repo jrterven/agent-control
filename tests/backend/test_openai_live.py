@@ -236,7 +236,10 @@ async def test_official_live_contract_fixed_origin_permissions_and_redacted_boun
     assert session["instructions"] == LIVE_INSTRUCTIONS
     assert session["store"] is False
     assert session["audio"] == {"output": {"voice": "marin"}}
-    assert session["client"]["data_channel"]["allowed_client_events"] == ["session.commentary.append", "session.close"]
+    assert session["client"]["data_channel"]["allowed_client_events"] == [
+        "session.commentary.append", "session.instructions.append",
+        "session.thinking.append", "session.close",
+    ]
     assert session["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Remember jueves"}]}, {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Confirmed [REDACTED]"}]}]
     bounded = live_history([{"role": "user", "content": "é" * 10_000} for _ in range(200)], api_key=SECRET)
     assert sum(len(message["content"][0]["text"].encode()) for message in bounded) <= 6000

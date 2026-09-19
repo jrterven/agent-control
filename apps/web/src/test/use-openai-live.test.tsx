@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { profiles, sessions } from "../data";
 import { submitPrompt } from "../hooks";
 import { liveFocusMessageId, useOpenAILive } from "../hooks/useOpenAILive";
+import { liveDelegationConversation } from "../lib/liveDelegation";
 import { api } from "../lib/api";
 import type { LiveIssue, LivePhase } from "../lib/openaiLiveClient";
 import { useAppStore } from "../store/appStore";
@@ -14,6 +15,8 @@ type Options = {
   onPhase: (phase: LivePhase) => void;
   onIssue: (issue: LiveIssue) => void;
   onDelegation: (context: string, signal: AbortSignal, progress: (content: string) => void, requestText?: string) => Promise<string>;
+  onCameraRequest: (context: string, signal: AbortSignal, progress: (content: string) => void, requestText: string) => Promise<string | null>;
+  cameraSession?: string | null;
   initialCommentary?: string;
   initiallyPaused?: boolean;
 };
@@ -26,6 +29,7 @@ class MockClient {
   start = vi.fn(async () => { this.options.onPhase("connecting"); await this.options.negotiate("offer", this.controller.signal); this.started = true; this.options.onPhase(this.paused ? "paused" : "listening"); });
   stop = vi.fn(() => { this.options.onPhase("stopping"); });
   dispose = vi.fn(() => { this.controller.abort(); });
+  setCameraSession = vi.fn();
   setPaused = vi.fn((paused: boolean) => { this.paused = paused; if (this.started) this.options.onPhase(paused ? "paused" : "listening"); });
   play = vi.fn();
   appendContext = vi.fn(() => true);
@@ -70,6 +74,46 @@ describe("Live consent, task suspension and verified resumption", () => {
     });
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+  it("handles a spoken camera question without provider delegation and includes its fresh evidence", async () => {
+    const prepareVisualRequest = vi.fn(async () => ({ intent: "visual" as const, question: "¿Qué ves?", observation: { id: "current", summary: "Objetos sobre una repisa", capturedAt: "2026-09-19T16:00:00Z", uncertainties: [] } as any }));
+    const { result } = renderHook(() => useOpenAILive({ ...options, prepareVisualRequest }));
+    act(() => result.current.setCameraSession("camera-one"));
+    await act(async () => { await result.current.start(); });
+    const call = mocks.calls[0];
+    expect(call.options.cameraSession).toBe("camera-one");
+    let answer!: Promise<string | null>;
+    await act(async () => { answer = call.options.onCameraRequest("User: ¿Qué ves?", new AbortController().signal, vi.fn(), "¿Qué ves?"); });
+    expect(prepareVisualRequest).toHaveBeenCalledOnce();
+    expect(submitPrompt).toHaveBeenCalledOnce();
+    expect(vi.mocked(submitPrompt).mock.calls[0][0]).toContain("Objetos sobre una repisa");
+    expect(vi.mocked(submitPrompt).mock.calls[0][0]).toContain("2026-09-19T16:00:00Z");
+    expect(liveDelegationConversation(vi.mocked(submitPrompt).mock.calls[0][0])).toEqual([{ role: "user", text: "¿Qué ves?" }]);
+    await act(async () => { complete(); expect(await answer).toContain("Backend agent result"); });
+  });
+
+  it("checks nonvisual speech without creating a Hermes task", async () => {
+    const prepareVisualRequest = vi.fn(async () => ({ intent: "nonvisual" as const, question: "" }));
+    const { result } = renderHook(() => useOpenAILive({ ...options, prepareVisualRequest }));
+    await act(async () => { await result.current.start(); });
+    await act(async () => { expect(await mocks.calls[0].options.onCameraRequest("User: Hola", new AbortController().signal, vi.fn(), "Hola")).toBeNull(); });
+    expect(submitPrompt).not.toHaveBeenCalled();
+    expect(result.current.working).toBe(false);
+  });
+
+  it("cancels preparation on camera-turn cancellation without submitting late evidence", async () => {
+    let finish!: (value: any) => void;
+    const prepareVisualRequest = vi.fn((_text: string, _signal: AbortSignal) => new Promise<any>((resolve) => { finish = resolve; }));
+    const { result } = renderHook(() => useOpenAILive({ ...options, prepareVisualRequest }));
+    await act(async () => { await result.current.start(); });
+    const cancel = new AbortController();
+    let pending!: Promise<string | null>;
+    await act(async () => { pending = mocks.calls[0].options.onCameraRequest("User: Mira", cancel.signal, vi.fn(), "Mira"); });
+    cancel.abort();
+    expect(prepareVisualRequest.mock.calls[0][1].aborted).toBe(true);
+    await act(async () => { finish({ intent: "visual", observation: { summary: "stale" } }); await pending; });
+    expect(submitPrompt).not.toHaveBeenCalled();
+  });
 
   it("classifies only the new request before submitting visual work once, including task suspension and resumption", async () => {
     let finish!: (value: { intent: "visual"; question: string; observation: any }) => void;

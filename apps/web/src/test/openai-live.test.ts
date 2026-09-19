@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenAILiveClient, boundedLiveCommentary, voiceContext } from "../lib/openaiLiveClient";
 
+const playback = vi.hoisted(() => ({ release: vi.fn(), hold: vi.fn() }));
+vi.mock("../lib/livePlaybackGate", () => ({ LivePlaybackGate: class {
+  constructor(private audio: HTMLAudioElement) {}
+  start = vi.fn(async () => true);
+  attach = vi.fn();
+  hold() { this.audio.muted = true; playback.hold(); }
+  async release(signal?: AbortSignal) { const allowed = await playback.release(signal); if (allowed && !signal?.aborted) this.audio.muted = false; return allowed; }
+  dispose() { this.audio.muted = true; }
+} }));
+
 class Channel extends EventTarget {
   readyState = "open";
   send = vi.fn();
@@ -52,6 +62,7 @@ describe("GPT-Live WebRTC", () => {
   }
   beforeEach(() => {
     vi.useFakeTimers();
+    playback.hold.mockClear(); playback.release.mockReset().mockResolvedValue(true);
     track = Object.assign(new EventTarget(), { enabled: true, muted: false, readyState: "live", stop: vi.fn() });
     getUserMedia = vi.fn(async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }));
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia } });
@@ -324,6 +335,114 @@ describe("GPT-Live WebRTC", () => {
     client.stop();
     expect(client.appendContext("Late camera evidence")).toBe(false);
     expect(options.negotiate).toHaveBeenCalledOnce();
+  });
+
+  function cameraSetup(handler: (context: string, signal: AbortSignal, progress: (content: string) => void, text: string) => Promise<string | null>) {
+    const options = setup(); client.dispose();
+    client = new OpenAILiveClient({ ...options, cameraSession: "camera-one", onCameraRequest: handler });
+    return options;
+  }
+  const input = (text: string, start = 0) => Peer.latest.channel.emit({ type: "session.input_transcript.delta", delta: text, start_ms: start, end_ms: start + 400 });
+  const sent = () => Peer.latest.channel.send.mock.calls.map(([raw]) => JSON.parse(raw));
+
+  it("captures a spoken question without delegation, withholding unsupported speech until evidence arrives", async () => {
+    let finish!: (text: string) => void;
+    const camera = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const options = cameraSetup(camera); await client.start(); Peer.latest.channel.emit({ type: "session.started" });
+    input("¿Qué ves?");
+    expect(playback.hold).toHaveBeenCalledOnce();
+    Peer.latest.channel.emit({ type: "session.output_transcript.delta", delta: "Veo una puerta inventada", start_ms: 500, end_ms: 900 });
+    await vi.advanceTimersByTimeAsync(751);
+    expect(camera).toHaveBeenCalledWith("User: ¿Qué ves?", expect.any(AbortSignal), expect.any(Function), "¿Qué ves?");
+    expect(options.onDelegation).not.toHaveBeenCalled();
+    expect(sent().filter((event) => event.type === "session.commentary.append")).toEqual([]);
+    expect(options.onTranscript.mock.calls.at(-1)?.[0].map((part: any) => part.text).join("")).not.toContain("inventada");
+    finish("Current evidence: objects on a shelf"); await vi.advanceTimersByTimeAsync(1);
+    expect(playback.release).toHaveBeenCalledOnce();
+    expect(sent().filter((event) => event.type === "session.commentary.append")).toEqual([expect.objectContaining({ delegation_id: null, content: "Current evidence: objects on a shelf" })]);
+  });
+
+  it.each(["early", "late"])("shares one capture and result with an %s provider delegation", async (timing) => {
+    const camera = vi.fn(async () => "Verified current scene"); const options = cameraSetup(camera);
+    await client.start(); Peer.latest.channel.emit({ type: "session.started" });
+    const delegate = () => Peer.latest.channel.emit({ type: "session.delegation.created", offset_ms: 500, delegation: { id: "camera-delegation", target: "client" } });
+    if (timing === "early") delegate();
+    input("¿Qué ves?"); await vi.advanceTimersByTimeAsync(751);
+    if (timing === "late") { delegate(); await vi.advanceTimersByTimeAsync(751); }
+    expect(camera).toHaveBeenCalledOnce(); expect(options.onDelegation).not.toHaveBeenCalled();
+    expect(sent().filter((event) => event.type === "session.commentary.append")).toHaveLength(1);
+  });
+
+  it("groups fragments and routes a fresh follow-up without earlier directly answered speech", async () => {
+    const camera = vi.fn(async (_context: string, _signal: AbortSignal, _progress: (text: string) => void, text: string) => text === "Hola" ? null : `Fresh: ${text}`);
+    cameraSetup(camera); await client.start(); Peer.latest.channel.emit({ type: "session.started" });
+    input("Hola"); await vi.advanceTimersByTimeAsync(751);
+    input("¿Qué ", 1000); await vi.advanceTimersByTimeAsync(300); input("ves?", 1400); await vi.advanceTimersByTimeAsync(751);
+    input("¿Y ahora?", 3000); await vi.advanceTimersByTimeAsync(751);
+    expect(camera.mock.calls.map((call) => call[3])).toEqual(["Hola", "¿Qué ves?", "¿Y ahora?"]);
+    expect(sent().filter((event) => event.type === "session.commentary.append").map((event) => event.content)).toEqual(["Fresh: ¿Qué ves?", "Fresh: ¿Y ahora?"]);
+  });
+
+  it("leaves nonvisual speech to Live and only submits normal work when the provider delegates", async () => {
+    const camera = vi.fn(async () => null); const options = cameraSetup(camera);
+    await client.start(); Peer.latest.channel.emit({ type: "session.started" }); input("Busca el informe"); await vi.advanceTimersByTimeAsync(751);
+    expect(camera).toHaveBeenCalledOnce(); expect(options.onDelegation).not.toHaveBeenCalled();
+    Peer.latest.channel.emit({ type: "session.delegation.created", offset_ms: 500, delegation: { id: "normal-task", target: "client" } });
+    await vi.advanceTimersByTimeAsync(751);
+    expect(options.onDelegation).toHaveBeenCalledOnce();
+    expect(options.onDelegation.mock.calls[0][3]).toBe("");
+    expect(camera).toHaveBeenCalledOnce();
+  });
+
+  it("speaks a verified approval status while visual work is pending without another capture", async () => {
+    let finish!: (result: string) => void;
+    const camera = vi.fn((_context: string, _signal: AbortSignal, progress: (text: string) => void) => { progress("Approval is required in the chat. No action is confirmed."); return new Promise<string>((resolve) => { finish = resolve; }); });
+    const options = cameraSetup(camera); await client.start(); Peer.latest.channel.emit({ type: "session.started" }); input("Mira y revisa");
+    await vi.advanceTimersByTimeAsync(751);
+    expect(sent().filter((event) => event.type === "session.commentary.append").map((event) => event.content)).toEqual(["Approval is required in the chat. No action is confirmed."]);
+    finish("Verified visual answer"); await vi.advanceTimersByTimeAsync(1);
+    expect(options.onIssue).not.toHaveBeenCalled(); expect(camera).toHaveBeenCalledOnce();
+    expect(sent().filter((event) => event.type === "session.commentary.append")).toHaveLength(2);
+    expect(playback.release).toHaveBeenCalledOnce();
+  });
+
+  it("shares an in-flight audio drain with a late fast nonvisual delegation", async () => {
+    let drained!: (value: boolean) => void;
+    playback.release.mockImplementation(() => new Promise<boolean>((resolve) => { drained = resolve; }));
+    const options = cameraSetup(vi.fn(async () => null));
+    await client.start(); Peer.latest.channel.emit({ type: "session.started" }); input("Busca un archivo");
+    await vi.advanceTimersByTimeAsync(751);
+    expect(playback.release).toHaveBeenCalledOnce();
+    Peer.latest.channel.emit({ type: "session.delegation.created", offset_ms: 500, delegation: { id: "late-fast", target: "client" } });
+    await vi.advanceTimersByTimeAsync(751);
+    expect(options.onDelegation).toHaveBeenCalledOnce(); expect(playback.release).toHaveBeenCalledOnce();
+    drained(true); await vi.advanceTimersByTimeAsync(1);
+    expect(options.onIssue).not.toHaveBeenCalled();
+    expect(sent().filter((event) => event.type === "session.commentary.append")).toHaveLength(1);
+    expect(sent().some((event) => event.content?.includes("does not need a picture"))).toBe(false);
+  });
+
+  it("ignores camera preparation after the camera is switched off", async () => {
+    let finish!: (text: string) => void;
+    const camera = vi.fn((_context: string, _signal: AbortSignal) => new Promise<string>((resolve) => { finish = resolve; })); cameraSetup(camera);
+    await client.start(); Peer.latest.channel.emit({ type: "session.started" }); input("Mira"); await vi.advanceTimersByTimeAsync(751);
+    client.setCameraSession(null); expect(camera.mock.calls[0][1].aborted).toBe(true);
+    finish("Stale image"); await vi.advanceTimersByTimeAsync(1);
+    expect(sent().filter((event) => event.type === "session.commentary.append")).toEqual([]);
+  });
+
+  it("cancels an unsettled spoken capture on hangup", async () => {
+    const camera = vi.fn(async () => "Unexpected image"); cameraSetup(camera);
+    await client.start(); Peer.latest.channel.emit({ type: "session.started" }); input("Mira"); client.stop();
+    await vi.advanceTimersByTimeAsync(751); expect(camera).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when old remote speech cannot be drained", async () => {
+    playback.release.mockResolvedValue(false);
+    const camera = vi.fn(async () => "Verified image"); const options = cameraSetup(camera);
+    await client.start(); Peer.latest.channel.emit({ type: "session.started" }); input("Mira"); await vi.advanceTimersByTimeAsync(751);
+    expect(options.onIssue).toHaveBeenCalledWith("generic");
+    expect(sent().filter((event) => event.type === "session.commentary.append")).toEqual([]);
   });
 
   it("bounds multilingual results below the 500-token append limit with an explicit excerpt notice", () => {
