@@ -1,5 +1,4 @@
 (() => {
-  const language = (navigator.language || "en").toLowerCase().split("-")[0];
   const messages = {
     de: {
       starting: "Agent Control wird gestartet…",
@@ -32,7 +31,9 @@
       repairing: "Reparando o app…",
     },
   };
-  const copy = messages[language] || messages.en;
+  // The initial document uses English; the app updates lang after restoring an
+  // explicit preference. Recovery follows that choice without browser detection.
+  const getCopy = () => messages[(document.documentElement.lang || "en").toLowerCase().split("-")[0]] || messages.en;
 
   let mounted = false;
   let fatal = false;
@@ -55,9 +56,11 @@
 
   const renderRecovery = () => {
     if (!shell || !status || !recovery) return;
+    const copy = getCopy();
     shell.hidden = false;
     shell.dataset.agentControlBootState = "failed";
     status.textContent = copy.failed;
+    recovery.textContent = copy.action;
     recovery.hidden = false;
   };
 
@@ -160,6 +163,7 @@
 
   const repair = async () => {
     if (!status || !recovery) return;
+    const copy = getCopy();
     recovery.disabled = true;
     status.textContent = copy.repairing;
 
@@ -178,6 +182,7 @@
   };
 
   const initializeShell = () => {
+    const copy = getCopy();
     shell = document.querySelector("[data-agent-control-boot]");
     status = document.querySelector("[data-agent-control-boot-status]");
     const recoveryElement = document.querySelector("[data-agent-control-boot-recovery]");

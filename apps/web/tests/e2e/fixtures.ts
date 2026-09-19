@@ -160,6 +160,48 @@ function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 }
 
+/** Seed an explicit preference before any application code can read it. */
+export async function seedLanguagePreference(context: BrowserContext, baseURL: string | undefined, language: "en" | "es" | "fr" | "de" | "pt") {
+  if (!baseURL) throw new Error("Language fixtures require the application's baseURL");
+  const seed = await context.newPage();
+  const url = new URL("/__e2e_language_preference__", baseURL).href;
+  try {
+    await seed.route(url, (route) => route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Preference fixture</title>" }));
+    await seed.goto(url);
+    await seed.evaluate(async (value) => {
+      // Native IDB versions are Dexie's declared version multiplied by ten.
+      // Create the published v1 schema; the app performs its normal migration
+      // to the current schema on its first real navigation.
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("hermes-control-client", 10);
+        request.onupgradeneeded = () => {
+          const drafts = request.result.createObjectStore("drafts", { keyPath: "sessionId" });
+          drafts.createIndex("updatedAt", "updatedAt");
+          const preferences = request.result.createObjectStore("preferences", { keyPath: "key" });
+          preferences.createIndex("updatedAt", "updatedAt");
+          const transcripts = request.result.createObjectStore("transcripts", { keyPath: "id" });
+          for (const key of ["workspaceId", "expiresAt", "updatedAt"]) transcripts.createIndex(key, key);
+        };
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+      });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const transaction = database.transaction("preferences", "readwrite");
+          transaction.objectStore("preferences").put({ key: "language", value, updatedAt: Date.now() });
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error);
+        });
+      } finally {
+        database.close();
+      }
+    }, language);
+  } finally {
+    await seed.close();
+  }
+}
+
 export async function installMockApi(
   context: BrowserContext,
   options: { authenticated?: boolean } = {},
@@ -214,7 +256,10 @@ type Fixtures = {
 };
 
 export const test = base.extend<Fixtures>({
-  deterministicApi: [async ({ context }, use) => {
+  deterministicApi: [async ({ context, baseURL }, use) => {
+    // Existing Spanish scenarios opt in explicitly; browser locale is not an
+    // application preference. First-visit language tests use Playwright's base.
+    await seedLanguagePreference(context, baseURL, "es");
     const api = await installMockApi(context);
     await use(api);
   }, { auto: true }],

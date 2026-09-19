@@ -23,7 +23,7 @@ import { pwaInstallResources } from "./locales/pwaInstall";
 export const SUPPORTED_LANGUAGES = ["en", "es", "fr", "de", "pt"] as const;
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 
-export const DEFAULT_LANGUAGE: SupportedLanguage = "es";
+export const DEFAULT_LANGUAGE: SupportedLanguage = "en";
 export const LANGUAGE_PREFERENCE_KEY = "language";
 
 export const LANGUAGE_OPTIONS: ReadonlyArray<{
@@ -44,22 +44,6 @@ export function normalizeSupportedLanguage(value: string | null | undefined): Su
   if (!value) return undefined;
   const baseLanguage = value.trim().toLowerCase().replace("_", "-").split("-")[0];
   return supportedLanguageSet.has(baseLanguage) ? baseLanguage as SupportedLanguage : undefined;
-}
-
-export function detectSupportedLanguage(languages?: readonly string[]): SupportedLanguage {
-  const browserLanguages = languages ?? (
-    typeof navigator === "undefined"
-      ? []
-      : navigator.languages.length
-        ? navigator.languages
-        : [navigator.language]
-  );
-
-  for (const language of browserLanguages) {
-    const supported = normalizeSupportedLanguage(language);
-    if (supported) return supported;
-  }
-  return DEFAULT_LANGUAGE;
 }
 
 function applyDocumentLanguage(language: SupportedLanguage) {
@@ -107,11 +91,11 @@ async function applyLanguage(language: SupportedLanguage) {
 
 /**
  * Hydrates the UI language before React mounts. An invalid or unavailable saved
- * preference is ignored in favour of the first supported browser language.
+ * preference uses English; browser language does not override the product default.
  */
-export async function initializeLanguagePreference(languages?: readonly string[]): Promise<SupportedLanguage> {
+export async function initializeLanguagePreference(): Promise<SupportedLanguage> {
   const savedLanguage = await loadPreference(LANGUAGE_PREFERENCE_KEY).catch(() => undefined);
-  const language = normalizeSupportedLanguage(savedLanguage) ?? detectSupportedLanguage(languages);
+  const language = normalizeSupportedLanguage(savedLanguage) ?? DEFAULT_LANGUAGE;
   await applyLanguage(language);
   return language;
 }

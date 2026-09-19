@@ -1,10 +1,9 @@
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import i18n, {
   DEFAULT_LANGUAGE,
-  detectSupportedLanguage,
   getCurrentLanguage,
   initializeLanguagePreference,
   LANGUAGE_PREFERENCE_KEY,
@@ -19,6 +18,14 @@ import { TIME_ZONE_PREFERENCE_KEY } from "../lib/dateTime";
 import { useAppStore } from "../store/appStore";
 
 describe("language preferences", () => {
+  const preferenceMocks: { mockRestore(): void }[] = [];
+  const mockBrowserLanguage = (language: string) => {
+    preferenceMocks.push(
+      vi.spyOn(navigator, "languages", "get").mockReturnValue([language]),
+      vi.spyOn(navigator, "language", "get").mockReturnValue(language),
+    );
+  };
+
   beforeEach(async () => {
     await db.preferences.delete(LANGUAGE_PREFERENCE_KEY);
     await db.preferences.delete(TIME_ZONE_PREFERENCE_KEY);
@@ -28,6 +35,7 @@ describe("language preferences", () => {
   });
 
   afterEach(async () => {
+    preferenceMocks.splice(0).forEach((mock) => mock.mockRestore());
     await db.preferences.delete(LANGUAGE_PREFERENCE_KEY);
     await db.preferences.delete(TIME_ZONE_PREFERENCE_KEY);
     await i18n.changeLanguage(DEFAULT_LANGUAGE);
@@ -40,11 +48,6 @@ describe("language preferences", () => {
     expect(normalizeSupportedLanguage("ja-JP")).toBeUndefined();
   });
 
-  it("detects the first supported browser language and falls back to Spanish", () => {
-    expect(detectSupportedLanguage(["ja-JP", "fr-CA", "en-US"])).toBe("fr");
-    expect(detectSupportedLanguage(["ja-JP", "ko-KR"])).toBe("es");
-  });
-
   it("applies and persists an explicit language choice without localStorage", async () => {
     await setLanguagePreference("de");
 
@@ -53,30 +56,54 @@ describe("language preferences", () => {
     expect(await loadPreference(LANGUAGE_PREFERENCE_KEY)).toBe("de");
   });
 
-  it("hydrates a saved language before considering browser detection", async () => {
+  it("hydrates an explicit saved language independently of the browser language", async () => {
+    mockBrowserLanguage("fr-FR");
     await savePreference(LANGUAGE_PREFERENCE_KEY, "pt");
 
-    await expect(initializeLanguagePreference(["fr-FR"])).resolves.toBe("pt");
+    await expect(initializeLanguagePreference()).resolves.toBe("pt");
     expect(getCurrentLanguage()).toBe("pt");
     expect(document.documentElement.lang).toBe("pt");
   });
 
-  it("uses browser detection when no saved preference exists", async () => {
-    await expect(initializeLanguagePreference(["fr-FR"])).resolves.toBe("fr");
-    expect(getCurrentLanguage()).toBe("fr");
-    expect(document.documentElement.lang).toBe("fr");
+  it.each(["es-MX", "fr-FR", "ja-JP"])("starts in English without a saved preference for a %s browser", async (language) => {
+    mockBrowserLanguage(language);
+
+    expect(DEFAULT_LANGUAGE).toBe("en");
+    await expect(initializeLanguagePreference()).resolves.toBe("en");
+    expect(getCurrentLanguage()).toBe("en");
+    expect(document.documentElement.lang).toBe("en");
+    expect(await loadPreference(LANGUAGE_PREFERENCE_KEY)).toBeUndefined();
+  });
+
+  it("falls back to English when the saved preference is unsupported", async () => {
+    await savePreference(LANGUAGE_PREFERENCE_KEY, "ja-JP");
+    mockBrowserLanguage("es-MX");
+
+    await expect(initializeLanguagePreference()).resolves.toBe("en");
+    expect(getCurrentLanguage()).toBe("en");
+    expect(document.documentElement.lang).toBe("en");
+  });
+
+  it("falls back to English when preference storage is unavailable", async () => {
+    preferenceMocks.push(vi.spyOn(db.preferences, "get").mockRejectedValueOnce(new Error("Storage unavailable")));
+    mockBrowserLanguage("fr-FR");
+
+    await expect(initializeLanguagePreference()).resolves.toBe("en");
+    expect(getCurrentLanguage()).toBe("en");
+    expect(document.documentElement.lang).toBe("en");
   });
 
   it("exposes language changes to preferences UI consumers", async () => {
     const { result } = renderHook(() => useLanguagePreference());
 
-    await act(async () => { await result.current.changeLanguage("en"); });
+    await act(async () => { await result.current.changeLanguage("es"); });
 
-    expect(result.current.language).toBe("en");
+    expect(result.current.language).toBe("es");
     expect(result.current.languageOptions.map(({ code }) => code)).toEqual(["en", "es", "fr", "de", "pt"]);
   });
 
   it("changes the complete interface language from Preferences", async () => {
+    await setLanguagePreference("es");
     const user = userEvent.setup();
     render(createElement(SettingsScreen));
 
@@ -89,6 +116,7 @@ describe("language preferences", () => {
   });
 
   it("edits and persists the user time zone from Preferences", async () => {
+    await setLanguagePreference("es");
     const user = userEvent.setup();
     render(createElement(SettingsScreen));
 

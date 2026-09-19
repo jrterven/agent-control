@@ -47,8 +47,11 @@ test("ofrece recuperación visible si el bundle no puede iniciar y conserva Inde
   await page.route("**/assets/*.js", (route) => route.abort());
   await page.goto("/chats", { waitUntil: "domcontentloaded" });
 
-  await expect(page.getByText("La app no pudo iniciar. Tus borradores locales se conservarán.")).toBeVisible();
-  const repair = page.getByRole("button", { name: "Reparar y recargar" });
+  // No application bundle ran, so the stored Spanish preference has not been
+  // restored. Recovery must agree with the English document's initial language.
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  await expect(page.getByText("The app could not start. Your local drafts will be preserved.")).toBeVisible();
+  const repair = page.getByRole("button", { name: "Repair and reload" });
   await expect(repair).toBeVisible();
 
   await writeBootRecoveryMarker(page);
@@ -67,6 +70,7 @@ test("reactiva la recuperación tras un fallo fatal posterior al montaje", async
 
   await page.evaluate(() => window.dispatchEvent(new Event("agent-control:fatal")));
 
+  await expect(page.locator("html")).toHaveAttribute("lang", "es");
   await expect(page.getByText("La app no pudo iniciar. Tus borradores locales se conservarán.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Reparar y recargar" })).toBeVisible();
 });

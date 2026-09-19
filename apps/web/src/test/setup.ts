@@ -1,10 +1,16 @@
 import "@testing-library/jest-dom/vitest";
 import "fake-indexeddb/auto";
-import "../i18n";
-import { afterEach, vi } from "vitest";
+import i18n from "../i18n";
+import { afterEach, beforeEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 
 afterEach(() => cleanup());
+
+beforeEach(async () => {
+  // Interface fixtures select Spanish explicitly; first-visit defaults are tested separately.
+  await i18n.changeLanguage("es");
+  document.documentElement.lang = "es";
+});
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
