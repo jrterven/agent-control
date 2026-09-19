@@ -43,6 +43,7 @@ class LocalPeer:
         self.sender = None
         self.socket = None
         self.ws = None
+        self.requests = []
         self.thread = threading.Thread(target=self.serve, daemon=True)
 
     async def activate(self):
@@ -66,6 +67,8 @@ class LocalPeer:
                 reader = FrameReader()
                 welcome = reader.feed(ws.receive_bytes())
                 assert welcome["gatewayId"] == self.runtime.gateway_id
+                assert set(self.runtime.providers) <= set(welcome["profiles"])
+                self.runtime.profile_transfer_supported = welcome.get("capabilities", {}).get("profileTransferV1") is True
                 self.socket = SocketAdapter(ws)
                 self.client.portal.call(self.activate)
                 self.ready.set()
@@ -74,6 +77,7 @@ class LocalPeer:
                     if message is None:
                         continue
                     if message["type"] == "request":
+                        self.requests.append(message)
                         response = self.client.portal.call(self.runtime.execute, message)
                         if self.runtime.websocket is self.socket:
                             for frame in frames(response):
@@ -245,3 +249,148 @@ def test_shared_profile_can_be_deleted_through_another_shared_manager(attached, 
         return
     assert deleted.status_code == 200, deleted.text
     assert "z-new-agent" not in {row["technicalName"] for row in client.get("/api/v1/bootstrap").json()["profiles"]}
+
+
+@pytest.fixture
+def transfer_peers(setup, tmp_path, monkeypatch):
+    """Two real owner-paired sockets; only the native Hermes adapter is synthetic."""
+    from types import SimpleNamespace
+    app, client, headers, _ = setup
+    peers = []
+    try:
+        for label in ("source", "destination"):
+            authorization = authorize(client)
+            view = approve(client, headers, authorization)
+            credentials = client.post("/api/v1/connectors/device/token", json={"deviceCode": authorization["deviceCode"]}).json()
+
+            async def initialize(directory=tmp_path / label, credentials=credentials):
+                return ConnectorRuntime(directory, {"server": "https://control.test", "gatewayId": credentials["gatewayId"],
+                    "profiles": ["selected"], "restUrl": "http://127.0.0.1:9119", "wsUrl": "ws://127.0.0.1:9119/api/ws",
+                    "sourceSha": HERMES_0212_SHA, "hermesHome": str(directory)}, {"hermesToken": "local-only"}, AuditedLocalProvider)
+            runtime = client.portal.call(initialize)
+            monkeypatch.setattr(runtime, "_background_snapshot", lambda profile, stored_session_id=None: {
+                "available": True, "complete": True, "activeCount": 0, "pendingDeliveryCount": 0,
+                "tasks": [], "observedAt": datetime.now(timezone.utc).isoformat()})
+            peer = LocalPeer(client, runtime, credentials["accessToken"])
+            peer.start()
+            peers.append(SimpleNamespace(runtime=runtime, peer=peer, credentials=credentials, view=view))
+        client.portal.call(app.state.warm_capabilities_once)
+        source = peers[0]
+        created = client.post("/api/v1/profiles", json={"gatewayId": source.credentials["gatewayId"],
+            "technicalName": "control-dev", "displayName": "Control dev", "description": "A synthetic transfer test agent."}, headers=mutate(headers))
+        assert created.status_code == 201, created.text
+        yield app, client, headers, peers
+    finally:
+        for item in reversed(peers):
+            item.peer.close()
+            client.portal.call(item.runtime.ledger.close)
+
+
+@pytest.mark.parametrize("private_collision", [False, True])
+def test_native_archive_transfer_crosses_real_connector_wire_and_persists_only_confirmed_sharing(transfer_peers, private_collision):
+    import io
+    import os
+    import tarfile
+    from unittest.mock import AsyncMock
+    from agent_control_connector.storage import read_json
+    from hermes_client import ProviderConnection
+    from hermes_client.types import HermesProfile
+    from hermes_control_api.remote_provider import RemoteProvider, ProfileTransferNotImported
+
+    app, client, headers, peers = transfer_peers
+    source, destination = peers
+    source_manager = source.runtime.providers["selected"]
+    destination_manager = destination.runtime.providers["selected"]
+    payload = os.urandom(1024 * 1024 + 97)  # Forces multiple binary protocol chunks.
+    exported = io.BytesIO()
+    with tarfile.open(fileobj=exported, mode="w:gz") as archive:
+        root = tarfile.TarInfo("control-dev")
+        root.type = tarfile.DIRTYPE
+        archive.addfile(root)
+        for name, content in {"control-dev/SOUL.md": b"Synthetic control-dev", "control-dev/state.db": payload,
+                              "control-dev/.env": b"API_KEY=local-source-secret"}.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+
+    async def export_archive(name, path):
+        assert name == "control-dev"
+        path.write_bytes(exported.getvalue())
+        path.chmod(0o600)
+
+    async def import_archive(name, path):
+        assert name == "control-dev"
+        with tarfile.open(path) as archive:
+            assert "control-dev/.env" not in archive.getnames()
+            assert archive.extractfile("control-dev/state.db").read() == payload
+        result = HermesProfile(name=name, display_name="Control dev")
+        destination_manager._created_profiles[name] = result
+        return result
+
+    source_manager.export_profile_archive_to = AsyncMock(side_effect=export_archive)
+    destination_manager.import_profile_archive_from = AsyncMock(side_effect=import_archive)
+    private = HermesProfile(name="control-dev", display_name="Private existing agent")
+    if private_collision:
+        destination_manager._created_profiles["control-dev"] = private
+    registry = app.state.connector_registry
+    remote_source = RemoteProvider(ProviderConnection(source.runtime.gateway_id, "selected", "connector://source", "connector://source"), registry)
+    remote_destination = RemoteProvider(ProviderConnection(destination.runtime.gateway_id, "selected", "connector://destination", "connector://destination"), registry)
+
+    async def transfer_profile():
+        assert "connector.profileTransferV1" in (await remote_source.capabilities()).features
+        assert "connector.profileTransferV1" in (await remote_destination.capabilities()).features
+        return await remote_source.transfer_profile_to(remote_destination, name="control-dev")
+
+    if private_collision:
+        with pytest.raises(ProfileTransferNotImported):
+            client.portal.call(transfer_profile)
+        destination_manager.import_profile_archive_from.assert_not_called()
+        assert destination_manager._created_profiles["control-dev"] is private
+        assert "control-dev" not in destination.runtime.providers
+        assert "control-dev" not in destination.runtime.config["profiles"]
+        assert {profile.name for profile in client.portal.call(remote_destination.list_profiles)} == {"selected"}
+        with app.state.session_factory() as db:
+            assert db.scalar(select(ProfileRef.id).where(ProfileRef.gateway_id == destination.runtime.gateway_id,
+                                                        ProfileRef.profile_name == "control-dev")) is None
+        assert "profile_import_finish" not in {request["operation"] for request in destination.peer.requests}
+        return
+
+    imported = client.portal.call(transfer_profile)
+    assert imported.name == "control-dev"
+    source_manager.export_profile_archive_to.assert_awaited_once()
+    destination_manager.import_profile_archive_from.assert_awaited_once()
+    assert "control-dev" in {profile.name for profile in client.portal.call(source_manager.list_profiles)}
+    assert "control-dev" in destination.runtime.providers
+    assert "control-dev" in read_json(destination.runtime.directory / "config.json")["profiles"]
+    with app.state.session_factory() as db:
+        source_connector = db.get(Connector, source.view["id"])
+        destination_connector = db.get(Connector, destination.view["id"])
+        assert destination_connector.owner_id == source_connector.owner_id
+        assert "control-dev" in destination_connector.profiles
+    assert "control-dev" in registry.get(destination.runtime.gateway_id).profiles
+    requests = [request for item in peers for request in item.peer.requests if request["operation"].startswith("profile_")]
+    assert {request["operation"] for request in requests} == {"profile_export", "profile_archive_read", "profile_import_begin",
+        "profile_archive_write", "profile_import_finish", "profile_archive_cleanup"}
+    writes = [request for request in destination.peer.requests if request["operation"] == "profile_archive_write"]
+    assert len(writes) > 1
+    assert max(len(request["kwargs"]["chunk"]) for request in writes) <= 1024 * 1024
+    assert len({request["operationId"] for request in writes}) == len(writes)
+    # Replaying a real wire mutation reuses the durable receipt, even after the
+    # archive payload has been cleaned; it must never issue another native import.
+    finish = next(request for request in destination.peer.requests if request["operation"] == "profile_import_finish")
+
+    async def replay_finish():
+        return await registry.get(destination.runtime.gateway_id).call("selected", "profile_import_finish", (),
+            finish["kwargs"], operation_id=finish["operationId"])
+    assert client.portal.call(replay_finish).name == "control-dev"
+    destination_manager.import_profile_archive_from.assert_awaited_once()
+    # A new socket gets its grants from the database and the local persisted
+    # config, rather than an in-memory temporary allowance in ConnectorLink.
+    destination.peer.close()
+    replacement = LocalPeer(client, destination.runtime, destination.credentials["accessToken"])
+    replacement.start()
+    try:
+        assert "control-dev" in registry.get(destination.runtime.gateway_id).profiles
+        assert {profile.name for profile in client.portal.call(remote_destination.list_profiles)} == {"selected", "control-dev"}
+    finally:
+        replacement.close()

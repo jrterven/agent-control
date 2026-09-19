@@ -10,6 +10,7 @@ from collections import OrderedDict, defaultdict
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import quote
 from urllib.parse import urlsplit
@@ -325,6 +326,12 @@ class HermesProvider(Protocol):
         display_name: str,
     ) -> HermesProfile: ...
     async def delete_profile(self, name: str) -> None: ...
+    async def profile_export(self, name: str, transfer_id: str) -> dict[str, Any]: ...
+    async def profile_archive_read(self, transfer_id: str, offset: int, length: int) -> bytes: ...
+    async def profile_import_begin(self, name: str, transfer_id: str, size: int, sha256: str) -> dict[str, Any]: ...
+    async def profile_archive_write(self, transfer_id: str, offset: int, chunk: bytes) -> dict[str, Any]: ...
+    async def profile_import_finish(self, transfer_id: str) -> HermesProfile: ...
+    async def profile_archive_cleanup(self, transfer_id: str) -> None: ...
     async def transfer_profile_to(
         self,
         destination: HermesProvider,
@@ -1575,6 +1582,74 @@ class HermesGatewayProvider:
             if source_path is not None:
                 await self._cleanup_profile_transfer_file(source_path)
             await destination._cleanup_profile_transfer_file(destination_path)
+
+    async def export_profile_archive_to(self, name: str, archive: Path) -> None:
+        """Export to a connector-owned local file; paths never cross the cloud wire."""
+        source_path = None
+        try:
+            raw = await self._profile_mutation_json(
+                "POST", f"/api/profiles/{quote(name, safe='')}/export",
+                json={"output": "", "extra_files": {}},
+            )
+            exported = _bounded_profile_mutation_response(raw, label="profile export")
+            source_path = _bounded_remote_path(exported.get("archive"), label="exported profile archive")
+            async with self.http.stream("GET", "/api/files/download", params={"path": source_path},
+                                        timeout=_PROFILE_MUTATION_TIMEOUT) as response:
+                response.raise_for_status()
+                declared = response.headers.get("content-length")
+                if declared is not None and not 0 < int(declared) <= _MAX_PROFILE_ARCHIVE_BYTES:
+                    raise UpstreamPayloadTooLarge("Hermes profile archive is too large or empty")
+                size = 0
+                with archive.open("xb") as output:
+                    archive.chmod(0o600)
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if size > _MAX_PROFILE_ARCHIVE_BYTES:
+                            raise UpstreamPayloadTooLarge("Hermes profile archive is too large")
+                        output.write(chunk)
+                if not size:
+                    raise UpstreamPayloadError("Hermes profile archive is empty")
+        finally:
+            if source_path is not None:
+                await self._cleanup_profile_transfer_file(source_path)
+
+    async def import_profile_archive_from(self, name: str, archive: Path) -> HermesProfile:
+        """Upload one verified connector-owned archive, then import without retries."""
+        if not 0 < archive.stat().st_size <= _MAX_PROFILE_ARCHIVE_BYTES:
+            raise UpstreamPayloadTooLarge("Hermes profile archive is too large or empty")
+        destination_path = await self._profile_transfer_destination_path(uuid4().hex)
+        try:
+            boundary = f"agent-control-{uuid4().hex}"
+
+            async def multipart_body():
+                yield _multipart_profile_prefix(boundary, destination_path)
+                size = 0
+                with archive.open("rb") as source:
+                    while chunk := source.read(1024 * 1024):
+                        size += len(chunk)
+                        if size > _MAX_PROFILE_ARCHIVE_BYTES:
+                            raise UpstreamPayloadTooLarge("Hermes profile archive is too large")
+                        yield chunk
+                yield _multipart_profile_suffix(boundary)
+
+            raw = await self._profile_mutation_json(
+                "POST", "/api/files/upload-stream",
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}, content=multipart_body(),
+            )
+            uploaded = _bounded_profile_mutation_response(raw, label="profile archive upload")
+            if _bounded_remote_path(uploaded.get("path"), label="uploaded archive") != destination_path:
+                raise UpstreamPayloadError("Hermes returned a different profile archive path")
+            raw = await self._profile_mutation_json(
+                "POST", "/api/profiles/import", json={"archive": destination_path, "name": name},
+            )
+            imported = _bounded_profile_mutation_response(raw, label="profile import")
+            if imported.get("name") != name:
+                raise UpstreamPayloadError("Hermes returned a different imported profile identity")
+            if imported.get("path") is not None:
+                _bounded_remote_path(imported["path"], label="imported profile")
+            return HermesProfile(name=name, display_name=name, status="unknown")
+        finally:
+            await self._cleanup_profile_transfer_file(destination_path)
 
     async def list_background_tasks(self, stored_session_id: str | None = None) -> dict[str, Any]:
         # Native delegation.status is process-global and subagent.list is an

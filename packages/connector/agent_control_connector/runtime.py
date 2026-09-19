@@ -30,7 +30,8 @@ from .tls import cloud_ssl_context
 from .media_install import media_profiles
 from .background_install import background_profiles
 from .background_tasks import retired_profile, snapshot as background_snapshot, unavailable as background_unavailable
-from hermes_client.compatibility import HERMES_0212_SHA
+from hermes_client.compatibility import HERMES_0212_SHA, PROFILE_TRANSFER_PAIRS, profile_contract_supports
+from .profile_transfer import ProfileImportRefused, ProfileTransfers, TRANSFER_OPERATIONS
 from .hermes_media_plugin import queue_directory, validate_policy
 from .visual_media import acknowledge as acknowledge_media, next_publication, profile_home
 
@@ -88,6 +89,8 @@ class ConnectorRuntime:
         self.background_states: dict[str, dict] = {}
         self.background_install_at = 0.0
         self.background_fingerprints: dict[tuple[str, str], str] = {}
+        self.profile_transfer_supported = False
+        self.profile_transfers = ProfileTransfers(self)
 
     async def _background_events(self, profile: str, snapshot: dict):
         if (self.websocket is None or not self.background_tasks_supported
@@ -301,6 +304,13 @@ class ConnectorRuntime:
                     raise ValueError("INVALID_OPERATION")
             else:
                 validate_arguments(operation, args, kwargs)
+            if operation in TRANSFER_OPERATIONS:
+                if not self.profile_transfer_supported or (self.config.get("sourceSha"), self.config.get("sourceSha")) not in PROFILE_TRANSFER_PAIRS:
+                    raise ValueError("INVALID_OPERATION")
+                if operation == "profile_export":
+                    name = args[0] if args else kwargs.get("name")
+                    if name not in self.providers or name == "default":
+                        raise ValueError("INVALID_OPERATION")
             for arg in (*args, *kwargs.values()):
                 if isinstance(arg, SessionRoute) and (arg.gateway_id != self.gateway_id or arg.profile_name != profile):
                     raise ValueError("INVALID_OPERATION")
@@ -345,7 +355,9 @@ class ConnectorRuntime:
                 # returns its receipt, while an existing unshared agent stays private.
                 if kwargs["name"] in {item.name for item in await provider.list_profiles()}:
                     raise ValueError("INVALID_OPERATION")
-            if operation == "list_background_tasks":
+            if operation in TRANSFER_OPERATIONS:
+                result = await self.profile_transfers.execute(operation, profile, args, kwargs)
+            elif operation == "list_background_tasks":
                 # Drain safety needs the native ledger even before installation
                 # or after opt-out. Availability only controls the chat feature.
                 result = await asyncio.to_thread(self._background_snapshot, profile,
@@ -357,8 +369,8 @@ class ConnectorRuntime:
                 result = read_media(history, Path(self.config["hermesHome"]), profile, args[0], args[1])
             else:
                 result = await getattr(provider, operation)(*args, **kwargs)
-            if operation == "create_profile":
-                name = kwargs["name"]
+            if operation in {"create_profile", "profile_import_finish"}:
+                name = kwargs["name"] if operation == "create_profile" else result.name
                 if result.name != name:
                     raise ValueError("INVALID_OPERATION")
                 self.config["profiles"] = list(dict.fromkeys([*self.config["profiles"], name]))
@@ -382,13 +394,20 @@ class ConnectorRuntime:
             if operation == "list_profiles":
                 result = [item for item in result if item.name in self.providers]
             if operation == "capabilities":
-                result = replace(result, methods=result.methods - {"profiles.transfer", "profiles.export", "profiles.import"},
-                                 features=result.features - {"profiles.transfer"})
+                if (self.profile_transfer_supported
+                        and profile_contract_supports(self.config.get("sourceSha"), result.version, "profiles.transfer")
+                        and {"profiles.export", "profiles.import", "profiles.transfer"} <= result.methods):
+                    result = replace(result, features=result.features | {"connector.profileTransferV1"})
+                else:
+                    result = replace(result, methods=result.methods - {"profiles.transfer", "profiles.export", "profiles.import"},
+                                     features=result.features - {"profiles.transfer", "connector.profileTransferV1"})
             response["result"] = result
         except RuntimeGenerationChanged:
             response["error"] = "RUNTIME_GENERATION_CHANGED"
         except SessionHistoryNotFound:
             response["error"] = "SESSION_HISTORY_NOT_FOUND"
+        except ProfileImportRefused:
+            response["error"] = "PROFILE_TRANSFER_IMPORT_REFUSED"
         except (ConnectionError, OSError, TimeoutError):
             response["error"] = "PROMPT_DELIVERY_UNKNOWN" if operation == "submit_prompt" and ledger_key else "CONNECTOR_DELIVERY_UNKNOWN" if ledger_key else "CONNECTOR_OFFLINE"
         except (ValueError, TypeError, LookupError):
@@ -432,6 +451,7 @@ class ConnectorRuntime:
                 await asyncio.to_thread(self._save_media_policy)
             self.visual_media_supported = visual_media_supported
             self.background_tasks_supported = isinstance(capabilities, dict) and capabilities.get("backgroundTasksV1") is True
+            self.profile_transfer_supported = isinstance(capabilities, dict) and capabilities.get("profileTransferV1") is True
             # Preserve known sessions to emit authoritative empty inventories
             # after reconnect, while forcing a first snapshot on this transport.
             self.background_fingerprints = {key: "" for key in self.background_fingerprints}

@@ -66,6 +66,7 @@ from .models import (
     ProfileRef,
     RealtimeTicket,
     SessionLink,
+    VisualMedia,
     User,
     Workspace,
     utc_now,
@@ -73,7 +74,7 @@ from .models import (
 from .notifications import completion_for_session
 from .providers import authoritative_provider_read
 from .realtime import persist_normalized_event
-from .remote_provider import BackgroundTasksBusyError
+from .remote_provider import BackgroundTasksBusyError, ProfileTransferNotImported, ProfileTransferOutcomeUnknown
 from .schemas import (
     AutomationCreate,
     GatewayCreate,
@@ -407,6 +408,7 @@ class AppServices:
     session_factory: Any | None = None
     push_notifications: Any | None = None
     visual_media: Any | None = None
+    connector_registry: Any | None = None
     profile_creation_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     profile_route_locks: dict[tuple[str, str], ProfileMutationBarrier] = field(
         default_factory=dict
@@ -2045,6 +2047,21 @@ class ProfileService:
             destination_gateway = db.get(Gateway, destination_gateway_id)
             if destination_gateway is None or not destination_gateway.enabled:
                 raise NotFoundError("Destination gateway was not found or is disabled")
+            if self.services.settings.deployment_mode == "cloud":
+                from .connector_models import Connector
+                source_gateway = db.get(Gateway, source_gateway_id)
+                for gateway in (source_gateway, destination_gateway):
+                    if gateway is None or gateway.owner_id != actor.id or not gateway.enabled:
+                        raise NotFoundError("Gateway was not found")
+                    connector = db.scalar(select(Connector).where(
+                        Connector.gateway_id == gateway.id, Connector.owner_id == actor.id,
+                        Connector.revoked_at.is_(None),
+                    ))
+                    if gateway.transport_kind != "connector" or connector is None:
+                        raise NotFoundError("An active personal connector was not found")
+                    registry = self.services.connector_registry
+                    if registry is None or not registry.online(gateway.id):
+                        raise ConflictError("Connect both computers before moving an agent")
 
             sessions, automations, runs, operations = self._route_rows(db, target)
             self._assert_route_idle(sessions, runs, operations)
@@ -2088,6 +2105,11 @@ class ProfileService:
                     methods=frozenset({"profiles.delete", "profiles.import"}),
                 )
             )
+            if self.services.settings.deployment_mode == "cloud" and any(
+                "connector.profileTransferV1" not in capabilities.features
+                for capabilities in (source_capabilities, destination_capabilities)
+            ):
+                raise ConflictError("Update both connectors before moving an agent")
             source_sha = trusted_gateway_source_sha(
                 db, self.services, source_gateway_id
             )
@@ -2235,6 +2257,13 @@ class ProfileService:
                     await source_manager.transfer_profile_to(
                         destination_manager, name=target.profile_name
                     )
+                except ProfileTransferNotImported:
+                    # Archive/transfer refusal proves no owned import exists.
+                    # A concurrent native profile with this name is not ours.
+                    destination_imported = False
+                    raise
+                except ProfileTransferOutcomeUnknown:
+                    raise
                 except Exception as exc:
                     if not await self._profile_is_present(
                         destination_manager, target.profile_name
@@ -2404,6 +2433,16 @@ class ProfileService:
                         current_session.last_sequence = 0
                         current_session.status = "idle"
                         current_session.initial_history_pending = False
+                        current_session.background_tasks = {}
+                        current_session.active_turn_id = None
+                    # Published image identities and object keys remain stable;
+                    # their authorization route follows the same owned profile.
+                    for media in db.scalars(select(VisualMedia).where(
+                        VisualMedia.owner_id == actor.id,
+                        VisualMedia.gateway_id == source_gateway_id,
+                        VisualMedia.profile_name == technical_name,
+                    )).all():
+                        media.gateway_id = destination_gateway_id
                     for automation_id in automation_ids:
                         current_automation = db.get(Automation, automation_id)
                         if current_automation is None:
@@ -2505,11 +2544,10 @@ class ProfileService:
                 except asyncio.CancelledError:
                     cutover_cancelled = True
                     post_cutover_warnings = await cutover_task
-            except ProfileDeleteOutcomeUnknown as exc:
-                # Neither route is authoritative until source absence can be
-                # proven. Do not publish the unconfirmed destination cutover;
-                # retain the imported copy and leave both cron inventories
-                # paused so an operator can reconcile without duplicate runs.
+            except (ProfileDeleteOutcomeUnknown, ProfileTransferOutcomeUnknown) as exc:
+                # Import or source deletion cannot yet be proven. Keep the
+                # source route, preserve any destination copy, and leave cron
+                # paused for reconciliation without duplicate runs.
                 db.rollback()
                 try:
                     audit(
@@ -2539,7 +2577,9 @@ class ProfileService:
                     destination_gateway_id, technical_name
                 )
                 raise UpstreamUnavailableError(
-                    "Destination is verified and paused, but source deletion needs operator reconciliation"
+                    "Profile import needs operator reconciliation; the source has been preserved"
+                    if isinstance(exc, ProfileTransferOutcomeUnknown)
+                    else "Destination is verified and paused, but source deletion needs operator reconciliation"
                 ) from exc
             except BaseException as exc:
                 db.rollback()
@@ -2566,6 +2606,10 @@ class ProfileService:
                     raise UpstreamUnavailableError(
                         "Agent move failed and rollback needs operator attention"
                     ) from rollback_errors[0]
+                if isinstance(exc, ProfileTransferNotImported):
+                    raise ConflictError(
+                        "The agent was not imported. Check both connections and that the destination name is free; the source was preserved."
+                    ) from exc
                 raise
 
             warnings = [

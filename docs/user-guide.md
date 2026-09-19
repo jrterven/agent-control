@@ -319,9 +319,10 @@ Open **Agents → View configuration → Manage agent**. The section appears onl
 when the selected profile and gateway advertise the exact audited native
 Hermes operations and the operator policy allows them.
 
-- **Move agent** exports the native profile, streams it directly between the
-  two private gateways without storing the archive in Agent Control, verifies
-  the destination, and only then deletes the source. The Control agent ID,
+- **Move agent** exports the native profile, transfers it to the selected
+  gateway, verifies the destination, and only then deletes the source. Private
+  gateways stream the archive directly; cloud connectors relay it through
+  Agent Control in typed chunks of at most 1 MiB. The Control agent ID,
   avatar, voice preference, chats, workspace membership, session IDs and cron
   references remain the same.
 - **Delete agent** permanently removes the native Hermes profile and then its
@@ -333,6 +334,14 @@ clarification or automation run cannot be moved or deleted. New chat, cron and
 configuration writes share the same lifecycle lock, so work cannot start in
 the middle of an export or cutover.
 
+In cloud mode, both computers must belong to your account, remain connected,
+and run updated connectors that advertise `connector.profileTransferV1`.
+Older connectors must be updated before moving agents. Both gateways also
+need compatible, audited Hermes revisions and verified export/import and
+rollback support. An offline gateway cannot be selected; if it disconnects
+before confirmation, reconnect it or choose another compatible destination.
+Keep both computers connected while the dialog shows the transfer in progress.
+
 Hermes profile export preserves identity, configuration, memory, sessions,
 skills, plugins and cron state, but deliberately excludes `.env`, `auth.json`
 and secret-shaped text. The destination uses its own gateway credentials.
@@ -340,10 +349,12 @@ Machine-local paths, external files, MCP binaries and CLI tools must already
 exist or be adjusted on the destination. Archives larger than 100 MiB are
 rejected before import.
 
-Compatibility is fail-closed and directional. Native delete is currently
-audited for Hermes 0.20.6 revisions `9978706e…` and `4209d371…`; moving an
-agent is narrower and currently requires `4209d371…` on both source and
-destination. Hermes 0.20.5 can recreate a deleted profile from its cron
+Compatibility is fail-closed and directional. Native delete is audited for
+Hermes 0.20.6 revisions `9978706e…` and `4209d371…`, and 0.21.2 revision
+`939e45c9…`. Moving an agent is narrower: supported pairs are
+`4209d371… → 4209d371…` and `939e45c9… → 939e45c9…`. Mixed-version transfers
+are disabled because the Hermes history schema differs. Hermes 0.20.5 can
+recreate a deleted profile from its cron
 heartbeat, so Agent Control intentionally hides delete and transfer for that
 revision. Upgrade Hermes through its own maintenance process before using an
 affected gateway; deploying Agent Control never updates Hermes.

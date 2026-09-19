@@ -367,7 +367,7 @@ function AgentManagementSection({
     <div className="agent-lifecycle-actions">
       <section>
         <span><ArrowsLeftRight weight="duotone" /></span>
-        <div><h3>{t("adminConfig.management.moveTitle")}</h3><p>{destinations.length ? t("adminConfig.management.moveDescription") : t("adminConfig.management.noDestination")}</p></div>
+        <div><h3>{t("adminConfig.management.moveTitle")}</h3><p>{gateway?.status !== "connected" ? t("adminConfig.management.moveConnectionRequired") : destinations.length ? t("adminConfig.management.moveDescription") : t("adminConfig.management.noDestination")}</p></div>
         <Button variant="secondary" disabled={!canMove || busy} onClick={onMove}>{t("adminConfig.management.move")}</Button>
       </section>
       <section className="is-danger">
@@ -418,7 +418,7 @@ export function AdminConfigScreen({ header }: { header: React.ReactNode }) {
       .map((item) => item.gatewayId),
   ), [profiles]);
   const destinationGateways = useMemo(() => gateways.filter((item) => (
-    item.id !== profile?.gatewayId && importGatewayIds.has(item.id)
+    item.id !== profile?.gatewayId && item.status === "connected" && importGatewayIds.has(item.id)
   )), [gateways, importGatewayIds, profile?.gatewayId]);
   const mutationsBlocked = offline || demoMode;
   const canDeleteProfile = Boolean(
@@ -433,6 +433,7 @@ export function AdminConfigScreen({ header }: { header: React.ReactNode }) {
     && !protectedProfile
     && !lifecycleBlocked
     && !mutationsBlocked
+    && gateway?.status === "connected"
     && destinationGateways.length
     && hasLifecycleCapability(profile, "profileDelete")
     && hasLifecycleCapability(profile, "profileExport")
@@ -454,6 +455,7 @@ export function AdminConfigScreen({ header }: { header: React.ReactNode }) {
   const [lifecycleWarnings, setLifecycleWarnings] = useState<string[]>([]);
   const [moveOpen, setMoveOpen] = useState(false);
   const [moveGatewayId, setMoveGatewayId] = useState("");
+  const moveDestinationAvailable = destinationGateways.some((item) => item.id === moveGatewayId);
   const [moveConfirmation, setMoveConfirmation] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
@@ -596,7 +598,7 @@ export function AdminConfigScreen({ header }: { header: React.ReactNode }) {
   };
 
   const moveAgent = async () => {
-    if (!profile || !canMoveProfile || busy || moveConfirmation !== profile.technicalName || !moveGatewayId) return;
+    if (!profile || !canMoveProfile || busy || moveConfirmation !== profile.technicalName || !moveDestinationAvailable) return;
     const source = profile;
     setBusy(true);
     setError("");
@@ -707,11 +709,12 @@ export function AdminConfigScreen({ header }: { header: React.ReactNode }) {
         <h2 id="agent-move-title">{t("adminConfig.management.moveDialogTitle", { name: profile.displayName })}</h2>
         <p id="agent-move-description">{t("adminConfig.management.moveDialogDescription")}</p>
         {lifecycleDialogError ? <p id="agent-move-error" className="form-error agent-lifecycle-dialog-error" role="alert"><WarningCircle /> {lifecycleDialogError}</p> : null}
-        <form onSubmit={(event) => { event.preventDefault(); void moveAgent(); }}>
-          <label className="hc-field"><span className="hc-field__label">{t("adminConfig.management.destinationGateway")}</span><select autoFocus value={moveGatewayId} onChange={(event) => { setMoveGatewayId(event.target.value); setLifecycleDialogError(""); }} disabled={busy}>{destinationGateways.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <p role="status" aria-live="polite">{busy ? t("adminConfig.management.movingProgress") : gateway?.status !== "connected" || !moveDestinationAvailable ? t("adminConfig.management.moveConnectionRequired") : null}</p>
+        <form aria-busy={busy} onSubmit={(event) => { event.preventDefault(); void moveAgent(); }}>
+          <label className="hc-field"><span className="hc-field__label">{t("adminConfig.management.destinationGateway")}</span><select autoFocus value={moveDestinationAvailable ? moveGatewayId : ""} onChange={(event) => { setMoveGatewayId(event.target.value); setLifecycleDialogError(""); }} disabled={busy}>{!moveDestinationAvailable ? <option value="" disabled>{t("adminConfig.management.destinationUnavailable")}</option> : null}{destinationGateways.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <div className="agent-lifecycle-disclosure"><ShieldCheck weight="duotone" /><p>{t("adminConfig.management.transferDisclosure")}</p></div>
           <label className="hc-field"><span className="hc-field__label">{t("adminConfig.management.typeToConfirm", { name: profile.technicalName })}</span><input className="hc-input" autoComplete="off" spellCheck={false} value={moveConfirmation} onChange={(event) => { setMoveConfirmation(event.target.value); setLifecycleDialogError(""); }} disabled={busy} /></label>
-          <div><Button type="button" variant="ghost" disabled={busy} onClick={closeMove}>{t("adminConfig.management.cancel")}</Button><Button type="submit" variant="primary" disabled={busy || !moveGatewayId || moveConfirmation !== profile.technicalName} leadingIcon={<ArrowsLeftRight />}>{busy ? t("adminConfig.management.moving") : t("adminConfig.management.confirmMove")}</Button></div>
+          <div><Button type="button" variant="ghost" disabled={busy} onClick={closeMove}>{t("adminConfig.management.cancel")}</Button><Button type="submit" variant="primary" disabled={busy || !canMoveProfile || !moveDestinationAvailable || moveConfirmation !== profile.technicalName} leadingIcon={<ArrowsLeftRight />}>{busy ? t("adminConfig.management.moving") : t("adminConfig.management.confirmMove")}</Button></div>
         </form>
       </Panel>
     </div> : null}

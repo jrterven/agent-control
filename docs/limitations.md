@@ -24,10 +24,18 @@
   running. Hermes 0.20.5 (`791e2ae…`) is excluded because a stale heartbeat can
   recreate a deleted profile directory; it is not accepted as either side of
   a move because destination rollback also requires safe deletion. Native
-  delete is currently audited for Hermes 0.20.6 revisions `9978706e…` and
-  `4209d371…`; transfer is narrower and the only audited move pair is
-  `4209d371… → 4209d371…`. Profile archives are limited to 100 MiB and exclude
+  delete is audited for Hermes 0.20.6 revisions `9978706e…` and `4209d371…`,
+  and 0.21.2 revision `939e45c9…`. Transfer is narrower: audited pairs are
+  `4209d371… → 4209d371…` and `939e45c9… → 939e45c9…`; mixed-version moves
+  are disabled. Profile archives are limited to 100 MiB and exclude
   credentials; local files and tools are not made portable automatically.
+- Cloud agent transfer requires two connected computers owned by the same
+  account and updated connectors on both sides advertising
+  `connector.profileTransferV1`, in addition to the audited Hermes pair.
+  Older connectors must be updated first. Archives travel through typed
+  chunks of at most 1 MiB. Identity, configuration and history are preserved,
+  and the source is deleted only after destination verification. The
+  `default` profile and agents with active work cannot move.
 - Hermes 0.20.6 can keep a same-name import hidden when that technical profile
   name was previously deleted on the destination because the native import
   does not clear its `.deleted-profiles` tombstone. Control fails verification,

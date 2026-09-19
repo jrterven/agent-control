@@ -319,3 +319,81 @@ async def test_in_memory_and_failover_transfer_keep_source_until_explicit_delete
 
     await source_failover.close()
     await destination_failover.close()
+
+
+@pytest.mark.asyncio
+async def test_connector_native_archive_helpers_bound_paths_and_cleanup(tmp_path):
+    source = HermesGatewayProvider(_connection("source", token="source-secret"))
+    destination = HermesGatewayProvider(_connection("destination", token="destination-secret"))
+    content = b"native-profile-archive"
+    calls = []
+    destination_path = ""
+
+    async def source_handler(request):
+        calls.append(("source", request.method, request.url.path))
+        assert request.headers["X-Hermes-Session-Token"] == "source-secret"
+        if request.method == "POST":
+            assert request.url.path == "/api/profiles/control-dev/export"
+            assert json.loads(await request.aread()) == {"output": "", "extra_files": {}}
+            return httpx.Response(200, json={"ok": True, "archive": "/exports/control-dev.tar.gz"})
+        if request.method == "GET":
+            assert request.url.params["path"] == "/exports/control-dev.tar.gz"
+            return httpx.Response(200, content=content)
+        assert json.loads(await request.aread()) == {"path": "/exports/control-dev.tar.gz", "recursive": False}
+        return httpx.Response(200, json={"ok": True})
+
+    async def destination_handler(request):
+        nonlocal destination_path
+        calls.append(("destination", request.method, request.url.path))
+        assert request.headers["X-Hermes-Session-Token"] == "destination-secret"
+        if request.method == "GET":
+            return httpx.Response(200, json={"locked_root": "/managed"})
+        body = await request.aread()
+        if request.url.path == "/api/files/upload-stream":
+            destination_path = body.split(b'name="path"\r\n\r\n')[1].split(b"\r\n")[0].decode()
+            assert destination_path.startswith("/managed/.agent-control-transfers/")
+            assert content in body and b"source-secret" not in body
+            return httpx.Response(200, json={"ok": True, "path": destination_path})
+        if request.url.path == "/api/profiles/import":
+            assert json.loads(body) == {"archive": destination_path, "name": "control-dev"}
+            return httpx.Response(200, json={"ok": True, "name": "control-dev"})
+        assert json.loads(body) == {"path": destination_path, "recursive": False}
+        return httpx.Response(200, json={"ok": True})
+
+    await _use_transport(source, source_handler)
+    await _use_transport(destination, destination_handler)
+    try:
+        local = tmp_path / "private.tar.gz"
+        await source.export_profile_archive_to("control-dev", local)
+        assert local.read_bytes() == content
+        assert local.stat().st_mode & 0o777 == 0o600
+        assert (await destination.import_profile_archive_from("control-dev", local)).name == "control-dev"
+    finally:
+        await source.close()
+        await destination.close()
+    assert calls == [("source", "POST", "/api/profiles/control-dev/export"),
+        ("source", "GET", "/api/files/download"), ("source", "DELETE", "/api/files"),
+        ("destination", "GET", "/api/files"), ("destination", "POST", "/api/files/upload-stream"),
+        ("destination", "POST", "/api/profiles/import"), ("destination", "DELETE", "/api/files")]
+
+
+@pytest.mark.asyncio
+async def test_connector_native_export_size_failure_still_cleans(tmp_path, monkeypatch):
+    provider = HermesGatewayProvider(_connection("source"))
+    cleanup = []
+    monkeypatch.setattr(provider_module, "_MAX_PROFILE_ARCHIVE_BYTES", 8)
+
+    async def handler(request):
+        if request.method == "POST":
+            return httpx.Response(200, json={"ok": True, "archive": "/exports/owned.tar.gz"})
+        if request.method == "GET":
+            return httpx.Response(200, content=b"123456789")
+        cleanup.append(json.loads(await request.aread()))
+        return httpx.Response(200, json={"ok": True})
+    await _use_transport(provider, handler)
+    try:
+        with pytest.raises(UpstreamPayloadTooLarge):
+            await provider.export_profile_archive_to("control-dev", tmp_path / "private.tar.gz")
+    finally:
+        await provider.close()
+    assert cleanup == [{"path": "/exports/owned.tar.gz", "recursive": False}]

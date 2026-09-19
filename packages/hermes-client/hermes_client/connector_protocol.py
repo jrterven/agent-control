@@ -37,6 +37,7 @@ READ_OPERATIONS = frozenset({
     "history_readonly", "list_automations", "list_automation_runs", "list_models",
     "get_config", "get_soul", "get_memory", "list_skills", "list_toolsets",
     "list_mcp_servers", "list_channels", "get_usage", "list_secrets", "media", "list_background_tasks",
+    "profile_archive_read",
 })
 WRITE_OPERATIONS = frozenset({
     "create_profile", "delete_profile", "create_session", "resume_session",
@@ -47,6 +48,8 @@ WRITE_OPERATIONS = frozenset({
     "toggle_skill", "toggle_toolset", "create_mcp_server", "delete_mcp_server",
     "toggle_mcp_server", "test_mcp_server", "update_channel", "test_channel", "set_secret",
     "delete_secret",
+    "profile_export", "profile_import_begin", "profile_archive_write",
+    "profile_import_finish", "profile_archive_cleanup",
 })
 OPERATIONS = READ_OPERATIONS | WRITE_OPERATIONS
 

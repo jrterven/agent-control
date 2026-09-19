@@ -14,8 +14,16 @@ The public deployment now accepts registration without invitations, capped at
 20 Google identities including existing accounts. Other deployments default to
 `invite_only`; `open` must be configured explicitly. Both policies share the
 transactional enrollment limit, and existing active identities can sign in at
-capacity. Teams, billing, cloud-hosted runtimes and profile transfer between
-computers remain outside this beta.
+capacity. Teams, billing and cloud-hosted runtimes remain outside this beta.
+
+Profile transfer between two computers owned by the same account is supported
+when both are connected, both connectors advertise `connector.profileTransferV1`,
+and the exact Hermes revisions form an audited compatible pair. Older
+connectors must be updated before they can participate. The existing native
+lifecycle checks remain mandatory: the `default` profile cannot move, active
+work blocks transfer, and the source is removed only after the imported profile
+has been verified at the destination. Identity, configuration, history and
+Control route metadata are preserved; inference credentials are not copied.
 
 A native connector runs the existing Hermes adapter on the user's Linux or Mac
 host. It keeps Hermes on numeric loopback and establishes the cloud WSS link
@@ -23,6 +31,9 @@ outbound. Cloud never obtains a Hermes credential or an arbitrary local URL.
 Versioned typed operations carry bounded binary transfers; there is no generic
 TCP, HTTP, shell or filesystem proxy. A local profile selection remains
 authoritative even if a compromised cloud asks for additional profiles.
+Profile archives use typed chunks of at most 1 MiB and a total archive limit of
+100 MiB. The transfer channel is restricted to native profile export/import;
+it does not expose arbitrary paths on either computer.
 
 Pairing uses an expiring device code, authenticated browser review, a CSRF-bound
 confirmation and an individually revocable device credential. Conversations are

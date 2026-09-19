@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../lib/api";
@@ -130,6 +130,76 @@ describe("administración de perfil guiada por capacidades", () => {
     expect(screen.getByRole("button", { name: "Mover agente" })).toBeDisabled();
   });
 
+  it.each([0, 1])("does not move with an offline gateway %i even if its capabilities are cached", async (gatewayIndex) => {
+    const current = lifecycleBootstrap();
+    current.gateways[gatewayIndex].status = "offline";
+    useAppStore.getState().hydrateBootstrap(current);
+    const move = vi.spyOn(api, "moveProfile");
+    const user = userEvent.setup();
+
+    render(<ConfigScreen />);
+    await user.click(screen.getByRole("button", { name: "Administrar agente" }));
+
+    const button = screen.getByRole("button", { name: "Mover agente" });
+    expect(button).toBeDisabled();
+    await user.click(button);
+    expect(move).not.toHaveBeenCalled();
+  });
+
+  it("requires choosing again when the selected destination disconnects before confirmation", async () => {
+    const current = lifecycleBootstrap();
+    current.gateways.push({ ...current.gateways[1], id: "gateway-3", name: "Otro destino" });
+    current.profiles.push({ ...current.profiles[1], id: "profile-other-admin", gatewayId: "gateway-3" });
+    useAppStore.getState().hydrateBootstrap(current);
+    const move = vi.spyOn(api, "moveProfile");
+    const user = userEvent.setup();
+
+    render(<ConfigScreen />);
+    await user.click(screen.getByRole("button", { name: "Administrar agente" }));
+    await user.click(screen.getByRole("button", { name: "Mover agente" }));
+    const dialog = screen.getByRole("dialog", { name: "Mover a Control Dev" });
+    await user.type(within(dialog).getByLabelText("Escribe control-dev para confirmar"), "control-dev");
+    expect(within(dialog).getByLabelText("Gateway destino")).toHaveValue("gateway-2");
+
+    act(() => useAppStore.setState({ gateways: current.gateways.map((gateway) => gateway.id === "gateway-2" ? { ...gateway, status: "offline" } : gateway) }));
+
+    expect(within(dialog).getByLabelText("Gateway destino")).toHaveValue("");
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Mantén ambos equipos conectados");
+    expect(within(dialog).getByRole("button", { name: "Confirmar transferencia" })).toBeDisabled();
+    fireEvent.submit(dialog.querySelector("form")!);
+    expect(move).not.toHaveBeenCalled();
+    await user.selectOptions(within(dialog).getByLabelText("Gateway destino"), "gateway-3");
+    expect(within(dialog).getByRole("button", { name: "Confirmar transferencia" })).toBeEnabled();
+  });
+
+  it("announces an ongoing move and prevents closing or submitting the dialog twice", async () => {
+    const current = lifecycleBootstrap();
+    useAppStore.getState().hydrateBootstrap(current);
+    let finishMove!: (value: { warnings: string[] }) => void;
+    const move = vi.spyOn(api, "moveProfile").mockImplementation(() => new Promise((resolve) => { finishMove = resolve; }));
+    vi.spyOn(api, "bootstrap").mockResolvedValue({ ...current, profiles: [{ ...current.profiles[0], gatewayId: "gateway-2" }, current.profiles[1]] });
+    const user = userEvent.setup();
+
+    render(<ConfigScreen />);
+    await user.click(screen.getByRole("button", { name: "Administrar agente" }));
+    await user.click(screen.getByRole("button", { name: "Mover agente" }));
+    const dialog = screen.getByRole("dialog", { name: "Mover a Control Dev" });
+    await user.type(within(dialog).getByLabelText("Escribe control-dev para confirmar"), "control-dev");
+    await user.click(within(dialog).getByRole("button", { name: "Confirmar transferencia" }));
+
+    expect(dialog.querySelector("form")).toHaveAttribute("aria-busy", "true");
+    expect(within(dialog).getByRole("status")).toHaveAttribute("aria-live", "polite");
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Mantén ambos equipos conectados hasta que termine");
+    expect(within(dialog).getByRole("button", { name: "Cancelar" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Moviendo…" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(dialog).toBeInTheDocument();
+    fireEvent.submit(dialog.querySelector("form")!);
+    expect(move).toHaveBeenCalledTimes(1);
+    await act(async () => finishMove({ warnings: [] }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
   it("envía CSRF e idempotencia y limpia el valor write-only después de guardarlo", async () => {
     const privateValue = "PRIVATE-NEVER-RENDER";
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -165,15 +235,17 @@ describe("administración de perfil guiada por capacidades", () => {
 
   it("moves a profile only after exact confirmation and selects it on the destination gateway", async () => {
     const current = lifecycleBootstrap();
+    current.sessions = [{ id: "session-preserved", gatewayId: "gateway-1", profileName: "control-dev", profileId: "profile-1", storedSessionId: "stored-preserved", title: "Historial", preview: "", updatedAt: "ahora" }];
+    await db.drafts.put({ sessionId: "session-preserved", content: "keep this draft", updatedAt: Date.now() });
     useAppStore.getState().hydrateBootstrap(current);
     const movedProfile = {
       ...current.profiles[0],
-      id: "profile-1-moved",
       gatewayId: "gateway-2",
     };
     const next = {
       ...current,
       profiles: [current.profiles[1], movedProfile],
+      sessions: [{ ...current.sessions[0], gatewayId: "gateway-2" }],
     };
     const move = vi.spyOn(api, "moveProfile").mockResolvedValue({ warnings: ["Revisa las rutas locales"] });
     vi.spyOn(api, "bootstrap").mockResolvedValue(next);
@@ -196,6 +268,8 @@ describe("administración de perfil guiada por capacidades", () => {
     await waitFor(() => expect(move).toHaveBeenCalledWith("profile-1", "gateway-2", "control-dev", "csrf-test"));
     await waitFor(() => expect(useAppStore.getState().selectedProfileId).toBe(movedProfile.id));
     expect(useAppStore.getState().selectedGatewayId).toBe("gateway-2");
+    expect(useAppStore.getState().sessions[0]).toMatchObject({ id: "session-preserved", profileId: "profile-1", gatewayId: "gateway-2", storedSessionId: "stored-preserved" });
+    expect((await db.drafts.get("session-preserved"))?.content).toBe("keep this draft");
     expect(await screen.findByText("Revisa las rutas locales")).toBeInTheDocument();
   });
 

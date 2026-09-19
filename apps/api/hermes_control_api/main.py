@@ -261,6 +261,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         provider_pool=provider_pool,
         session_router=HermesSessionRouter(provider_pool),
         session_factory=session_factory,
+        connector_registry=connector_registry,
         push_notifications=push_notification_service,
     )
     prompt_reconciler = PromptHistoryReconciler(session_factory, service_container)

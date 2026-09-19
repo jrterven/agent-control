@@ -1241,8 +1241,6 @@ async def move_profile(
     user: User = Depends(current_agent_admin),
     db: Session = Depends(get_db),
 ) -> ProfileMoveView:
-    if services(request).settings.deployment_mode == "cloud":
-        raise HTTPException(status_code=403, detail="Moving agents is unavailable in the beta")
     return await ProfileService(services(request)).move(
         db, user, profile_id, payload
     )
