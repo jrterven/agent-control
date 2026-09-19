@@ -92,16 +92,40 @@ def test_probe_requires_exact_loaded_source_installation_and_live_process(tmp_pa
     receipt = json.loads((tmp_path / "plugins" / PLUGIN_NAME / "installation.json").read_text())
     marker = tmp_path / ".agent-control/background/runtime.json"
     marker.parent.mkdir(parents=True)
-    value = {**receipt, "pid": 100, "processIdentity": "started", "delegationAvailable": True}
+    value = {**receipt, "pid": 100, "processIdentity": "started", "delegationAvailable": True,
+        "profileDeliveryShim": install.DELIVERY_SHIM, "profileDeliveryMode": "tui-scoped"}
     marker.write_text(json.dumps(value))
     monkeypatch.setattr(install.os, "kill", lambda *_: None)
     monkeypatch.setattr(install, "process_identity", lambda _: "started")
     assert install.probe_profile(tmp_path)["state"] == "ready"
+    value.pop("profileDeliveryShim")
+    marker.write_text(json.dumps(value))
+    assert install.probe_profile(tmp_path)["state"] == "pendingActivation"
+    value["profileDeliveryShim"] = install.DELIVERY_SHIM
     value["installationId"] = "old"
     marker.write_text(json.dumps(value))
     assert install.probe_profile(tmp_path)["state"] == "pendingActivation"
     value["installationId"] = receipt["installationId"]
     value["processIdentity"] = "reused pid"
+    marker.write_text(json.dumps(value))
+    assert install.probe_profile(tmp_path)["state"] == "pendingActivation"
+
+
+def test_native_gateway_receipt_requires_explicit_current_delivery_mode(tmp_path, monkeypatch):
+    install.install_profile(tmp_path)
+    receipt = json.loads((tmp_path / "plugins" / PLUGIN_NAME / "installation.json").read_text())
+    marker = tmp_path / ".agent-control/background/runtime.json"
+    marker.parent.mkdir(parents=True)
+    value = {**receipt, "pid": 100, "processIdentity": "started", "delegationAvailable": True,
+        "profileDeliveryMode": "native-gateway", "profileDeliveryShim": None}
+    monkeypatch.setattr(install.os, "kill", lambda *_: None)
+    monkeypatch.setattr(install, "process_identity", lambda _: "started")
+    marker.write_text(json.dumps(value))
+    assert install.probe_profile(tmp_path)["state"] == "ready"
+    value["profileDeliveryMode"] = "tui-scoped"
+    marker.write_text(json.dumps(value))
+    assert install.probe_profile(tmp_path)["state"] == "pendingActivation"
+    value["profileDeliveryMode"] = None
     marker.write_text(json.dumps(value))
     assert install.probe_profile(tmp_path)["state"] == "pendingActivation"
 

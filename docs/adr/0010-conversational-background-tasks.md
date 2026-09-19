@@ -64,6 +64,21 @@ their following assistant replies carry `controlTurnOrigin` with the native
 delegation ID when present. Internal wakeup prompts are never rendered as user
 messages. The assistant's public response is the result shown to the user.
 
+Viewing that response is navigation, not a native delivery acknowledgement.
+The UI distinguishes a response awaiting delivery from a response already in
+history whose native confirmation is still pending. It never clears the native
+ledger merely because the user opened or scrolled to a response.
+
+The audited Serve notification thread does not inherit a profile context. Its
+completion claim and acknowledgement can therefore open the default profile's
+database even when the response is correctly written to another profile. The
+managed background plugin binds the owning session's Hermes home around the
+native notification dispatch, including its claim, admission, failure release
+and acknowledgement. This compatibility shim is limited to the audited native
+source; it does not replace delivery, replay completions or execute tasks.
+The profile binding is restored after success or failure, and the runtime
+receipt proves that the corrected dispatch is installed.
+
 There is no audited ID linking a live turn to a partial history row. On reopening
 mid-turn, the UI shows history and a running indicator until a verified terminal
 and history refresh, rather than guessing and duplicating partial output.

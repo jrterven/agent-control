@@ -11,7 +11,7 @@ from uuid import uuid4
 import yaml
 from hermes_client.compatibility import HERMES_0212_SHA
 
-from .hermes_background_plugin import PLUGIN_NAME, PLUGIN_VERSION, disabled, process_identity, string_list
+from .hermes_background_plugin import DELIVERY_SHIM, PLUGIN_NAME, PLUGIN_VERSION, disabled, process_identity, string_list
 from .background_tasks import retired_profile
 from .media_install import _read, _write
 from .visual_media import profile_home
@@ -75,8 +75,9 @@ def install_profile(home: Path) -> dict:
             known.append("delegation")
     changed = (yaml.safe_load(original) or {}) != config
     receipt = json.loads(_read(manifest)) if manifest.exists() else {}
-    if receipt.get("sha256") != digest or changed:
-        receipt = {"version": PLUGIN_VERSION, "sha256": digest, "installationId": uuid4().hex}
+    if receipt.get("sha256") != digest or receipt.get("sourceSha") != HERMES_0212_SHA or changed:
+        receipt = {"version": PLUGIN_VERSION, "sha256": digest, "sourceSha": HERMES_0212_SHA,
+            "installationId": uuid4().hex}
     if not entry.exists() or _read(entry) != source:
         _write(entry, source)
     if not manifest.exists() or json.loads(_read(manifest)) != receipt:
@@ -105,7 +106,8 @@ def probe_profile(home: Path) -> dict:
     expected = hashlib.sha256(plugin_source()).hexdigest()
     try:
         receipt = json.loads(_read(installation))
-        if receipt.get("sha256") != expected or hashlib.sha256(_read(installation.with_name("__init__.py"))).hexdigest() != expected:
+        if (receipt.get("sha256") != expected or receipt.get("sourceSha") != HERMES_0212_SHA
+                or hashlib.sha256(_read(installation.with_name("__init__.py"))).hexdigest() != expected):
             return {"state": "updateRequired"}
     except (OSError, ValueError):
         return {"state": "notInstalled"}
@@ -115,7 +117,14 @@ def probe_profile(home: Path) -> dict:
         if (runtime.get("sha256") == expected and runtime.get("installationId") == receipt.get("installationId")
                 and type(pid) is int and pid > 1):
             os.kill(pid, 0)
-            if runtime.get("processIdentity") == process_identity(pid):
+            delivery_ready = (
+                runtime.get("profileDeliveryMode") == "tui-scoped"
+                and runtime.get("profileDeliveryShim") == DELIVERY_SHIM
+            ) or (
+                runtime.get("profileDeliveryMode") == "native-gateway"
+                and runtime.get("profileDeliveryShim") is None
+            )
+            if runtime.get("processIdentity") == process_identity(pid) and delivery_ready:
                 return {"state": "ready" if runtime.get("delegationAvailable") is True else "disabled",
                     "version": PLUGIN_VERSION}
     except (OSError, ValueError, subprocess.SubprocessError):

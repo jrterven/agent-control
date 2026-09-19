@@ -49,7 +49,8 @@ class CopiedHermesPluginRuntimeTest(unittest.TestCase):
             entry = home / "plugins/agent-control-background/__init__.py"
             entry.parent.mkdir(parents=True)
             shutil.copyfile(BACKGROUND_SOURCE, entry)
-            entry.with_name("installation.json").write_text(json.dumps({"installationId": "test-installation"}))
+            entry.with_name("installation.json").write_text(json.dumps({"installationId": "test-installation",
+                "sourceSha": "939e45c91d751fadd94dcd1b873ac3cb44846213"}))
             spec = importlib.util.spec_from_file_location("isolated_background_plugin", entry)
             plugin = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(plugin)
@@ -85,6 +86,14 @@ class CopiedHermesPluginRuntimeTest(unittest.TestCase):
                 self.assertTrue(marker["delegationAvailable"])
                 self.assertEqual(marker["sha256"], hashlib.sha256(entry.read_bytes()).hexdigest())
                 self.assertEqual(marker["installationId"], "test-installation")
+                self.assertIsNone(marker["profileDeliveryShim"])  # CLI cannot prove Serve activation.
+                self.assertIsNone(marker["profileDeliveryMode"])
+                gateway = types.ModuleType("gateway.run")
+                with patch.dict(sys.modules, {"gateway.run": gateway}), patch.dict("os.environ", {"_HERMES_GATEWAY": "1"}):
+                    plugin.register(context)
+                gateway_marker = json.loads((home / ".agent-control/background/runtime.json").read_text())
+                self.assertEqual(gateway_marker["profileDeliveryMode"], "native-gateway")
+                self.assertIsNone(gateway_marker["profileDeliveryShim"])
                 config_value["agent"] = {"disabled_toolsets": ["delegation"]}
                 self.assertIsNone(hook(platform="tui"))
                 del config_value["agent"]

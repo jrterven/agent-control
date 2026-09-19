@@ -1,7 +1,7 @@
 import axe from "axe-core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BackgroundTaskList } from "../components/BackgroundTasks";
+import { BackgroundTaskList, BackgroundTasks, taskResultAnchor } from "../components/BackgroundTasks";
 import { applyRealtimeEvent, rehydrateBackgroundTasks, rehydrateSession, stopPrompt, submitPrompt } from "../hooks";
 import { api } from "../lib/api";
 import { normalizeBackgroundTasks } from "../lib/backgroundTasks";
@@ -195,5 +195,57 @@ describe("background task conversation state", () => {
     expect(screen.getByRole("link", { name: "Ver respuesta" })).toHaveAttribute("href", "#task-result-result");
     expect(screen.queryByText("Resultado público")).not.toBeInTheDocument();
     expect((await axe.run(container)).violations).toHaveLength(0);
+  });
+
+  it("does not mistake incomplete or unrelated assistant messages for a task response", () => {
+    const taskOrigin = { kind: "background_task" as const, taskId: snapshot.items[0].id };
+    const messages: ChatMessage[] = [
+      { ...human, id: "ordinary", streaming: false },
+      { ...human, id: "still-writing", controlTurnOrigin: taskOrigin },
+      { ...human, id: "empty", content: " \n ", streaming: false, controlTurnOrigin: taskOrigin },
+      { ...human, id: "tools-only", content: "", tools: [{ id: "lookup", name: "lookup", label: "Lookup", summary: "Progress", status: "completed" }], streaming: false, controlTurnOrigin: taskOrigin },
+      { ...human, id: "another-task", streaming: false, controlTurnOrigin: { ...taskOrigin, taskId: "other-task" } },
+    ];
+    render(<BackgroundTaskList snapshot={{ ...snapshot, activeCount: 0, pendingDeliveryCount: 1, items: [{ ...snapshot.items[0], state: "completed" }] }} messages={messages} />);
+    fireEvent.click(screen.getByText("Tareas de esta conversación"));
+    expect(screen.queryByRole("link", { name: "Ver respuesta" })).not.toBeInTheDocument();
+    expect(screen.getByText("Respuesta pendiente de entrega.")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("1 entregas pendientes");
+  });
+
+  it.each(["completed", "failed", "cancelled"] as const)("keeps the finished response available for a %s task when a later stream is incomplete", (state) => {
+    const result: ChatMessage = { ...human, id: "finished", streaming: false, controlTurnOrigin: { kind: "background_task", taskId: snapshot.items[0].id } };
+    render(<BackgroundTaskList snapshot={{ ...snapshot, activeCount: 0, items: [{ ...snapshot.items[0], state, deliveryState: "delivered" }] }} messages={[result, { ...result, id: "later-partial", streaming: true }]} />);
+    fireEvent.click(screen.getByText("Tareas de esta conversación"));
+    expect(screen.getByRole("link", { name: "Ver respuesta" })).toHaveAttribute("href", "#task-result-finished");
+    expect(screen.queryByText("Confirmación de entrega pendiente.")).not.toBeInTheDocument();
+  });
+
+  it("allows a finished public audio response without requiring text", () => {
+    const audio: ChatMessage = { ...human, id: "audio-response", streaming: false, content: "", media: [{ id: "audio", kind: "audio", mediaType: "audio/mpeg" }], controlTurnOrigin: { kind: "background_task", taskId: snapshot.items[0].id } };
+    render(<BackgroundTaskList snapshot={snapshot} messages={[audio]} />);
+    fireEvent.click(screen.getByText("Tareas de esta conversación"));
+    expect(screen.getByRole("link", { name: "Ver respuesta" })).toHaveAttribute("href", "#task-result-audio-response");
+  });
+
+  it("navigates to the response without acknowledging or clearing native pending delivery", () => {
+    const result: ChatMessage = { ...human, id: "public-result", streaming: false, controlTurnOrigin: { kind: "background_task", taskId: snapshot.items[0].id } };
+    useAppStore.getState().setBackgroundTasks("conversation", { ...snapshot, activeCount: 0, pendingDeliveryCount: 1, items: [{ ...snapshot.items[0], state: "completed" }] });
+    useAppStore.setState({ messages: [result] });
+    const nativeSnapshot = useAppStore.getState().backgroundTasksBySession.conversation;
+    const submit = vi.spyOn(api, "submitPrompt");
+    render(<><BackgroundTasks sessionId="conversation" /><article id={taskResultAnchor(result.id)} tabIndex={-1}>Resultado público</article></>);
+    const target = screen.getByText("Resultado público");
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(target, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    fireEvent.click(screen.getByText("Tareas de esta conversación"));
+    fireEvent.click(screen.getByRole("link", { name: "Ver respuesta" }));
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
+    expect(target).toHaveFocus();
+    expect(useAppStore.getState().backgroundTasksBySession.conversation).toBe(nativeSnapshot);
+    expect(nativeSnapshot.pendingDeliveryCount).toBe(1);
+    expect(nativeSnapshot.items[0].deliveryState).toBe("pending");
+    expect(screen.getByText("Confirmación de entrega pendiente.")).toBeVisible();
+    expect(submit).not.toHaveBeenCalled();
   });
 });

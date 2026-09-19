@@ -18,7 +18,11 @@ export function BackgroundTaskList({ snapshot, messages }: { snapshot: Backgroun
     return () => window.clearInterval(timer);
   }, [hasActive]);
   if (!snapshot.items.length) return null;
-  const results = new Map(messages.filter((message) => message.role === "assistant" && message.controlTurnOrigin?.taskId)
+  // Viewing a response is navigation, not acknowledgement of native delivery.
+  // A stream or tool-only progress entry is not the task's finished response.
+  const results = new Map(messages.filter((message) => message.role === "assistant"
+    && message.controlTurnOrigin?.kind === "background_task" && message.controlTurnOrigin.taskId
+    && !message.streaming && (message.content.trim() || message.media?.some((media) => media.kind === "audio") || message.emailReferences?.length))
     .map((message) => [message.controlTurnOrigin!.taskId, message]));
   return <details className="background-tasks">
     <summary>
@@ -37,6 +41,9 @@ export function BackgroundTaskList({ snapshot, messages }: { snapshot: Backgroun
           <div className="background-tasks__task">
             <strong>{t("backgroundTasks.task")} <small>· {task.id.slice(0, 8)}</small></strong>
             <span>{t(`backgroundTasks.states.${task.state}`)} · {t("backgroundTasks.elapsed", { minutes })}</span>
+            {task.deliveryState === "pending" && ["completed", "failed", "cancelled"].includes(task.state)
+              ? <span>{t(result ? "backgroundTasks.confirmationPending" : "backgroundTasks.delivering")}</span>
+              : null}
           </div>
           {result ? <a href={`#${taskResultAnchor(result.id)}`} onClick={(event) => {
             const target = document.getElementById(taskResultAnchor(result.id));
