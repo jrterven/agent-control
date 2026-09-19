@@ -335,7 +335,7 @@ configuration writes share the same lifecycle lock, so work cannot start in
 the middle of an export or cutover.
 
 In cloud mode, both computers must belong to your account, remain connected,
-and run updated connectors that advertise `connector.profileTransferV2`.
+and run updated connectors that advertise `connector.profileTransferV3`.
 Older connectors must be updated before moving or deleting agents; this keeps
 the local and cloud sharing lists consistent after confirmed deletion. Both cloud computers
 need Hermes 0.21.2 revision `939e45c9…` and verified export/import and
@@ -353,6 +353,17 @@ the destination. This also affects moving an agent back to its original
 computer. Control rejects that destination without changing its files or
 deletion marker; use another computer or arrange native Hermes maintenance
 before retrying.
+
+For Hermes 0.21.2, both management servers must run under the `default`
+profile. Updated connectors check this through Hermes before native export,
+import and deletion, including another check immediately before deletion.
+A server launched with `hermes -p control-dev serve --isolated`, for example,
+cannot safely move its own base profile. An operator must first stop active
+work and change that server's persistent launch to `hermes -p default serve`,
+preserving its loopback address, port and authentication. Agent Control's
+managed installer pins this selection explicitly, even when the CLI's saved
+active profile is different. Existing Hermes services are not rewritten
+automatically.
 
 Hermes profile export preserves identity, configuration, memory, sessions,
 skills, plugins and cron state, but deliberately excludes `.env`, `auth.json`

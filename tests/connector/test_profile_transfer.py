@@ -14,6 +14,7 @@ from agent_control_connector.runtime import ConnectorRuntime
 from agent_control_connector.storage import read_json
 from hermes_client import InMemoryHermesProvider
 from hermes_client.compatibility import HERMES_0212_SHA
+from hermes_client.provider import ProfileManagementServerRequired
 from hermes_client.types import CapabilitySet, HermesProfile
 
 
@@ -74,6 +75,48 @@ async def stage_import(runtime, content, name="control-dev"):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["profile_export", "profile_import_begin"])
+async def test_bound_server_refuses_before_any_transfer_stage(runtimes, operation):
+    source, destination = runtimes
+    runtime = source if operation == "profile_export" else destination
+    provider = runtime.providers["manager"]
+    provider.assert_default_management_server = AsyncMock(side_effect=ProfileManagementServerRequired())
+    provider.export_profile_archive_to = AsyncMock()
+    identifier = uuid4().hex
+    args = ("control-dev", identifier) if operation == "profile_export" else ("control-dev", identifier, 1, "a" * 64)
+    response = await runtime.execute(message(operation, *args))
+    assert response["error"] == "HERMES_DEFAULT_SERVER_REQUIRED"
+    assert not runtime.profile_transfers._path(identifier).exists()
+    provider.export_profile_archive_to.assert_not_called()
+    provider.import_profile_archive_from.assert_not_called()
+    assert runtime.config["profiles"] == (["manager", "control-dev"] if runtime is source else ["manager"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("late", [False, True])
+async def test_finish_default_server_refusal_is_determinate_and_never_reimports(runtimes, late):
+    _, runtime = runtimes
+    identifier = await stage_import(runtime, archive_bytes())
+    provider = runtime.providers["manager"]
+    if late:
+        # The native adapter may detect a different server after uploading the
+        # archive but before dispatching its native import POST.
+        provider.import_profile_archive_from.side_effect = ProfileManagementServerRequired()
+    else:
+        provider.assert_default_management_server = AsyncMock(side_effect=ProfileManagementServerRequired())
+    request = message("profile_import_finish", identifier)
+    response = await runtime.execute(request)
+    assert response["error"] == "PROFILE_TRANSFER_DEFAULT_SERVER_REQUIRED"
+    assert (await runtime.execute(request))["error"] == response["error"]
+    assert provider.import_profile_archive_from.await_count == (1 if late else 0)
+    meta = read_json(runtime.profile_transfers._path(identifier) / "meta.json")
+    assert meta["state"] == ("refused" if late else "receiving")
+    assert runtime.config["profiles"] == ["manager"]
+    assert "control-dev" not in runtime.providers
+    assert {p.name for p in runtime.native_profiles} == {"manager"}
+
+
+@pytest.mark.asyncio
 async def test_chunk_transfer_excludes_credentials_preserves_source_and_replays_small_receipts(runtimes):
     source, destination = runtimes
     payload = os.urandom(transfer.MAX_CHUNK_BYTES + 100)
@@ -128,7 +171,7 @@ async def test_chunk_transfer_excludes_credentials_preserves_source_and_replays_
 async def test_transfer_capability_requires_new_cloud_and_audited_runtime(runtimes):
     runtime = runtimes[0]
     result = (await runtime.execute(message("capabilities")))["result"]
-    assert "connector.profileTransferV2" in result.features
+    assert "connector.profileTransferV3" in result.features
     assert "connector.profileTransferV1" not in result.features
     runtime.profile_transfer_supported = False
     result = (await runtime.execute(message("capabilities")))["result"]
@@ -412,6 +455,6 @@ async def test_cloud_transfer_does_not_advertise_or_dispatch_older_private_contr
     runtime.providers["manager"].export_profile_archive_to = AsyncMock()
     exposed = (await runtime.execute(message("capabilities")))["result"]
     assert "profiles.transfer" not in exposed.methods
-    assert "connector.profileTransferV2" not in exposed.features
+    assert "connector.profileTransferV3" not in exposed.features
     assert (await runtime.execute(message("profile_export", "control-dev", uuid4().hex)))["error"] == "INVALID_OPERATION"
     runtime.providers["manager"].export_profile_archive_to.assert_not_called()

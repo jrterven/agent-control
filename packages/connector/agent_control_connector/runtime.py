@@ -21,7 +21,7 @@ from websockets.exceptions import InvalidStatus
 from hermes_client import HermesGatewayProvider, ProviderConnection
 from hermes_client.connector_protocol import (FrameReader, MAX_FRAME_BYTES, OPERATIONS, VERSION, WRITE_OPERATIONS,
                                              ProtocolError, decode_message, encode_message, send_message, validate_arguments)
-from hermes_client.provider import HermesProvider, RuntimeGenerationChanged, SessionHistoryNotFound
+from hermes_client.provider import HermesProvider, ProfileManagementServerRequired, RuntimeGenerationChanged, SessionHistoryNotFound
 from hermes_client.types import CapabilitySet, NormalizedEvent, PromptAttachment, SessionRoute
 from . import __version__
 from .media import project_media, read_media
@@ -31,7 +31,7 @@ from .media_install import media_profiles
 from .background_install import background_profiles
 from .background_tasks import retired_profile, snapshot as background_snapshot, unavailable as background_unavailable
 from hermes_client.compatibility import HERMES_0212_SHA, profile_contract_supports
-from .profile_transfer import ProfileImportRefused, ProfileTransfers, TRANSFER_OPERATIONS
+from .profile_transfer import ProfileImportManagementServerRequired, ProfileImportRefused, ProfileTransfers, TRANSFER_OPERATIONS
 from .hermes_media_plugin import queue_directory, validate_policy
 from .visual_media import acknowledge as acknowledge_media, next_publication, profile_home
 
@@ -384,6 +384,9 @@ class ConnectorRuntime:
                     return response
                 if operation == "delete_profile" and previous is None and args[0] not in self.providers:
                     raise ValueError("INVALID_OPERATION")
+                if (operation == "delete_profile" and previous is None
+                        and self.config.get("sourceSha") == HERMES_0212_SHA):
+                    await provider.assert_default_management_server()
                 if (self.config.get("sourceSha") == HERMES_0212_SHA
                         and operation in {"delete_profile", "delete_session"}
                         and previous is None):
@@ -457,15 +460,19 @@ class ConnectorRuntime:
                         and self.config.get("sourceSha") == HERMES_0212_SHA
                         and profile_contract_supports(self.config.get("sourceSha"), result.version, "profiles.transfer")
                         and {"profiles.export", "profiles.import", "profiles.transfer"} <= result.methods):
-                    result = replace(result, features=(result.features - {"connector.profileTransferV1"}) | {"connector.profileTransferV2"})
+                    result = replace(result, features=(result.features - {"connector.profileTransferV1", "connector.profileTransferV2"}) | {"connector.profileTransferV3"})
                 else:
                     result = replace(result, methods=result.methods - {"profiles.transfer", "profiles.export", "profiles.import"},
-                                     features=result.features - {"profiles.transfer", "connector.profileTransferV1", "connector.profileTransferV2"})
+                                     features=result.features - {"profiles.transfer", "connector.profileTransferV1", "connector.profileTransferV2", "connector.profileTransferV3"})
             response["result"] = result
         except RuntimeGenerationChanged:
             response["error"] = "RUNTIME_GENERATION_CHANGED"
         except SessionHistoryNotFound:
             response["error"] = "SESSION_HISTORY_NOT_FOUND"
+        except ProfileImportManagementServerRequired:
+            response["error"] = "PROFILE_TRANSFER_DEFAULT_SERVER_REQUIRED"
+        except ProfileManagementServerRequired:
+            response["error"] = "HERMES_DEFAULT_SERVER_REQUIRED"
         except ProfileImportRefused:
             response["error"] = "PROFILE_TRANSFER_IMPORT_REFUSED"
         except (ConnectionError, OSError, TimeoutError):
@@ -515,7 +522,7 @@ class ConnectorRuntime:
                 await asyncio.to_thread(self._save_media_policy)
             self.visual_media_supported = visual_media_supported
             self.background_tasks_supported = isinstance(capabilities, dict) and capabilities.get("backgroundTasksV1") is True
-            self.profile_transfer_supported = isinstance(capabilities, dict) and capabilities.get("profileTransferV2") is True
+            self.profile_transfer_supported = isinstance(capabilities, dict) and capabilities.get("profileTransferV3") is True
             # Preserve known sessions to emit authoritative empty inventories
             # after reconnect, while forcing a first snapshot on this transport.
             self.background_fingerprints = {key: "" for key in self.background_fingerprints}

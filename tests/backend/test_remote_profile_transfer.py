@@ -7,9 +7,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from hermes_client import ProviderConnection
+from hermes_client.provider import ProfileManagementServerRequired
 from hermes_client.types import CapabilitySet, HermesProfile
 from hermes_control_api.remote_provider import (
-    ConnectorRegistry, ProfileTransferNotImported, ProfileTransferOutcomeUnknown,
+    ConnectorRegistry, ConnectorLink, ProfileTransferNotImported, ProfileTransferOutcomeUnknown,
+    ProfileTransferManagementServerRequired,
     RemoteProvider,
 )
 
@@ -24,7 +26,7 @@ class TransferPeer:
         self.tamper = None
         self.caps = CapabilitySet(
             methods=frozenset({"profiles.export", "profiles.import", "profiles.transfer"}),
-            features=frozenset({"connector.profileTransferV2", "profiles.transfer"}),
+            features=frozenset({"connector.profileTransferV3", "profiles.transfer"}),
         )
 
     async def call(self, profile, operation, args, kwargs, *, operation_id=None):
@@ -110,6 +112,33 @@ async def test_import_disconnect_preserves_uncertainty_and_explicit_refusal_prov
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["profile_export", "profile_import_begin", "profile_import_finish"])
+async def test_server_root_refusal_keeps_actionable_known_not_imported_outcome(relay, operation):
+    source, destination, source_peer, destination_peer = relay
+    peer = source_peer if operation == "profile_export" else destination_peer
+    refusal = ProfileTransferManagementServerRequired() if operation == "profile_import_finish" else ProfileManagementServerRequired()
+    peer.failure = operation, refusal
+    with pytest.raises(ProfileTransferManagementServerRequired, match="hermes -p default serve"):
+        await source.transfer_profile_to(destination, name="Control.dev")
+    assert not any(call[0] == "delete_profile" for call in source_peer.calls + destination_peer.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code,expected", [
+    ("HERMES_DEFAULT_SERVER_REQUIRED", ProfileManagementServerRequired),
+    ("PROFILE_TRANSFER_DEFAULT_SERVER_REQUIRED", ProfileTransferManagementServerRequired),
+])
+async def test_root_refusal_wire_codes_are_typed_and_never_include_native_detail(code, expected):
+    link = ConnectorLink("gateway", frozenset({"manager"}), AsyncMock(), AsyncMock())
+    future = asyncio.get_running_loop().create_future()
+    link.pending["test"] = future
+    link.request_profiles["test"] = "manager"
+    link.response({"id": "test", "profile": "manager", "error": code})
+    with pytest.raises(expected, match="hermes -p default serve"):
+        await future
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation,tamper", [
     ("profile_export", lambda r: {**r, "size": 100 * 1024 * 1024 + 1}),
     ("profile_export", lambda r: {**r, "size": True}),
@@ -136,7 +165,7 @@ async def test_import_identity_mismatch_is_uncertain_not_safe_to_delete(relay):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("old_features", [frozenset({"profiles.transfer"}), frozenset({"profiles.transfer", "connector.profileTransferV1"})])
+@pytest.mark.parametrize("old_features", [frozenset({"profiles.transfer"}), frozenset({"profiles.transfer", "connector.profileTransferV1"}), frozenset({"profiles.transfer", "connector.profileTransferV2"})])
 async def test_old_connector_cannot_advertise_cloud_transfer_or_delete(relay, old_features):
     source, destination, source_peer, peer = relay
     peer.caps = replace(peer.caps, methods=peer.caps.methods | {"profiles.delete"}, features=old_features)

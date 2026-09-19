@@ -17,7 +17,7 @@ transactional enrollment limit, and existing active identities can sign in at
 capacity. Teams, billing and cloud-hosted runtimes remain outside this beta.
 
 Profile transfer between two computers owned by the same account is supported
-when both are connected, both connectors advertise `connector.profileTransferV2`,
+when both are connected, both connectors advertise `connector.profileTransferV3`,
 and both run audited Hermes 0.21.2 revision `939e45c9…`. Older
 connectors must be updated before they can participate. The existing native
 lifecycle checks remain mandatory: the `default` profile cannot move, active
@@ -25,6 +25,12 @@ work blocks transfer, and the source is removed only after the imported profile
 has been verified at the destination. Transfer configuration uses a bounded,
 secret-free native YAML snapshot so model routing survives the move;
 dashboard-normalized configuration is never written as a replacement document.
+Before native export, import or deletion, the connector verifies that the
+management server reports `default` as its current base profile. The check is
+repeated immediately before deletion; moving the profile that hosts a named
+management server could otherwise leave the service bound to deleted data.
+Managed launchers explicitly pin `-p default` rather than following the CLI's
+saved active profile. External service configuration remains operator-owned.
 Confirmed deletions also retire the connector's shared-profile grant, including
 during a verified rollback. A surviving shared profile is required to reconcile
 deletion even if its response is lost. Identity, configuration, history and

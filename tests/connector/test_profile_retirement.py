@@ -12,6 +12,7 @@ from agent_control_connector.runtime import ConnectorRuntime
 from agent_control_connector.storage import atomic_json, read_json
 from hermes_client import InMemoryHermesProvider
 from hermes_client.compatibility import HERMES_0212_SHA
+from hermes_client.provider import ProfileManagementServerRequired
 from hermes_client.connector_protocol import frames
 from hermes_client.types import HermesProfile, NormalizedEvent
 
@@ -52,6 +53,23 @@ def runtime(tmp_path):
         provider.delete_profile = AsyncMock(side_effect=delete)
     yield value
     value.ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_delete_refused_before_ledger_or_native_mutation_when_server_is_profile_bound(runtime):
+    provider = runtime.providers["default"]
+    provider.assert_default_management_server = AsyncMock(side_effect=ProfileManagementServerRequired())
+    original = runtime.config["profiles"].copy()
+    command = request()
+    response = await runtime.execute(command)
+    assert response["error"] == "HERMES_DEFAULT_SERVER_REQUIRED"
+    provider.delete_profile.assert_not_called()
+    assert runtime.config["profiles"] == original
+    assert runtime.native_profiles == set(original)
+    # No uncertain write reservation is created by a failed read-only proof.
+    provider.assert_default_management_server = AsyncMock()
+    assert (await runtime.execute(command)).get("error") is None
+    provider.delete_profile.assert_awaited_once_with("control-dev")
 
 
 @pytest.mark.asyncio
@@ -138,10 +156,11 @@ async def test_last_profile_retirement_allows_empty_restart_and_receipt_only_sel
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("capabilities,expected", [
-    ({"profileTransferV1": True}, False), ({"profileTransferV2": True}, True),
+    ({"profileTransferV1": True}, False), ({"profileTransferV2": True}, False),
+    ({"profileTransferV3": True}, True), ({"profileTransferV2": True, "profileTransferV3": False}, False),
     ({"profileTransferV1": True, "profileTransferV2": False}, False), ({}, False),
 ])
-async def test_reconnect_requires_v2_and_never_adopts_stale_cloud_grants(runtime, monkeypatch, capabilities, expected):
+async def test_reconnect_requires_v3_and_never_adopts_stale_cloud_grants(runtime, monkeypatch, capabilities, expected):
     command = request()
     assert (await runtime.execute(command)).get("error") is None
     class Socket:

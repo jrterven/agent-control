@@ -298,17 +298,40 @@ def test_uninstall_stops_only_managed_unit_and_keeps_identity_history_and_receip
     assert_preserved(item, history, receipts)
 
 
-def test_existing_hermes_process_survives_connector_supervisor_stop(tmp_path):
-    """Real child process groups: only the connector spawned by this supervisor is terminated."""
+@pytest.mark.parametrize("mode", ["existing", "managed"])
+def test_supervisor_pins_managed_root_and_stops_only_owned_processes(tmp_path, mode):
+    """Real children with a CLI fixture for explicit profile > sticky selection."""
     repo = Path(__file__).resolve().parents[2]
     directory, home, connector, runtime = [tmp_path / name for name in ("managed", "existing-hermes", "connector", "runtime")]
     for path in (directory, home, connector, runtime / "python/bin"):
         private_dir(path)
+    (home / "active_profile").write_text("science\n")
+    private_dir(home / "profiles/science")
     atomic_json(connector / "config.json", {"connectorId": "fixture"})
     fake_python = runtime / "python/bin/python3"
-    fake_python.write_text(f"#!{sys.executable}\n" + "import json,os,sys,time\nfrom pathlib import Path\n"
-        + "Path(os.environ['HERMES_HOME'],'child-start.json').write_text(json.dumps({'pid':os.getpid(),'args':sys.argv[1:]}))\n"
-        + "while True: time.sleep(1)\n")
+    fake_python.write_text(f"#!{sys.executable}\n" + """import argparse,json,os,sys,time
+from pathlib import Path
+root = Path(os.environ['HERMES_HOME'])
+args = sys.argv[1:]
+component = 'hermes' if 'serve' in args else 'connector'
+record = {'pid': os.getpid(), 'args': args, 'home': str(root),
+          'tokenMatches': os.environ['HERMES_DASHBOARD_SESSION_TOKEN'] == 'temporary-token'}
+if component == 'hermes':
+    # Hermes preparses an explicit selector before consulting active_profile.
+    # A configured root HERMES_HOME does not by itself suppress that fallback.
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-p', '--profile')
+    parsed, remaining = parser.parse_known_args(args[args.index('-c') + 2:])
+    profile = parsed.profile or (root / 'active_profile').read_text().strip()
+    record.update(profile=profile, effectiveHome=str(root if profile == 'default' else root / 'profiles' / profile),
+                  remaining=remaining, cwd=os.getcwd())
+target = root / (component + '-start.json')
+temporary = target.with_suffix('.tmp')
+temporary.write_text(json.dumps(record))
+temporary.chmod(0o600)
+temporary.replace(target)
+while True: time.sleep(1)
+""")
     fake_python.chmod(0o755)
     scenario = tmp_path / "supervise.py"
     scenario.write_text("import sys\nfrom pathlib import Path\nfrom types import SimpleNamespace\n"
@@ -316,33 +339,49 @@ def test_existing_hermes_process_survives_connector_supervisor_stop(tmp_path):
         + "from agent_control_connector import setup_service as service\n"
         + "service.verify_runtime = lambda root: {}\n"
         + f"engine=SimpleNamespace(directory=Path({str(directory)!r}),root=Path({str(runtime)!r}),connector_dir=Path({str(connector)!r}),token=lambda:'temporary-token',state="
-        + repr({"mode": "existing", "releaseRoot": str(runtime), "hermesHome": str(home), "restUrl": "http://127.0.0.1:19119"}) + ")\n"
+        + repr({"mode": mode, "releaseRoot": str(runtime), "hermesHome": str(home), "restUrl": "http://127.0.0.1:19119"}) + ")\n"
         + "service.supervise(engine)\n")
     external = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
-    supervisor = subprocess.Popen([sys.executable, str(scenario)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    child_pid = None
+    supervisor = subprocess.Popen([sys.executable, str(scenario)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        env={**os.environ, "HERMES_HOME": str(tmp_path / "unrelated-hermes"),
+             "HERMES_DASHBOARD_SESSION_TOKEN": "unrelated-token"})
+    child_pids = []
     try:
         deadline = time.monotonic() + 10
-        while not (home / "child-start.json").exists():
+        expected = ["connector"] + (["hermes"] if mode == "managed" else [])
+        while not all((home / f"{name}-start.json").exists() for name in expected):
             if supervisor.poll() is not None:
                 pytest.fail("Supervisor exited before starting the fixture connector: " + supervisor.stderr.read().decode())
             if time.monotonic() >= deadline:
                 pytest.fail("Fixture connector failed to start")
             time.sleep(0.05)
-        started = json.loads((home / "child-start.json").read_text())
-        child_pid = started["pid"]
-        assert "agent_control_connector" in started["args"] and "serve" not in started["args"]
+        started = {name: read_json(home / f"{name}-start.json") for name in expected}
+        child_pids = [record["pid"] for record in started.values()]
+        assert "agent_control_connector" in started["connector"]["args"]
+        assert "serve" not in started["connector"]["args"]
+        assert all(record["home"] == str(home) and record["tokenMatches"] for record in started.values())
+        if mode == "managed":
+            hermes = started["hermes"]
+            assert hermes["profile"] == "default" and hermes["effectiveHome"] == str(home)
+            cli_args = hermes["args"][hermes["args"].index("-c") + 2:]
+            assert cli_args[:3] == ["-p", "default", "serve"]
+            assert hermes["remaining"] == ["serve", "--host", "127.0.0.1", "--port", "19119", "--isolated"]
+            assert hermes["cwd"] == str(home)
+        else:
+            assert not (home / "hermes-start.json").exists()
         atomic_json(directory / "stop.request", {"reason": "test"})
         assert supervisor.wait(timeout=10) == 0
         assert external.poll() is None
-        with pytest.raises(ProcessLookupError):
-            os.kill(child_pid, 0)
+        for child_pid in child_pids:
+            with pytest.raises(ProcessLookupError):
+                os.kill(child_pid, 0)
         assert read_json(connector / "config.json")["connectorId"] == "fixture"
+        assert (home / "active_profile").read_text() == "science\n"
     finally:
         if supervisor.poll() is None:
             supervisor.terminate()
             supervisor.wait(timeout=10)
-        if child_pid is not None:
+        for child_pid in child_pids:
             try:
                 os.killpg(child_pid, signal.SIGTERM)
             except ProcessLookupError:

@@ -155,8 +155,10 @@ def supervise(engine):
             # process exit codes and status, never captures transcripts or secrets.
             hermes = None
             if engine.state["mode"] == "managed":
+                # A root HERMES_HOME alone still follows Hermes' sticky active_profile.
+                # Keep this shared server rooted at default when users switch profiles.
                 hermes = subprocess.Popen([python, "-s", "-B", "-c", "from hermes_cli.main import main; main()",
-                    "serve", "--host", "127.0.0.1", "--port", port, "--isolated"],
+                    "-p", "default", "serve", "--host", "127.0.0.1", "--port", port, "--isolated"],
                     env=env, cwd=engine.state["hermesHome"], stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                 children.append(hermes)

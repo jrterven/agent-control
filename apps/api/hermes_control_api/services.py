@@ -75,7 +75,8 @@ from .models import (
 from .notifications import completion_for_session
 from .providers import authoritative_provider_read
 from .realtime import persist_normalized_event
-from .remote_provider import BackgroundTasksBusyError, ProfileTransferNotImported, ProfileTransferOutcomeUnknown
+from .remote_provider import BackgroundTasksBusyError, ProfileTransferNotImported, ProfileTransferOutcomeUnknown, ProfileTransferManagementServerRequired
+from hermes_client.provider import ProfileManagementServerRequired
 from .schemas import (
     AutomationCreate,
     GatewayCreate,
@@ -1641,6 +1642,8 @@ class ProfileService:
             return
         try:
             await provider.delete_profile(profile_name)
+        except ProfileManagementServerRequired as exc:
+            raise ConflictError(str(exc)) from exc
         except BackgroundTasksBusyError:
             # The connector proves it rejected this request before reserving
             # or dispatching the deletion. Preserve that actionable conflict.
@@ -1927,7 +1930,7 @@ class ProfileService:
                 methods=frozenset({"profiles.delete"}),
             )
             if (self.services.settings.deployment_mode == "cloud"
-                    and "connector.profileTransferV2" not in manager_capabilities.features):
+                    and "connector.profileTransferV3" not in manager_capabilities.features):
                 raise ConflictError("Update the connector before deleting an agent")
             source_sha = trusted_gateway_source_sha(
                 db, self.services, source_gateway_id
@@ -2155,7 +2158,7 @@ class ProfileService:
                 )
             )
             if self.services.settings.deployment_mode == "cloud" and any(
-                "connector.profileTransferV2" not in capabilities.features
+                "connector.profileTransferV3" not in capabilities.features
                 for capabilities in (source_capabilities, destination_capabilities)
             ):
                 raise ConflictError("Update both connectors before moving an agent")
@@ -2697,6 +2700,8 @@ class ProfileService:
                     raise UpstreamUnavailableError(
                         "Agent move was rolled back but its receipt needs reconciliation"
                     ) from exc
+                if isinstance(exc, (ProfileManagementServerRequired, ProfileTransferManagementServerRequired)):
+                    raise ConflictError(str(ProfileManagementServerRequired())) from exc
                 if isinstance(exc, ProfileTransferNotImported):
                     raise ConflictError(
                         "The agent was not imported. Check both connections and that the destination name is free; the source was preserved."

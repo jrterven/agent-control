@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from hermes_client import ProviderConnection
 from hermes_client.connector_protocol import OPERATIONS, VERSION, WRITE_OPERATIONS, ProtocolError, send_message, type_hints, value_matches_type
-from hermes_client.provider import HermesProvider, RuntimeGenerationChanged, SessionHistoryNotFound
+from hermes_client.provider import HermesProvider, ProfileManagementServerRequired, RuntimeGenerationChanged, SessionHistoryNotFound
 from hermes_client.types import CapabilitySet, NormalizedEvent
 
 
@@ -26,6 +26,13 @@ class ProfileTransferNotImported(RuntimeError):
 
 class ProfileTransferOutcomeUnknown(RuntimeError):
     """Import may have happened; retain the source and never delete an unowned copy."""
+
+
+class ProfileTransferManagementServerRequired(ProfileTransferNotImported):
+    """A verified refusal to import into a non-default management server."""
+
+    def __init__(self, *_args):
+        super().__init__(str(ProfileManagementServerRequired()))
 
 
 class ConnectorLink:
@@ -89,6 +96,8 @@ class ConnectorLink:
                 "INVALID_OPERATION": ValueError,
                 "CONNECTOR_BACKGROUND_BUSY": BackgroundTasksBusyError,
                 "PROFILE_TRANSFER_IMPORT_REFUSED": ProfileTransferNotImported,
+                "HERMES_DEFAULT_SERVER_REQUIRED": ProfileManagementServerRequired,
+                "PROFILE_TRANSFER_DEFAULT_SERVER_REQUIRED": ProfileTransferManagementServerRequired,
             }
             future.set_exception(exceptions.get(str(error), RuntimeError)(str(error)))
         else:
@@ -207,7 +216,7 @@ class RemoteProvider:
             capabilities = await link.call(self.connection.profile_name, "capabilities", (), {})
             if not isinstance(capabilities, CapabilitySet):
                 raise ProtocolError("Invalid connector capabilities")
-            if "connector.profileTransferV2" not in capabilities.features:
+            if "connector.profileTransferV3" not in capabilities.features:
                 raise ValueError("Update the connector before deleting an agent")
             if not link.online or self.registry.get(self.connection.gateway_id) is not link:
                 raise ConnectionError("Connector changed before agent deletion was sent")
@@ -220,7 +229,7 @@ class RemoteProvider:
         value = await self._call("capabilities")
         if not isinstance(value, CapabilitySet):
             raise ProtocolError("Invalid connector capabilities")
-        if "connector.profileTransferV2" in value.features:
+        if "connector.profileTransferV3" in value.features:
             return value
         return CapabilitySet(protocol=value.protocol, version=value.version, source_sha=value.source_sha,
                              methods=value.methods - {"profiles.delete", "profiles.transfer", "profiles.export", "profiles.import"},
@@ -237,7 +246,7 @@ class RemoteProvider:
             source_caps, destination_caps = await self.capabilities(), await destination.capabilities()
         except BaseException as error:
             raise ProfileTransferNotImported("Could not verify transfer capabilities") from error
-        if any("connector.profileTransferV2" not in caps.features for caps in (source_caps, destination_caps)):
+        if any("connector.profileTransferV3" not in caps.features for caps in (source_caps, destination_caps)):
             raise ProfileTransferNotImported("Update both connectors before moving an agent")
 
         # Only one bounded chunk is held in cloud memory. The independent local
@@ -293,6 +302,8 @@ class RemoteProvider:
             return result
         except ProfileTransferNotImported:
             raise
+        except ProfileManagementServerRequired as error:
+            raise ProfileTransferManagementServerRequired() from error
         except BaseException as error:
             if import_dispatched:
                 raise ProfileTransferOutcomeUnknown("Profile import needs reconciliation; source retained") from error

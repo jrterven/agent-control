@@ -76,6 +76,15 @@ class RuntimeGenerationChanged(ConnectionError):
 class SessionHistoryNotFound(LookupError):
     """Hermes has no durable transcript row for the requested stored session."""
 
+
+class ProfileManagementServerRequired(ValueError):
+    """No native mutation was sent because the server's root was unverified."""
+
+    def __init__(self, *_args):
+        super().__init__(
+            "Start Hermes with `hermes -p default serve` before moving or deleting agents."
+        )
+
 _MAX_PROFILES = 64
 _MAX_SESSIONS = 2_000
 _MAX_MESSAGES = 5_000
@@ -1371,12 +1380,31 @@ class HermesGatewayProvider:
                 raise RuntimeError("MUTATION_DELIVERY_UNKNOWN") from exc
             raise
 
+    async def assert_default_management_server(self) -> None:
+        # In this audited runtime, deleting a serving profile skips its own PID
+        # and removes its home. Probe the process's current profile, not the
+        # user's sticky active selection or this adapter's routed profile.
+        if (self.connection.trusted_source_sha or "").casefold() != HERMES_0212_SHA:
+            return
+        try:
+            raw = await bounded_json_request(
+                self.http, "GET", "/api/profiles/active", max_bytes=4096,
+                timeout=httpx.Timeout(15.0, connect=5.0),
+            )
+            if not isinstance(raw, Mapping) or raw.get("current") != "default":
+                raise ProfileManagementServerRequired()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise ProfileManagementServerRequired() from exc
+
     async def delete_profile(self, name: str) -> None:
         profile_name = _bounded_text(
             name,
             label="profile name",
             max_length=120,
         )
+        await self.assert_default_management_server()
         raw = await self._profile_mutation_json(
             "DELETE",
             f"/api/profiles/{quote(profile_name, safe='')}",
@@ -1528,12 +1556,15 @@ class HermesGatewayProvider:
         if profile_name == "default":
             raise ValueError("The default Hermes profile cannot be transferred")
 
+        await self.assert_default_management_server()
+        await destination.assert_default_management_server()
         operation_id = uuid4().hex
         destination_path = await destination._profile_transfer_destination_path(
             operation_id
         )
         source_path: str | None = None
         try:
+            await self.assert_default_management_server()
             export_raw = await self._profile_mutation_json(
                 "POST",
                 f"/api/profiles/{quote(profile_name, safe='')}/export",
@@ -1548,12 +1579,14 @@ class HermesGatewayProvider:
                 label="exported profile archive",
             )
 
+            await destination.assert_default_management_server()
             await self._upload_profile_archive(
                 destination,
                 source_path=source_path,
                 destination_path=destination_path,
             )
 
+            await destination.assert_default_management_server()
             import_raw = await destination._profile_mutation_json(
                 "POST",
                 "/api/profiles/import",
@@ -1587,6 +1620,7 @@ class HermesGatewayProvider:
 
     async def export_profile_archive_to(self, name: str, archive: Path) -> None:
         """Export to a connector-owned local file; paths never cross the cloud wire."""
+        await self.assert_default_management_server()
         source_path = None
         try:
             raw = await self._profile_mutation_json(
@@ -1619,6 +1653,7 @@ class HermesGatewayProvider:
         """Upload one verified connector-owned archive, then import without retries."""
         if not 0 < archive.stat().st_size <= _MAX_PROFILE_ARCHIVE_BYTES:
             raise UpstreamPayloadTooLarge("Hermes profile archive is too large or empty")
+        await self.assert_default_management_server()
         destination_path = await self._profile_transfer_destination_path(uuid4().hex)
         try:
             boundary = f"agent-control-{uuid4().hex}"
@@ -1641,6 +1676,7 @@ class HermesGatewayProvider:
             uploaded = _bounded_profile_mutation_response(raw, label="profile archive upload")
             if _bounded_remote_path(uploaded.get("path"), label="uploaded archive") != destination_path:
                 raise UpstreamPayloadError("Hermes returned a different profile archive path")
+            await self.assert_default_management_server()
             raw = await self._profile_mutation_json(
                 "POST", "/api/profiles/import", json={"archive": destination_path, "name": name},
             )
@@ -3177,6 +3213,10 @@ class InMemoryHermesProvider:
     """Deterministic provider used offline and by integration tests."""
 
     _profiles_by_gateway: dict[str, dict[str, HermesProfile]] = defaultdict(dict)
+
+    async def assert_default_management_server(self) -> None:
+        """The deterministic provider has no native server home to delete."""
+        return None
 
     def observe_background_tasks(self, snapshot: Mapping[str, Any]) -> None:
         pass

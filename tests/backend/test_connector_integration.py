@@ -68,7 +68,7 @@ class LocalPeer:
                 welcome = reader.feed(ws.receive_bytes())
                 assert welcome["gatewayId"] == self.runtime.gateway_id
                 assert set(self.runtime.providers) <= set(welcome["profiles"])
-                self.runtime.profile_transfer_supported = welcome.get("capabilities", {}).get("profileTransferV2") is True
+                self.runtime.profile_transfer_supported = welcome.get("capabilities", {}).get("profileTransferV3") is True
                 self.socket = SocketAdapter(ws)
                 self.client.portal.call(self.activate)
                 self.ready.set()
@@ -251,6 +251,34 @@ def test_shared_profile_can_be_deleted_through_another_shared_manager(attached, 
     assert "z-new-agent" not in {row["technicalName"] for row in client.get("/api/v1/bootstrap").json()["profiles"]}
 
 
+def test_named_bound_server_rejects_delete_before_native_call_and_preserves_route(attached):
+    from unittest.mock import AsyncMock
+    from hermes_client.provider import ProfileManagementServerRequired
+
+    app, client, headers, runtime, peer, credentials, _ = attached
+    created = client.post("/api/v1/profiles", json={"gatewayId": credentials["gatewayId"],
+        "technicalName": "z-new-agent", "displayName": "New agent",
+        "description": "A useful agent for integration testing."}, headers=mutate(headers))
+    assert created.status_code == 201, created.text
+    with app.state.session_factory() as db:
+        identifier = db.scalar(select(ProfileRef.id).where(
+            ProfileRef.gateway_id == credentials["gatewayId"], ProfileRef.profile_name == "z-new-agent"))
+    manager = runtime.providers["selected"]
+    manager.assert_default_management_server = AsyncMock(side_effect=ProfileManagementServerRequired())
+    manager.delete_profile = AsyncMock()
+    request_headers = mutate(headers)
+    for _ in range(2):
+        deleted = client.request("DELETE", f"/api/v1/profiles/{identifier}",
+            json={"confirmation": "z-new-agent"}, headers=request_headers)
+        assert deleted.status_code == 409 and deleted.json()["code"] == "CONFLICT", deleted.text
+        assert "hermes -p default serve" in deleted.json()["message"]
+    manager.assert_default_management_server.assert_awaited()
+    manager.delete_profile.assert_not_called()
+    assert "z-new-agent" in runtime.providers and "z-new-agent" in runtime.config["profiles"]
+    with app.state.session_factory() as db:
+        assert db.get(ProfileRef, identifier).gateway_id == credentials["gatewayId"]
+
+
 @pytest.fixture
 def transfer_peers(setup, tmp_path, monkeypatch):
     """Two real owner-paired sockets; only the native Hermes adapter is synthetic."""
@@ -286,16 +314,17 @@ def transfer_peers(setup, tmp_path, monkeypatch):
             client.portal.call(item.runtime.ledger.close)
 
 
-@pytest.mark.parametrize("private_collision", [False, True])
-def test_native_archive_transfer_crosses_real_connector_wire_and_persists_only_confirmed_sharing(transfer_peers, private_collision):
+@pytest.mark.parametrize("scenario", ["success", "private_collision", "source_bound", "destination_bound"])
+def test_native_archive_transfer_crosses_real_connector_wire_and_persists_only_confirmed_sharing(transfer_peers, scenario):
     import io
     import os
     import tarfile
     from unittest.mock import AsyncMock
     from agent_control_connector.storage import read_json
     from hermes_client import ProviderConnection
+    from hermes_client.provider import ProfileManagementServerRequired
     from hermes_client.types import HermesProfile
-    from hermes_control_api.remote_provider import RemoteProvider, ProfileTransferNotImported
+    from hermes_control_api.remote_provider import RemoteProvider, ProfileTransferNotImported, ProfileTransferManagementServerRequired
 
     app, client, headers, peers = transfer_peers
     source, destination = peers
@@ -329,19 +358,40 @@ def test_native_archive_transfer_crosses_real_connector_wire_and_persists_only_c
 
     source_manager.export_profile_archive_to = AsyncMock(side_effect=export_archive)
     destination_manager.import_profile_archive_from = AsyncMock(side_effect=import_archive)
+    source_manager.assert_default_management_server = AsyncMock(
+        side_effect=ProfileManagementServerRequired() if scenario == "source_bound" else None)
+    destination_manager.assert_default_management_server = AsyncMock(
+        side_effect=ProfileManagementServerRequired() if scenario == "destination_bound" else None)
     private = HermesProfile(name="control-dev", display_name="Private existing agent")
-    if private_collision:
+    if scenario == "private_collision":
         destination_manager._created_profiles["control-dev"] = private
     registry = app.state.connector_registry
     remote_source = RemoteProvider(ProviderConnection(source.runtime.gateway_id, "selected", "connector://source", "connector://source"), registry)
     remote_destination = RemoteProvider(ProviderConnection(destination.runtime.gateway_id, "selected", "connector://destination", "connector://destination"), registry)
 
     async def transfer_profile():
-        assert "connector.profileTransferV2" in (await remote_source.capabilities()).features
-        assert "connector.profileTransferV2" in (await remote_destination.capabilities()).features
+        assert "connector.profileTransferV3" in (await remote_source.capabilities()).features
+        assert "connector.profileTransferV3" in (await remote_destination.capabilities()).features
         return await remote_source.transfer_profile_to(remote_destination, name="control-dev")
 
-    if private_collision:
+    if scenario in {"source_bound", "destination_bound"}:
+        with pytest.raises(ProfileTransferManagementServerRequired, match="hermes -p default serve"):
+            client.portal.call(transfer_profile)
+        source_manager.assert_default_management_server.assert_awaited()
+        destination_manager.import_profile_archive_from.assert_not_called()
+        if scenario == "source_bound":
+            source_manager.export_profile_archive_to.assert_not_called()
+        else:
+            source_manager.export_profile_archive_to.assert_awaited_once()
+            destination_manager.assert_default_management_server.assert_awaited()
+        assert "control-dev" not in destination_manager._created_profiles
+        assert "control-dev" not in destination.runtime.providers
+        assert "control-dev" not in destination.runtime.config["profiles"]
+        assert "control-dev" in source.runtime.providers
+        assert "control-dev" in {profile.name for profile in client.portal.call(source_manager.list_profiles)}
+        return
+
+    if scenario == "private_collision":
         with pytest.raises(ProfileTransferNotImported):
             client.portal.call(transfer_profile)
         destination_manager.import_profile_archive_from.assert_not_called()
@@ -359,6 +409,8 @@ def test_native_archive_transfer_crosses_real_connector_wire_and_persists_only_c
     assert imported.name == "control-dev"
     source_manager.export_profile_archive_to.assert_awaited_once()
     destination_manager.import_profile_archive_from.assert_awaited_once()
+    source_manager.assert_default_management_server.assert_awaited()
+    destination_manager.assert_default_management_server.assert_awaited()
     assert "control-dev" in {profile.name for profile in client.portal.call(source_manager.list_profiles)}
     assert "control-dev" in destination.runtime.providers
     assert "control-dev" in read_json(destination.runtime.directory / "config.json")["profiles"]

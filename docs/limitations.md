@@ -31,8 +31,13 @@
   credentials; local files and tools are not made portable automatically.
 - Cloud agent transfer requires two connected computers owned by the same
   account and updated connectors on both sides advertising
-  `connector.profileTransferV2`, with Hermes 0.21.2 revision `939e45c9…`
+  `connector.profileTransferV3`, with Hermes 0.21.2 revision `939e45c9…`
   on both computers. The older audited pair remains private-mode only.
+  Both management servers must run under `default`; native export, import
+  and deletion refuse a named-profile server or an unverifiable base profile.
+  Existing services need an operator to configure `hermes -p default serve`
+  while preserving their port and authentication. Managed installations pin
+  `default` explicitly, independently of the CLI's saved active profile.
   Older connectors must be updated first. Archives travel through typed
   chunks of at most 1 MiB. Identity, configuration and history are preserved,
   and the source is deleted only after destination verification. The

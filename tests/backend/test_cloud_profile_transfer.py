@@ -29,7 +29,7 @@ from .test_visual_media import FakeStore, picture
 
 
 HERMES_SHA = "939e45c91d751fadd94dcd1b873ac3cb44846213"
-TRANSFER_FEATURE = "connector.profileTransferV2"
+TRANSFER_FEATURE = "connector.profileTransferV3"
 
 
 @pytest.fixture
@@ -40,6 +40,7 @@ def cloud_transfer(cloud):
     native_calls = []
     providers = {}
     older_connectors = set()
+    legacy_v2_connectors = set()
     transfer_fault = {}
 
     class NativeTransferFixture(InMemoryHermesProvider):
@@ -49,6 +50,8 @@ def cloud_transfer(cloud):
                 capabilities = replace(capabilities, version="0.21.2")
             if self.connection.gateway_id in older_connectors:
                 return capabilities
+            if self.connection.gateway_id in legacy_v2_connectors:
+                return replace(capabilities, features=capabilities.features | {"connector.profileTransferV2"})
             return replace(capabilities, features=capabilities.features | {TRANSFER_FEATURE})
 
         async def transfer_profile_to(self, destination, *, name, operation_id=None):
@@ -145,6 +148,7 @@ def cloud_transfer(cloud):
         app=app, client=client, settings=settings, alice=alice, bob=bob,
         destination_id=destination_id, connector_ids=connector_ids, native_calls=native_calls,
         older_connectors=older_connectors, source_provider=source_provider,
+        legacy_v2_connectors=legacy_v2_connectors,
         transfer_fault=transfer_fault, providers=providers,
     )
 
@@ -329,7 +333,7 @@ def test_cloud_move_rejects_known_foreign_ids_before_native_calls(cloud_transfer
 
 
 @pytest.mark.parametrize("side", ["source", "destination"])
-@pytest.mark.parametrize("condition", ["revoked", "offline", "old_connector"])
+@pytest.mark.parametrize("condition", ["revoked", "offline", "old_connector", "legacy_v2"])
 def test_cloud_move_requires_two_active_updated_connectors(cloud_transfer, side, condition):
     fixture = cloud_transfer
     gateway_id = fixture.alice[1] if side == "source" else fixture.destination_id
@@ -341,6 +345,8 @@ def test_cloud_move_requires_two_active_updated_connectors(cloud_transfer, side,
             db.commit()
     elif condition == "offline":
         fixture.app.state.connector_registry.links[gateway_id].online = False
+    elif condition == "legacy_v2":
+        fixture.legacy_v2_connectors.add(gateway_id)
     else:
         fixture.older_connectors.add(gateway_id)
 
@@ -349,7 +355,7 @@ def test_cloud_move_requires_two_active_updated_connectors(cloud_transfer, side,
     assert response.status_code == expected_status, response.text
     if condition == "offline":
         assert "Connect both computers" in response.json()["message"]
-    elif condition == "old_connector":
+    elif condition in {"old_connector", "legacy_v2"}:
         assert "Update both connectors" in response.json()["message"]
     assert_source_unchanged(fixture)
 
@@ -382,6 +388,24 @@ def test_cloud_move_requires_authentication(cloud_transfer):
     response = move(fixture)
     assert response.status_code == 401, response.text
     assert_source_unchanged(fixture)
+
+
+def test_cloud_v3_management_server_refusal_preserves_source_and_returns_actionable_conflict(cloud_transfer):
+    from unittest.mock import AsyncMock
+    from hermes_control_api.remote_provider import ProfileTransferManagementServerRequired
+
+    fixture = cloud_transfer
+    manager = fixture.providers[(fixture.alice[1], "default")]
+    manager.transfer_profile_to = AsyncMock(side_effect=ProfileTransferManagementServerRequired())
+    refused = move(fixture)
+    assert refused.status_code == 409 and refused.json()["code"] == "CONFLICT", refused.text
+    assert "hermes -p default serve" in refused.json()["message"]
+    assert_source_unchanged(fixture)
+    assert move(fixture).json() == refused.json()
+    manager.transfer_profile_to.assert_awaited_once()
+    with fixture.app.state.session_factory() as db:
+        assert db.get(Connector, fixture.connector_ids[fixture.alice[1]]).profiles == ["default", "control-dev"]
+        assert db.get(Connector, fixture.connector_ids[fixture.destination_id]).profiles == ["default"]
 
 
 @pytest.mark.parametrize("failure", ["collision", "unknown"])
@@ -516,13 +540,16 @@ def test_cloud_last_shared_agent_is_rejected_before_native_transfer(cloud_transf
     assert_source_unchanged(fixture)
 
 
-def test_cloud_delete_requires_retirement_aware_connector_before_native_mutation(cloud_transfer):
+@pytest.mark.parametrize("legacy", ["missing", "v2"])
+def test_cloud_delete_requires_server_bound_aware_connector_before_native_mutation(cloud_transfer, legacy):
     fixture = cloud_transfer
-    fixture.older_connectors.add(fixture.alice[1])
+    unsupported = fixture.older_connectors if legacy == "missing" else fixture.legacy_v2_connectors
+    unsupported.add(fixture.alice[1])
     response = fixture.client.request(
         "DELETE", f"/api/v1/profiles/{fixture.alice[2]}",
         headers=mutation_headers(fixture.alice[5], "old-cloud-delete"),
         json={"confirmation": "control-dev"},
     )
     assert response.status_code == 409, response.text
+    assert "Update the connector" in response.json()["message"]
     assert_source_unchanged(fixture)

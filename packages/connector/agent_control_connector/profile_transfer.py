@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 
 from hermes_client.compatibility import HERMES_0212_SHA
+from hermes_client.provider import ProfileManagementServerRequired
 from hermes_client.types import HermesProfile
 
 from .storage import atomic_json, private_dir, read_json
@@ -43,6 +44,10 @@ CREDENTIAL_FILES = frozenset({".env", "auth.json", ".anthropic_oauth.json", "cre
 
 class ProfileImportRefused(ValueError):
     """Native profile creation was definitely not dispatched or was refused."""
+
+
+class ProfileImportManagementServerRequired(ProfileImportRefused):
+    """The native server's root was unverified; no import was dispatched."""
 
 
 def _credential_path(parts) -> bool:
@@ -283,6 +288,7 @@ class ProfileTransfers:
     async def profile_export(self, manager: str, name: str, transfer_id: str) -> dict[str, Any]:
         await self.check_export_idle(name)
         provider = self.runtime.providers[manager]
+        await provider.assert_default_management_server()
         path, meta = self._create(manager, transfer_id, name, "export")
         await provider.export_profile_archive_to(name, path / "native.tar.gz")
         await asyncio.to_thread(sanitize_export, path / "native.tar.gz", path / "archive.tar.gz", name)
@@ -314,6 +320,7 @@ class ProfileTransfers:
                 or not SHA256.fullmatch(sha256) or len(self.runtime.providers) >= 64):
             raise ValueError("Invalid profile archive metadata")
         self._destination_available(name)
+        await self.runtime.providers[manager].assert_default_management_server()
         # Native list is intentionally unfiltered; an unshared agent is private.
         if name in {item.name for item in await self.runtime.providers[manager].list_profiles()}:
             raise ValueError("Destination profile already exists")
@@ -361,12 +368,22 @@ class ProfileTransfers:
             if meta["name"] in {item.name for item in await self.runtime.providers[manager].list_profiles()}:
                 raise ValueError("Destination profile already exists")
             self._destination_available(meta["name"])
+            await self.runtime.providers[manager].assert_default_management_server()
+        except ProfileManagementServerRequired as error:
+            raise ProfileImportManagementServerRequired(str(error)) from error
         except (ValueError, OSError) as error:
             raise ProfileImportRefused("Profile import was refused before dispatch") from error
         meta["state"] = "importing"
         atomic_json(path / "meta.json", meta)  # crashes never repeat native import
         try:
             result = await self.runtime.providers[manager].import_profile_archive_from(meta["name"], archive)
+        except ProfileManagementServerRequired as error:
+            # The adapter rechecks after upload, immediately before native
+            # import. Its refusal is determinate even though this stage had
+            # already recorded an import intent.
+            meta["state"] = "refused"
+            atomic_json(path / "meta.json", meta)
+            raise ProfileImportManagementServerRequired(str(error)) from error
         except httpx.HTTPStatusError as error:
             if error.response.status_code in {400, 409}:
                 meta["state"] = "refused"
