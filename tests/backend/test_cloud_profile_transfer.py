@@ -6,8 +6,10 @@ middleware remain active; transfer chunk framing has separate protocol tests.
 """
 from __future__ import annotations
 
+import ast
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +20,7 @@ from hermes_client.types import HermesAutomation, HermesProfile, HermesSession
 from hermes_control_api.connector_models import Connector
 from hermes_control_api.models import AuditEvent, Gateway, GatewayCredential, ProfileRef, SessionLink, VisualMedia, utc_now
 from hermes_control_api.remote_provider import ConnectorLink, ProfileTransferNotImported, ProfileTransferOutcomeUnknown
+from hermes_control_api.services import _restored_transfer_config_matches
 from hermes_control_api.visual_media import VisualMediaService
 
 from .conftest import mutation_headers
@@ -42,6 +45,8 @@ def cloud_transfer(cloud):
     class NativeTransferFixture(InMemoryHermesProvider):
         async def capabilities(self):
             capabilities = await super().capabilities()
+            if transfer_fault.get("audited_version"):
+                capabilities = replace(capabilities, version="0.21.2")
             if self.connection.gateway_id in older_connectors:
                 return capabilities
             return replace(capabilities, features=capabilities.features | {TRANSFER_FEATURE})
@@ -157,6 +162,116 @@ def assert_source_unchanged(fixture):
     with fixture.app.state.session_factory() as db:
         assert db.get(ProfileRef, fixture.alice[2]).gateway_id == fixture.alice[1]
         assert db.get(SessionLink, fixture.alice[3]).gateway_id == fixture.alice[1]
+
+
+def native_agent_normalizer():
+    """Exact pure function used by audited native save_config, not a reimplementation."""
+    path = Path(__file__).parents[1] / "fixtures/hermes_939e_config.py"
+    module = ast.parse(path.read_text())
+    function = next(node for node in module.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "_normalize_max_turns_config")
+    namespace = {"Dict": dict, "Any": object}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)
+    return namespace[function.name]
+
+
+def transfer_config():
+    return {
+        "model": {"default": "test-model", "provider": "openai-codex",
+                  "base_url": "https://inference.example/v1", "api_mode": "responses",
+                  "context_length": 64000, "key_env": "LOCAL_PROVIDER_KEY"},
+        "security": {"redact_secrets": True},
+        "terminal": {"cwd": "${WORKSPACE}"},
+    }
+
+
+def test_audited_native_save_only_materializes_empty_agent_for_this_configuration():
+    source = transfer_config()
+    original = deepcopy(source)
+    restored = native_agent_normalizer()(source)
+    assert restored != source
+    assert restored == {**source, "agent": {}}
+    assert source == original
+    assert _restored_transfer_config_matches(source, restored, allow_native_empty_agent=True)
+    assert not _restored_transfer_config_matches(source, restored)
+
+
+@pytest.mark.parametrize("change", [
+    "agent_nonempty", "agent_null", "agent_list", "model", "provider", "base_url",
+    "api_mode", "context_length", "key_env", "security", "environment", "extra", "missing",
+])
+def test_native_save_exception_rejects_every_other_configuration_change(change):
+    source = transfer_config()
+    restored = native_agent_normalizer()(source)
+    # Native normalization is shallow; isolate deliberate mutations from source.
+    restored = deepcopy(restored)
+    if change.startswith("agent_"):
+        restored["agent"] = {"max_turns": 10} if change == "agent_nonempty" else None if change == "agent_null" else []
+    elif change == "model":
+        restored["model"] = "test-model"
+    elif change in {"provider", "base_url", "api_mode", "context_length", "key_env"}:
+        restored["model"][change] = "different"
+    elif change == "security":
+        restored["security"]["redact_secrets"] = False
+    elif change == "environment":
+        restored["terminal"]["cwd"] = "/expanded/path"
+    elif change == "extra":
+        restored["extra"] = None
+    else:
+        del restored["terminal"]
+    assert not _restored_transfer_config_matches(source, restored, allow_native_empty_agent=True)
+
+
+@pytest.mark.parametrize("agent", [None, {"max_turns": 10}, [], False])
+def test_explicit_agent_values_cannot_be_replaced_by_empty_mapping(agent):
+    source = {**transfer_config(), "agent": agent}
+    assert not _restored_transfer_config_matches(
+        source, {**source, "agent": {}}, allow_native_empty_agent=True,
+    )
+
+
+@pytest.mark.parametrize("scenario", ["audited", "mock_only", "model_changed", "source_changed"])
+def test_cloud_move_native_save_normalization_is_narrow_and_source_drift_remains_strict(
+    cloud_transfer, monkeypatch, scenario,
+):
+    fixture = cloud_transfer
+    fixture.transfer_fault["audited_version"] = scenario != "mock_only"
+    fixture.source_provider._config = transfer_config()
+    fixture.source_provider._model = {"provider": "openai-codex", "model": "test-model"}
+    original = deepcopy(fixture.source_provider._config)
+    normalize = native_agent_normalizer()
+    original_replace = InMemoryHermesProvider.replace_config
+
+    async def native_save(self, config):
+        restored = normalize(deepcopy(config))
+        if scenario == "model_changed":
+            restored["model"]["provider"] = "different-provider"
+        if scenario == "source_changed":
+            # The same addition on the source is drift, not destination save.
+            fixture.source_provider._config["agent"] = {}
+        return await original_replace(self, restored)
+
+    monkeypatch.setattr(InMemoryHermesProvider, "replace_config", native_save)
+    response = move(fixture)
+    with fixture.app.state.session_factory() as db:
+        route = db.get(ProfileRef, fixture.alice[2]).gateway_id
+        if scenario == "audited":
+            assert response.status_code == 200, response.text
+            assert route == fixture.destination_id
+            destination = fixture.providers[(fixture.destination_id, "control-dev")]
+            assert destination._config == {**original, "agent": {}}
+            assert fixture.source_provider._config == original
+            assert fixture.native_calls[-1] == ("delete", fixture.alice[1], "control-dev")
+        else:
+            assert response.status_code == 409, response.text
+            assert response.json()["code"] == "CONFLICT"
+            stage = "source_verify" if scenario == "source_changed" else "config_verify"
+            assert f"during {stage}" in response.json()["message"]
+            assert route == fixture.alice[1]
+            assert ("delete", fixture.alice[1], "control-dev") not in fixture.native_calls
+            assert fixture.native_calls[-1] == ("delete", fixture.destination_id, "control-dev")
+            if scenario != "source_changed":
+                assert fixture.source_provider._config == original
 
 
 def test_cloud_non_admin_can_move_own_agent_and_replay_preserves_route_and_ownership(cloud_transfer):

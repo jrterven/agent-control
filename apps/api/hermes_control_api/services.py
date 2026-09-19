@@ -1148,6 +1148,24 @@ class GatewayService:
         )
 
 
+def _restored_transfer_config_matches(
+    source: dict[str, Any],
+    restored: dict[str, Any],
+    *,
+    allow_native_empty_agent: bool = False,
+) -> bool:
+    if restored == source:
+        return True
+    # Audited Hermes 0.21.2 save_config always materializes an absent agent
+    # mapping. Accept only that exact addition; never normalize model routing,
+    # null values, security preferences or arbitrary configuration differences.
+    return bool(
+        allow_native_empty_agent
+        and "agent" not in source
+        and restored == {**source, "agent": {}}
+    )
+
+
 class ProfileService:
     def __init__(self, services: AppServices) -> None:
         self.services = services
@@ -2349,7 +2367,14 @@ class ProfileService:
                         "Hermes could not restore the imported agent config"
                     ) from exc
                 failure_stage = "config_verify"
-                if (await destination_provider.get_transfer_config()).data != source_config:
+                if not _restored_transfer_config_matches(
+                    source_config,
+                    (await destination_provider.get_transfer_config()).data,
+                    allow_native_empty_agent=(
+                        self.services.settings.deployment_mode == "cloud"
+                        and audited_compatible
+                    ),
+                ):
                     raise UpstreamUnavailableError(
                         "Imported Hermes config does not match the source"
                     )
