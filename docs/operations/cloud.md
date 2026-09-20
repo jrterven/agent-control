@@ -280,6 +280,14 @@ use the retained image/backup according to schema compatibility; do not claim
 completion or blindly downgrade the live database. Keep the old release checkout
 available with its Caddy/Compose files as well as the previous image digest.
 
+Named-profile transfers use Hermes's export and credential redaction. The audited
+0.21.2 exporter can fail when a profile has live Unix sockets. On an HTTP 500,
+the connector can prepare the export with the installed Hermes Python in an
+isolated process, omitting sockets and source process markers. It leaves Hermes
+running and retains the source until destination verification succeeds. Archive
+size limits, link rejection, inactivity checks and import deduplication still
+apply; authentication, permission and conflict refusals do not trigger this fallback.
+
 Retain the previous PWA's hashed assets while installed clients finish using
 their current shell. The API's existing sibling-release fallback requires a
 static path shaped as `releases/<revision>/apps/api/static`. For a container

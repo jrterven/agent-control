@@ -22,11 +22,11 @@ from hermes_client.provider import ProfileManagementServerRequired
 from hermes_client.types import HermesProfile
 
 from .storage import atomic_json, private_dir, read_json
+from .profile_export import export_snapshot
+from .profile_export_worker import (CREDENTIAL_FILES, MAX_ARCHIVE_BYTES, MAX_EXPANDED_BYTES,
+                                    MAX_MEMBERS, credential_path as _credential_path)
 
-MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
 MAX_CHUNK_BYTES = 1024 * 1024
-MAX_EXPANDED_BYTES = 512 * 1024 * 1024
-MAX_MEMBERS = 20_000
 MAX_STAGES = 4
 MAX_STAGE_RECEIPTS = 10_000
 TRANSFER_OPERATIONS = frozenset({
@@ -39,7 +39,6 @@ SHA256 = re.compile(r"[a-f0-9]{64}\Z")
 ACTIVE = frozenset({"pending", "queued", "accepted", "starting", "streaming", "running", "working", "waiting", "redirected", "steered"})
 # Hermes already excludes .env/auth.json; additionally keep provider-specific
 # credential documents out of the cloud and reject them in inbound archives.
-CREDENTIAL_FILES = frozenset({".env", "auth.json", ".anthropic_oauth.json", "credentials.json"})
 
 
 class ProfileImportRefused(ValueError):
@@ -48,10 +47,6 @@ class ProfileImportRefused(ValueError):
 
 class ProfileImportManagementServerRequired(ProfileImportRefused):
     """The native server's root was unverified; no import was dispatched."""
-
-
-def _credential_path(parts) -> bool:
-    return any(part.casefold() in CREDENTIAL_FILES or part.casefold().startswith(".env.") for part in parts)
 
 
 def _regular(path: Path) -> os.stat_result:
@@ -290,7 +285,17 @@ class ProfileTransfers:
         provider = self.runtime.providers[manager]
         await provider.assert_default_management_server()
         path, meta = self._create(manager, transfer_id, name, "export")
-        await provider.export_profile_archive_to(name, path / "native.tar.gz")
+        try:
+            await provider.export_profile_archive_to(name, path / "native.tar.gz")
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code != 500:
+                raise
+            # 0.21.2's named-profile copy includes live Unix sockets. An
+            # isolated native exporter omits process state without stopping
+            # Hermes, weakening archive checks, or ever retrying an import.
+            await self.check_export_idle(name)
+            await provider.assert_default_management_server()
+            await asyncio.to_thread(export_snapshot, self.runtime.config, name, path / "native.tar.gz")
         await asyncio.to_thread(sanitize_export, path / "native.tar.gz", path / "archive.tar.gz", name)
         (path / "native.tar.gz").unlink()
         meta.update(state="ready", size=(path / "archive.tar.gz").stat().st_size,
