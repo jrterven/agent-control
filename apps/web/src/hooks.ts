@@ -1998,6 +1998,12 @@ export async function stopPrompt() {
   // Confirmed stops can arrive without a terminal websocket frame. Leaving
   // this binding behind makes history append the old bubble as pending work.
   clearMessageOperations(streamingId);
+  // Native task-aware streams use a separate bubble from the human prompt's
+  // placeholder. The session-wide interrupt settles that captured prompt too.
+  if (humanStreamId && humanStreamId !== streamingId) {
+    state.updateMessage(humanStreamId, { streaming: false });
+    clearMessageOperations(humanStreamId);
+  }
   if (current.streamingBySession[sessionId] === humanStreamId) state.setStreamingMessageId(sessionId, undefined);
   if (current.runtimeTurnBySession[sessionId] === runtimeTurnId) state.setRuntimeTurn(sessionId, undefined);
   if (current.streamingBySession[sessionId] === humanStreamId && current.runtimeTurnBySession[sessionId] === runtimeTurnId) state.clearSessionInteractions(sessionId);

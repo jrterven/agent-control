@@ -107,6 +107,20 @@ describe("background task conversation state", () => {
     expect(useAppStore.getState().runtimeTurnBySession.conversation).toBe("new-speaking");
   });
 
+  it("settles both native and human response placeholders after a confirmed stop", async () => {
+    vi.spyOn(api, "interrupt").mockResolvedValue(undefined);
+    useAppStore.setState({ messages: [human], streamingBySession: { conversation: human.id }, pendingOperations: { "human-op": human.id } });
+    applyRealtimeEvent(frame("message.start", "native-stopped"));
+    applyRealtimeEvent(frame("tool.completed", "native-stopped", { name: "search" }));
+
+    await stopPrompt();
+
+    expect(useAppStore.getState().pendingOperations).toEqual({});
+    expect(useAppStore.getState().messages.every((message) => !message.streaming)).toBe(true);
+    useAppStore.getState().setMessagesForSession("conversation", [{ id: "later-user", sessionId: "conversation", role: "user", content: "Nueva tarea", createdAt: "" }]);
+    expect(useAppStore.getState().messages.map((message) => message.id)).toEqual(["later-user"]);
+  });
+
   it("rehydrates task origin and waits for complete history when reconnecting mid-turn", async () => {
     const history = vi.spyOn(api, "sessionHistory").mockResolvedValueOnce({
       items: [{ id: "partial", role: "assistant", content: "Prefijo conservado" }], sessionStatus: "streaming", activeOperation: null, activeTurnId: "resumed-native",
