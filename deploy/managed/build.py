@@ -153,7 +153,8 @@ def build(output: Path, revision: str, target: str, cache: Path, hermes_source: 
         uv_version = invoke(sys.executable, "-m", "uv", "--version", capture_output=True, text=True).stdout.split()[1]
         if uv_version != PINS["uvVersion"]:
             raise ValueError("Install the pinned uv build tool version")
-        invoke(sys.executable, "-m", "uv", "export", "--frozen", "--no-dev", "--no-emit-project", "--extra", "anthropic", "--extra", "mcp",
+        extra_args = [argument for extra in PINS["baseExtras"] for argument in ("--extra", extra)]
+        invoke(sys.executable, "-m", "uv", "export", "--frozen", "--no-dev", "--no-emit-project", *extra_args,
                "--output-file", requirements, "--no-python-downloads", cwd=root / "hermes", stdout=subprocess.DEVNULL)
         env = os.environ.copy()
         env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1", PIP_DISABLE_PIP_VERSION_CHECK="1", PIP_CONFIG_FILE=os.devnull)
