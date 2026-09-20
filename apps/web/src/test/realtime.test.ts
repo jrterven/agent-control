@@ -245,12 +245,12 @@ describe("normalized realtime events", () => {
     expect(state.pendingOperations["operation-a"]).toBeUndefined();
   });
 
-  it("clears every pending binding for the resolved message when a terminal event omits correlationId", () => {
+  it.each([undefined, "request-key"])("clears every binding for a resolved message (correlation: %s)", (correlationId) => {
     useAppStore.setState({
       pendingOperations: { "request-key": assistant.id, "upstream-key": assistant.id, unrelated: "other-message" },
     });
 
-    expect(applyRealtimeEvent({ type: "message.completed", controlSessionId: "session-a" })).toBe(true);
+    expect(applyRealtimeEvent({ type: "message.completed", controlSessionId: "session-a", correlationId })).toBe(true);
 
     expect(useAppStore.getState().pendingOperations).toEqual({ unrelated: "other-message" });
   });

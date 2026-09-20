@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { submitPrompt } from "../hooks";
+import { applyRealtimeEvent, rehydrateSession, stopPrompt, submitPrompt } from "../hooks";
 import { ApiError, api } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 
 describe("prompt delivery classification", () => {
   beforeEach(() => {
+    useAppStore.getState().resetPrivateState();
     useAppStore.setState({
       demoMode: false, csrfToken: "csrf-memory-only", selectedSessionId: "session-a", messages: [],
       streamingBySession: {}, pendingOperations: {}, connection: "connected",
@@ -12,6 +13,70 @@ describe("prompt delivery classification", () => {
   });
 
   afterEach(() => vi.restoreAllMocks());
+
+  it("does not append an old stopped response after the next prompt when history refreshes", async () => {
+    vi.spyOn(api, "submitPrompt").mockImplementation(async (_session, _content, operationId) => ({ operationId, status: "accepted" }));
+    vi.spyOn(api, "interrupt").mockResolvedValue(undefined);
+    await submitPrompt("Primera tarea");
+    const stoppedId = useAppStore.getState().streamingBySession["session-a"];
+    await stopPrompt();
+    await submitPrompt("Segunda tarea");
+    const state = useAppStore.getState();
+    const currentId = state.streamingBySession["session-a"];
+    const operationId = Object.entries(state.pendingOperations).find(([, id]) => id === currentId)![0];
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      items: [
+        { id: "first-user", role: "user", content: "Primera tarea" },
+        { id: "second-user", role: "user", content: "Segunda tarea" },
+        { id: "tool", role: "tool", tool_name: "search", content: "Buscando" },
+      ],
+      sessionStatus: "streaming",
+      activeOperation: { operationId, status: "streaming" },
+    });
+
+    await rehydrateSession("session-a");
+
+    expect(useAppStore.getState().messages.some((message) => message.id === stoppedId)).toBe(false);
+    expect(useAppStore.getState().pendingOperations).toEqual({ [operationId]: currentId });
+    expect(useAppStore.getState().messages.at(-1)).toMatchObject({ id: currentId, streaming: true, content: "" });
+  });
+
+  it("keeps the pending operation when stopping could not be confirmed", async () => {
+    vi.spyOn(api, "submitPrompt").mockImplementation(async (_session, _content, operationId) => ({ operationId, status: "accepted" }));
+    vi.spyOn(api, "interrupt").mockRejectedValue(new TypeError("disconnected"));
+    await submitPrompt("Tarea con resultado incierto");
+    const pending = useAppStore.getState().pendingOperations;
+    const streaming = useAppStore.getState().streamingBySession;
+
+    await stopPrompt();
+
+    expect(useAppStore.getState().pendingOperations).toEqual(pending);
+    expect(useAppStore.getState().streamingBySession).toEqual(streaming);
+  });
+
+  it("does not apply late correlated content or completion to a newer response", async () => {
+    vi.spyOn(api, "submitPrompt").mockImplementation(async (_session, _content, operationId) => ({ operationId, status: "accepted" }));
+    vi.spyOn(api, "interrupt").mockResolvedValue(undefined);
+    // Leave reconciliation pending so the assertions observe the event itself.
+    vi.spyOn(api, "sessionHistory").mockImplementation(() => new Promise(() => {}));
+    await submitPrompt("Tarea anterior");
+    const previousOperation = Object.keys(useAppStore.getState().pendingOperations)[0];
+    await stopPrompt();
+    await submitPrompt("Tarea actual");
+    const currentId = useAppStore.getState().streamingBySession["session-a"];
+    const pending = useAppStore.getState().pendingOperations;
+    applyRealtimeEvent({ type: "approval.request", controlSessionId: "session-a", data: { request_id: "current-approval", command: "current action" } });
+
+    for (const type of ["message.delta", "tool.complete", "message.completed"]) {
+      applyRealtimeEvent({ type, correlationId: previousOperation, controlSessionId: "session-a", data: { delta: "Respuesta anterior", name: "old-tool" } });
+    }
+
+    expect(useAppStore.getState().messages.find((message) => message.id === currentId)).toMatchObject({ content: "", streaming: true });
+    expect(useAppStore.getState().messages.find((message) => message.id === currentId)?.tools).toBeUndefined();
+    expect(useAppStore.getState().streamingBySession["session-a"]).toBe(currentId);
+    expect(useAppStore.getState().pendingOperations).toEqual(pending);
+    expect(useAppStore.getState().approvalsBySession["session-a"]).toHaveLength(1);
+  });
 
   it("binds the browser idempotency key before starting the prompt request", async () => {
     const send = vi.spyOn(api, "submitPrompt").mockImplementation(async (_sessionId, _content, idempotencyKey) => {

@@ -521,6 +521,16 @@ function mergeEmailReferences(current: EmailReference[] | undefined, incoming: E
   return [...references.values()].slice(-MAX_EMAIL_REFERENCES);
 }
 
+function clearMessageOperations(messageId: string) {
+  const state = useAppStore.getState();
+  Object.entries(state.pendingOperations)
+    .filter(([, pendingMessageId]) => pendingMessageId === messageId)
+    .forEach(([operationId]) => {
+      state.clearOperation(operationId);
+      unmatchedEvents.delete(operationId);
+    });
+}
+
 export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   const state = useAppStore.getState();
   const data = eventData(event);
@@ -533,8 +543,8 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   const turnId = historyCorrelated && typeof turn.id === "string" && turn.id.length > 0 && turn.id.length <= 200 ? turn.id : undefined;
   const independentMessageId = routeSessionId && turnId ? `control-turn-${routeSessionId}-${turnId}` : undefined;
   const messageId = historyCorrelated ? independentMessageId
-    : (operationId ? state.pendingOperations[operationId] : undefined)
-      ?? (routeSessionId ? state.streamingBySession[routeSessionId] : undefined);
+    : operationId ? state.pendingOperations[operationId]
+      : routeSessionId ? state.streamingBySession[routeSessionId] : undefined;
 
   if (event.type === "background.tasks" && routeSessionId) {
     const snapshot = normalizeBackgroundTasks(data);
@@ -651,7 +661,9 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
     return true;
   }
 
-  if (terminalStreamEvent && routeSessionId) {
+  // A delayed completion can belong to an earlier prompt in this chat. Its
+  // explicit correlation must never clear the current response or its gates.
+  if (terminalStreamEvent && routeSessionId && (!operationId || (messageId && state.streamingBySession[routeSessionId] === messageId))) {
     bumpInteractionRevision(routeSessionId);
     state.clearSessionInteractions(routeSessionId);
     if (event.type.startsWith("message.")) {
@@ -660,7 +672,7 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   }
 
   if (!messageId) {
-    if (terminalStreamEvent && routeSessionId) clearStreamingMarkerStatesForSession(routeSessionId);
+    if (terminalStreamEvent && routeSessionId && !operationId) clearStreamingMarkerStatesForSession(routeSessionId);
     if (operationId) bufferUnmatchedEvent(operationId, event);
     else if (
       routeSessionId
@@ -709,19 +721,15 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   }
   if (terminalStreamEvent) {
     const completedSessionId = routeSessionId ?? state.messages.find((message) => message.id === messageId)?.sessionId;
-    if (completedSessionId) clearStreamingMarkerStatesForSession(completedSessionId);
+    const ownsStream = completedSessionId && state.streamingBySession[completedSessionId] === messageId;
+    if (ownsStream) clearStreamingMarkerStatesForSession(completedSessionId);
     else {
       streamingMarkerStates.delete(messageId);
       streamingMarkerTombstones.delete(messageId);
     }
     state.updateMessage(messageId, { streaming: false });
-    if (completedSessionId) state.setStreamingMessageId(completedSessionId, undefined);
-    if (operationId) state.clearOperation(operationId);
-    else {
-      Object.entries(state.pendingOperations)
-        .filter(([, pendingMessageId]) => pendingMessageId === messageId)
-        .forEach(([pendingOperationId]) => state.clearOperation(pendingOperationId));
-    }
+    if (ownsStream) state.setStreamingMessageId(completedSessionId, undefined);
+    clearMessageOperations(messageId);
     if (completedSessionId) void rehydrateSession(completedSessionId);
     return true;
   }
@@ -1987,6 +1995,9 @@ export async function stopPrompt() {
   }
   const current = useAppStore.getState();
   state.updateMessage(streamingId, { streaming: false, content: current.messages.find((message) => message.id === streamingId)?.content || i18n.t("runtimeMessages.stopped") });
+  // Confirmed stops can arrive without a terminal websocket frame. Leaving
+  // this binding behind makes history append the old bubble as pending work.
+  clearMessageOperations(streamingId);
   if (current.streamingBySession[sessionId] === humanStreamId) state.setStreamingMessageId(sessionId, undefined);
   if (current.runtimeTurnBySession[sessionId] === runtimeTurnId) state.setRuntimeTurn(sessionId, undefined);
   if (current.streamingBySession[sessionId] === humanStreamId && current.runtimeTurnBySession[sessionId] === runtimeTurnId) state.clearSessionInteractions(sessionId);
