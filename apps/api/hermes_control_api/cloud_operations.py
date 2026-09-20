@@ -49,12 +49,13 @@ class CloudOperationsMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope.get("path", "")
-        if self.state.cloud_draining and scope["method"] in {"POST", "PUT", "PATCH", "DELETE"} and path not in {"/api/v1/platform/resume", "/api/v1/platform/drain"}:
+        mail_callback = path.startswith("/api/v1/mail/oauth/") and path.endswith("/callback")
+        if self.state.cloud_draining and (scope["method"] in {"POST", "PUT", "PATCH", "DELETE"} or mail_callback) and path not in {"/api/v1/platform/resume", "/api/v1/platform/drain"}:
             payload = b'{"code":"RELEASE_MAINTENANCE","message":"A release is being installed. Keep your draft and try again shortly.","retryable":true}'
             await send({"type": "http.response.start", "status": 503, "headers": [(b"content-type", b"application/json"), (b"cache-control", b"no-store"), (b"retry-after", b"15")]})
             await send({"type": "http.response.body", "body": payload})
             return
-        mutation = scope["method"] in {"POST", "PUT", "PATCH", "DELETE"} and path not in {
+        mutation = (scope["method"] in {"POST", "PUT", "PATCH", "DELETE"} or mail_callback) and path not in {
             "/api/v1/platform/drain", "/api/v1/platform/resume",
         }
         if mutation:

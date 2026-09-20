@@ -8,6 +8,7 @@ from sqlalchemy import engine_from_config, pool
 from hermes_control_api.config import get_settings
 from hermes_control_api.database import Base
 from hermes_control_api import models  # noqa: F401
+from hermes_control_api import mail_models  # noqa: F401
 
 
 config = context.config

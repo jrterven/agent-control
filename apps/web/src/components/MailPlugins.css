@@ -1,0 +1,21 @@
+.mail-plugins { scroll-margin-top: 90px; }
+.mail-plugins__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.mail-plugins__heading h3 { margin: 0; }
+.mail-plugins__category { justify-content: flex-start; }
+.mail-plugins__heading small, .mail-plugins__providers small, .mail-plugins__agents small { display: block; opacity: .72; margin-top: 4px; }
+.mail-plugins__providers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-block: 16px; }
+.mail-plugins__providers button { width: 100%; min-height: 44px; white-space: normal; }
+.mail-plugins__privacy { display: flex; gap: 8px; font-size: .85rem; opacity: .8; }
+.mail-plugins__privacy svg { flex-shrink: 0; margin-top: 3px; }
+.mail-plugins__account { border: 1px solid var(--border, #80808044); border-radius: 12px; padding: 16px; margin-block: 12px; overflow-wrap: anywhere; }
+.mail-plugins__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.mail-plugins__actions button { min-height: 44px; }
+.mail-plugins__form { margin-block: 20px; }
+.mail-plugins__form fieldset { border: 1px solid var(--border, #80808044); border-radius: 12px; padding: 16px; min-width: 0; }
+.mail-plugins__form legend { padding-inline: 6px; font-weight: 600; }
+.mail-plugins__form label { display: grid; gap: 6px; margin-bottom: 14px; }
+.mail-plugins__form input:not([type=checkbox]), .mail-plugins__form select { width: 100%; min-height: 44px; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--border, #80808066); border-radius: 8px; color: inherit; background: var(--surface, transparent); }
+.mail-plugins__agents label { display: flex; align-items: center; min-height: 44px; gap: 12px; }
+.mail-plugins__agents input { width: 20px; height: 20px; }
+.mail-plugins__assignment { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; font-size: .875rem; }
+@media (max-width: 420px) { .mail-plugins__providers { grid-template-columns: 1fr; } .mail-plugins__account { padding: 12px; } }

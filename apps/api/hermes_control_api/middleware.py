@@ -134,6 +134,9 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             request.method not in {"POST", "PUT", "PATCH", "DELETE"}
             or not request.url.path.startswith("/api/v1/")
             or request.url.path.startswith("/api/v1/auth/")
+            # Mail OAuth responses contain flow cookies/URLs, and MCP has a
+            # dedicated send ledger. Neither belongs in the response cache.
+            or request.url.path.startswith("/api/v1/mail/")
             # Camera requests use their own durable UUID receipts, storing encrypted
             # textual results only. Never persist the body or response in this ledger.
             or (normalized_path.startswith("/api/v1/sessions/") and "/vision/" in normalized_path)
@@ -379,7 +382,8 @@ class SecurityBoundaryMiddleware(BaseHTTPMiddleware):
             connector_device_request = self.settings.deployment_mode == "cloud" and request.url.path in {
                 "/api/v1/connectors/device/authorize", "/api/v1/connectors/device/token",
             }
-            if not origin and self.settings.environment == "production" and not connector_device_request:
+            mail_mcp_request = request.url.path == "/api/v1/mail/mcp" and request.headers.get("authorization", "").startswith("Bearer ")
+            if not origin and self.settings.environment == "production" and not connector_device_request and not mail_mcp_request:
                 return self._error(403, "ORIGIN_REQUIRED", "Request origin is required", request_id)
 
         if request.url.path.endswith(("/auth/login", "/auth/google/start")):

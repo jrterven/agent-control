@@ -25,6 +25,7 @@ import { ProfileAvatar } from "../components/ProfileAvatar";
 import { InteractionCards } from "../components/ChatView";
 import { AdminConfigScreen } from "../components/AdminConfigScreen";
 import { ElevenLabsIntegration } from "../components/ElevenLabsIntegration";
+import { MailPlugins } from "../components/MailPlugins";
 import { VoiceSettings } from "../components/VoiceSettings";
 import { VisionSettings } from "../components/VisionSettings";
 import i18n from "../i18n";
@@ -1220,6 +1221,7 @@ export function SettingsScreen() {
     <PageHeader eyebrow={t("settingsPage.eyebrow")} title={t("settingsPage.title")} description={t("settingsPage.description")} />
     <div className="settings-layout">
       <CloudSettingsPanel />
+      <nav aria-label={t("settingsPage.title")}><a href="#plugins">{t("plugins.title")}</a></nav>
       <Panel className="settings-section">
         <header><Translate /><div><strong>{t("settingsPage.language")}</strong><p>{t("settingsPage.languageDescription")}</p></div></header>
         <label className="hc-field"><span>{t("settingsPage.languageLabel")}</span><select value={language} onChange={(event) => void changeLanguage(event.target.value as typeof language)}>{languageOptions.map((option) => <option key={option.code} value={option.code}>{option.nativeName}</option>)}</select></label>
@@ -1250,6 +1252,7 @@ export function SettingsScreen() {
       <VoiceSettings />
       <VisionSettings />
       <ElevenLabsIntegration />
+      <MailPlugins />
       <Panel id="privacy" className="settings-section privacy-settings" aria-labelledby="privacy-title">
         <header><ShieldCheck aria-hidden="true" /><div><strong id="privacy-title">{t("dictation.privacyTitle")}</strong><p>{t("dictation.privacyDescription")}</p></div></header>
         <h3>ElevenLabs · Scribe v2 Realtime</h3>

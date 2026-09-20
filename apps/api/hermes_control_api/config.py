@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     public_base_url: str | None = None
     google_client_id: str | None = None
     google_client_secret: str | None = None
+    mail_imap_enabled: bool = True
+    mail_gmail_enabled: bool = False
+    mail_gmail_client_id: str | None = None
+    mail_gmail_client_secret: str | None = Field(default=None, repr=False)
+    mail_outlook_enabled: bool = False
+    mail_outlook_client_id: str | None = None
+    mail_outlook_client_secret: str | None = Field(default=None, repr=False)
     cloud_registration_mode: Literal["invite_only", "open"] = "invite_only"
     beta_max_users: int = Field(default=20, ge=1, le=20)
     cloud_rate_limit_per_ip: int = Field(default=600, ge=30, le=6000)

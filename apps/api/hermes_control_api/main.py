@@ -24,6 +24,10 @@ from .api import router
 from .cloud_auth import router as cloud_auth_router
 from .api.connector_routes import router as connector_router
 from .api.vision_routes import router as vision_router
+from .api.mail_routes import router as mail_router
+from .api.mail_mcp import router as mail_mcp_router
+from .mail_service import MailService
+from .mail_providers import MailError
 from .remote_provider import BackgroundTasksBusyError, ConnectorRegistry
 from .cloud_operations import CloudMetrics, CloudOperationsMiddleware, router as cloud_operations_router
 from .config import Settings, get_settings
@@ -399,16 +403,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.mark_orphaned_local_triggers_unknown = lambda: _mark_orphans(
             session_factory, service_container
         )
+        mail_watcher = asyncio.create_task(app.state.mail_service.reconcile(app), name="mail-mcp-reconcile")
         try:
             yield
         finally:
             automation_watcher.cancel()
             capability_watcher.cancel()
             email_reference_cache_watcher.cancel()
+            mail_watcher.cancel()
             for watcher in (
                 automation_watcher,
                 capability_watcher,
                 email_reference_cache_watcher,
+                mail_watcher,
             ):
                 with contextlib.suppress(asyncio.CancelledError):
                     await watcher
@@ -438,6 +445,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.elevenlabs_speech_client = ElevenLabsSpeechClient()
     app.state.openai_live_client = OpenAILiveClient()
     app.state.vision_service = VisionService(vault)
+    app.state.mail_service = MailService(service_container)
+    app.state.cloud_mutations_inflight = 0
+    app.include_router(mail_router)
+    app.include_router(mail_mcp_router)
+
+    @app.exception_handler(MailError)
+    async def mail_error_handler(request: Request, exc: MailError):
+        return JSONResponse(status_code=exc.status, content={"code": exc.code, "message": exc.code, "retryable": False})
     app.state.live_session_limiter = LiveSessionLimiter(limit=6, window_seconds=60)
     app.state.transcription_token_limiter = TranscriptionTokenLimiter(
         limit=settings.transcription_token_rate_limit,
@@ -543,7 +558,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         camera_input = (
             request.url.path.startswith("/api/v1/sessions/")
             and "/vision/" in request.url.path
-        ) or request.url.path.startswith("/api/v1/vision/")
+        ) or request.url.path.startswith(("/api/v1/vision/", "/api/v1/mail/"))
         return JSONResponse(
             status_code=422,
             content={

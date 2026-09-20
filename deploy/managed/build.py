@@ -112,7 +112,7 @@ def smoke(root: Path, work: Path) -> None:
                AGENT_CONTROL_RELEASE_ROOT=str(root), HOME=str(work / "home"))
     (work / "home").mkdir(parents=True, exist_ok=True)
     invoke(root / "python/bin/python3", "-B", "-c",
-           "import sys,ssl,sqlite3,anthropic,httpx,websockets,fastapi,uvicorn,hermes_cli,agent_control_connector; assert sys.version_info[:2] == (3,12)", env=env, cwd=work)
+           "import sys,ssl,sqlite3,anthropic,httpx,websockets,fastapi,uvicorn,mcp,httpx2,hermes_cli,agent_control_connector; assert sys.version_info[:2] == (3,12)", env=env, cwd=work)
     invoke(root / "bin/agent-control-setup", "--help", env=env, cwd=work)
     invoke(root / "python/bin/python3", "-B", "-m", "agent_control_connector", "check-media", env=env, cwd=work)
     invoke(root / "python/bin/python3", "-B", "-m", "agent_control_connector", "check-background", env=env, cwd=work)
@@ -153,7 +153,7 @@ def build(output: Path, revision: str, target: str, cache: Path, hermes_source: 
         uv_version = invoke(sys.executable, "-m", "uv", "--version", capture_output=True, text=True).stdout.split()[1]
         if uv_version != PINS["uvVersion"]:
             raise ValueError("Install the pinned uv build tool version")
-        invoke(sys.executable, "-m", "uv", "export", "--frozen", "--no-dev", "--no-emit-project", "--extra", "anthropic",
+        invoke(sys.executable, "-m", "uv", "export", "--frozen", "--no-dev", "--no-emit-project", "--extra", "anthropic", "--extra", "mcp",
                "--output-file", requirements, "--no-python-downloads", cwd=root / "hermes", stdout=subprocess.DEVNULL)
         env = os.environ.copy()
         env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1", PIP_DISABLE_PIP_VERSION_CHECK="1", PIP_CONFIG_FILE=os.devnull)
