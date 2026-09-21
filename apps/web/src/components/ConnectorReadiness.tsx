@@ -5,7 +5,6 @@ import type { ConnectorView } from "@hermes-control/shared-types";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
-import { createChatForCurrentContext } from "../hooks";
 import { useAppStore } from "../store/appStore";
 import type { Profile } from "../types";
 
@@ -62,11 +61,9 @@ export function ConnectorReadiness({ computer }: { computer: ConnectorView }) {
     setCreating(true); setChatError(false);
     try {
       useAppStore.getState().selectProfile(profileId);
-      const session = await createChatForCurrentContext();
-      if (!session) { setChatError(true); return; }
       const current = useAppStore.getState();
       if (current.authState !== "authenticated" || current.userId !== userId || current.authGeneration !== authGeneration) return;
-      current.selectSession(session.id);
+      current.prepareChat();
       await navigate({ to: "/chats" });
     } catch { setChatError(true); }
     finally { creatingRef.current = false; setCreating(false); }

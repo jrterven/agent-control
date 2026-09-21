@@ -1,3 +1,4 @@
+import { createChatForCurrentContext } from "../hooks";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -104,6 +105,7 @@ describe("new chat navigation", () => {
     render(<LeftSidebar />);
 
     await user.click(screen.getByRole("button", { name: "Nuevo chat" }));
+    await act(async () => { await createChatForCurrentContext(); });
 
     await waitFor(() => expect(navigation.navigate).toHaveBeenCalledWith({ to: "/chats" }));
     expect(useAppStore.getState()).toMatchObject({ selectedSessionId: newSession.id, csrfToken: "fresh-csrf", authGeneration: generation });
@@ -119,61 +121,51 @@ describe("new chat navigation", () => {
     vi.spyOn(api, "createSession").mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     render(<LeftSidebar />);
     await user.click(screen.getByRole("button", { name: "Nuevo chat" }));
+    const creation = createChatForCurrentContext();
 
     await act(async () => {
       useAppStore.getState().setAuth("unauthenticated");
       useAppStore.getState().setAuth("authenticated", "Owner A", "new-login-csrf", false, "owner-a");
       finish(newSession);
+      await creation;
     });
 
-    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(navigation.navigate).toHaveBeenCalledWith({ to: "/chats" });
     expect(useAppStore.getState().sessions).toHaveLength(0);
     expect(useAppStore.getState().selectedSessionId).toBe("");
   });
 
-  it.each(["/computers", "/settings"])("opens one blank chat from %s after creation, preserving its context", async (pathname) => {
+  it.each(["/computers", "/settings"])("opens the mode selector from %s without creating a session", async (pathname) => {
     navigation.pathname = pathname;
     const user = userEvent.setup();
-    let finish!: (session: SessionSummary) => void;
-    const create = vi.spyOn(api, "createSession").mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
-    render(<LeftSidebar />);
-    const button = screen.getByRole("button", { name: "Nuevo chat" });
-    await user.dblClick(button);
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create).toHaveBeenCalledWith("profile-newton", "workspace-papers", "csrf-test");
-    expect(button).toBeDisabled();
-    expect(button).toHaveAttribute("aria-busy", "true");
-    expect(navigation.navigate).not.toHaveBeenCalled();
-    await act(async () => finish(newSession));
-    await waitFor(() => expect(navigation.navigate).toHaveBeenCalledWith({ to: "/chats" }));
-    expect(useAppStore.getState()).toMatchObject({
-      selectedSessionId: "session-new", selectedProfileId: "profile-newton",
-      selectedGatewayId: "gateway-home", selectedWorkspaceId: "workspace-papers", leftDrawerOpen: false,
-    });
-    expect(useAppStore.getState().sessions.filter((session) => session.id === "session-new")).toHaveLength(1);
-  });
-
-  it("keeps the current chat and page on failure and exposes a retryable error", async () => {
-    const user = userEvent.setup();
-    vi.spyOn(api, "createSession").mockRejectedValueOnce(new Error("internal details"));
+    const create = vi.spyOn(api, "createSession");
     render(<LeftSidebar />);
     await user.click(screen.getByRole("button", { name: "Nuevo chat" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo crear el chat");
-    expect(screen.queryByText("internal details")).not.toBeInTheDocument();
-    expect(navigation.navigate).not.toHaveBeenCalled();
-    expect(useAppStore.getState().selectedSessionId).toBe("session-papers");
-    expect(screen.getByRole("button", { name: "Nuevo chat" })).toBeEnabled();
+    expect(create).not.toHaveBeenCalled();
+    expect(navigation.navigate).toHaveBeenCalledWith({ to: "/chats" });
+    expect(useAppStore.getState()).toMatchObject({
+      preparingChat: true, selectedSessionId: "", selectedProfileId: "profile-newton",
+      selectedGatewayId: "gateway-home", selectedWorkspaceId: "workspace-papers", leftDrawerOpen: false,
+    });
+    useAppStore.getState().hydrateBootstrap({ gateways, profiles, workspaces, sessions, automations: [] });
+    expect(useAppStore.getState().selectedSessionId).toBe("");
   });
 
-  it("does not navigate or send creation requests for a disconnected computer", async () => {
+  it("preserves preparation after a failed first-send creation", async () => {
+    useAppStore.getState().prepareChat();
+    vi.spyOn(api, "createSession").mockRejectedValueOnce(new Error("offline"));
+    await expect(createChatForCurrentContext()).rejects.toThrow("offline");
+    expect(useAppStore.getState()).toMatchObject({ selectedSessionId: "", preparingChat: true });
+  });
+
+  it("can open preparation offline without sending a creation request", async () => {
     const user = userEvent.setup();
     useAppStore.setState({ connection: "offline" });
     const create = vi.spyOn(api, "createSession");
     render(<LeftSidebar />);
     await user.click(screen.getByRole("button", { name: "Nuevo chat" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Comprueba la conexión");
     expect(create).not.toHaveBeenCalled();
-    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(navigation.navigate).toHaveBeenCalledWith({ to: "/chats" });
   });
 });
 

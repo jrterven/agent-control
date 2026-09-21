@@ -1,3 +1,4 @@
+import { closeTemporaryChat } from "./lib/temporaryChat";
 import { useEffect, useMemo, useRef } from "react";
 import { api, ApiError, connectRealtime } from "./lib/api";
 import { absoluteTimestamp } from "./lib/chatTimeline";
@@ -1586,15 +1587,17 @@ export function useSessionHistory() {
   }, [authState, bootstrapLoaded, demoMode, sessionId, connection]);
 }
 
-export async function createChatForCurrentContext() {
+export async function createChatForCurrentContext(chatMode: import("./types").ChatMode = "memory_read_write") {
   const state = useAppStore.getState();
   const profile = state.profiles.find((item) => item.id === state.selectedProfileId);
   if (state.demoMode) {
-    const session = state.sessions.find((item) => (
-      item.profileId === state.selectedProfileId
-      && (item.workspaceId ?? "") === state.selectedWorkspaceId
-    ));
-    if (session) state.selectSession(session.id);
+    const session: import("./types").SessionSummary = {
+      id: (chatMode === "temporary" ? "tmp_" : "demo_") + crypto.randomUUID().replaceAll("-", ""),
+      storedSessionId: crypto.randomUUID(), profileId: state.selectedProfileId,
+      workspaceId: state.selectedWorkspaceId || undefined, title: i18n.t("chat.newConversation"),
+      preview: "", updatedAt: new Date().toISOString(), unread: false, chatMode,
+    };
+    state.addSession(session);
     return session;
   }
   if (
@@ -1609,11 +1612,19 @@ export async function createChatForCurrentContext() {
       profile.id,
       state.selectedWorkspaceId || undefined,
       state.csrfToken,
+      chatMode,
     );
     const current = useAppStore.getState();
     // A request can finish after logout or an account switch. Its session must
     // never be projected into the new account's sidebar or selected for it.
-    if (current.authState !== "authenticated" || current.userId !== state.userId || current.authGeneration !== state.authGeneration) return undefined;
+    if (current.authState !== "authenticated" || current.userId !== state.userId || current.authGeneration !== state.authGeneration) {
+      if (session.chatMode === "temporary") void closeTemporaryChat(session, state.csrfToken);
+      return undefined;
+    }
+    if (current.selectedProfileId !== state.selectedProfileId || current.selectedWorkspaceId !== state.selectedWorkspaceId || current.selectedSessionId !== state.selectedSessionId) {
+      if (session.chatMode === "temporary") void closeTemporaryChat(session, state.csrfToken);
+      return undefined;
+    }
     current.addSession(session);
     return session;
   } catch (error) {
@@ -1712,6 +1723,7 @@ export function useOfflineTranscriptCache() {
 }
 
 export function useRealtimeConnection() {
+  const temporaryId = useAppStore((state) => state.selectedSessionId.startsWith("tmp_") ? state.selectedSessionId : "");
   const userId = useAppStore((state) => state.userId);
   const authState = useAppStore((state) => state.authState);
   const demoMode = useAppStore((state) => state.demoMode);
@@ -1747,7 +1759,7 @@ export function useRealtimeConnection() {
       },
     }, controller.signal, csrfToken);
     return () => controller.abort();
-  }, [userId, authState, csrfToken, demoMode, setConnection]);
+  }, [userId, authState, csrfToken, demoMode, setConnection, temporaryId]);
 }
 
 const activeDemoControllers = new Map<string, AbortController>();

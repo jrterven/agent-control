@@ -856,6 +856,7 @@ def bootstrap(
             {
                 "id": row.id,
                 "storedSessionId": row.stored_session_id,
+                "chatMode": row.chat_mode,
                 "runtimeSessionId": row.runtime_session_id,
                 "workspaceId": row.workspace_id,
                 "profileId": (
@@ -1585,8 +1586,71 @@ async def create_session(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> SessionView:
-    row = await SessionService(services(request)).create(db, user, payload)
-    return session_view(db, row)
+    app_services = services(request)
+    if payload.chat_mode != "temporary":
+        row = await SessionService(app_services).create(db, user, payload)
+        return session_view(db, row)
+    registry = app_services.temporary_chats
+    import hashlib
+    fingerprint = hashlib.sha256(payload.model_dump_json().encode()).hexdigest()
+    async with registry.creation_lock:
+        key = (user.id, __)
+        previous = registry.creations.get(key)
+        if previous is not None:
+            if previous[0] != fingerprint:
+                raise HTTPException(409, "IDEMPOTENCY_CONFLICT")
+            chat = registry.entries.get(previous[1])
+            if chat is None or chat.closed:
+                raise HTTPException(410, "TEMPORARY_CHAT_ENDED")
+            with chat.session() as transient_db:
+                row = transient_db.get(SessionLink, chat.id)
+                return session_view(transient_db, row).model_copy(update={"temporary_access": chat.access})
+        if len(registry.creations) >= 4096:
+            registry.creations.popitem(last=False)
+        registry.creations[key] = (fingerprint, None)
+        chat = registry.create(db, user.id)
+        try:
+            with chat.session() as transient_db:
+                row = await SessionService(app_services).create(transient_db, user, payload)
+                registry.bind(chat, row)
+                registry.creations[key] = (fingerprint, row.id)
+                return session_view(transient_db, row).model_copy(update={"temporary_access": chat.access})
+        except BaseException:
+            registry.remove(chat)
+            raise
+
+
+@router.post("/sessions/{session_id}/temporary/renew", status_code=204)
+async def renew_temporary_chat(session_id: str, request: Request, auth: AuthSession = Depends(require_csrf), db: Session = Depends(get_db)):
+    chat = db.info.get("temporary_chat")
+    if chat is None:
+        raise HTTPException(404, "Temporary conversation not found")
+    app_services = services(request)
+    service = SessionService(app_services)
+    row = service.owned(db, auth.user, session_id)
+    connection = await service.gateways.connection(db, row.gateway_id, row.profile_name)
+    provider = await app_services.provider_pool.get(connection)
+    await provider.renew_temporary_session(service._route(row))
+    import time
+    chat.expires_at = time.monotonic() + 300
+    return Response(status_code=204)
+
+
+@router.post("/sessions/{session_id}/temporary/close", status_code=204)
+async def close_temporary_chat(session_id: str, request: Request, auth: AuthSession = Depends(require_csrf), db: Session = Depends(get_db)):
+    chat = db.info.get("temporary_chat")
+    if chat is None:
+        return Response(status_code=204)
+    app_services = services(request)
+    service = SessionService(app_services)
+    row = service.owned(db, auth.user, session_id)
+    try:
+        connection = await service.gateways.connection(db, row.gateway_id, row.profile_name)
+        provider = await app_services.provider_pool.get(connection)
+        await provider.close_temporary_session(service._route(row))
+    finally:
+        app_services.temporary_chats.remove(chat)
+    return Response(status_code=204)
 
 
 @router.post("/sessions/sync", response_model=list[SessionView])
@@ -1738,7 +1802,7 @@ async def session_history(
         # has re-established its websocket. Project the EventHub's bounded,
         # route-bound claims through history so the controls remain usable.
         "pendingInteractions": (
-            service.services.event_hub.pending_interaction_snapshots(
+            service.event_hub(db).pending_interaction_snapshots(
                 gateway_id=row.gateway_id,
                 profile_name=row.profile_name,
                 stored_session_id=row.stored_session_id,
@@ -1847,7 +1911,7 @@ async def session_media_metadata(
     from ..visual_media import get_visual_media_service, public_metadata
     service = SessionService(services(request))
     row = service.owned(db, user, session_id)
-    image = get_visual_media_service(services(request)).authorized(db, user, row, media_id)
+    image = get_visual_media_service(services(request), db).authorized(db, user, row, media_id)
     if image is None:
         raise NotFoundError("Image unavailable")
     return JSONResponse(public_metadata(image), headers={
@@ -2532,21 +2596,43 @@ async def realtime_socket(websocket: WebSocket) -> None:
     if row is None:
         await websocket.close(code=4401)
         return
+    hub = websocket.app.state.services.event_hub
+    event_factory = websocket.app.state.session_factory
+    transient = None
+    accepted = False
+    temporary_id = websocket.query_params.get("temporary", "")
+    if temporary_id:
+        await websocket.accept()
+        accepted = True
+        try:
+            raw = await asyncio.wait_for(websocket.receive_text(), 10)
+            if len(raw) > 256:
+                raise ValueError("Invalid private handshake")
+            handshake = json.loads(raw)
+            transient = websocket.app.state.services.temporary_chats.owned(
+                temporary_id, row.user_id, handshake.get("access") if isinstance(handshake, dict) else None)
+            if transient is None:
+                raise ValueError("Private chat ended")
+        except (ValueError, HTTPException, TimeoutError, WebSocketDisconnect):
+            await websocket.close(code=4403)
+            return
+        hub, event_factory = transient.events, transient.session
     try:
-        subscription = await websocket.app.state.services.event_hub.subscribe(row.user_id)
+        subscription = await hub.subscribe(row.user_id)
     except SubscriptionLimitError:
         await websocket.close(code=4429)
         return
     try:
-        await websocket.accept()
+        if not accepted:
+            await websocket.accept()
     except Exception:
-        await websocket.app.state.services.event_hub.unsubscribe(subscription)
+        await hub.unsubscribe(subscription)
         raise
     inbound_times: deque[float] = deque()
 
     def bind_owned_session(payload: dict[str, Any]) -> dict[str, Any] | None:
         return bind_owned_realtime_event(
-            websocket.app.state.session_factory,
+            event_factory,
             user_id=row.user_id,
             payload=payload,
             email_reference_key=websocket.app.state.services.vault.key,
@@ -2554,6 +2640,8 @@ async def realtime_socket(websocket: WebSocket) -> None:
         )
 
     def auth_session_is_active() -> bool:
+        if transient is not None and (transient.closed or time.monotonic() >= transient.expires_at):
+            return False
         with websocket.app.state.session_factory() as db:
             auth_session = db.get(AuthSession, row.auth_session_id)
             if auth_session is None or auth_session.revoked_at is not None:
@@ -2569,7 +2657,7 @@ async def realtime_socket(websocket: WebSocket) -> None:
             try:
                 parsed_cursors = json.loads(encoded_cursors)
                 if isinstance(parsed_cursors, dict):
-                    replay, reconciliations = websocket.app.state.services.event_hub.replay_since(
+                    replay, reconciliations = hub.replay_since(
                         {str(key): value for key, value in parsed_cursors.items() if isinstance(value, dict)}
                     )
                     for replay_payload in [*reconciliations, *replay]:
@@ -2586,7 +2674,7 @@ async def realtime_socket(websocket: WebSocket) -> None:
                 await websocket.close(code=4401)
                 break
             event_task = asyncio.create_task(
-                websocket.app.state.services.event_hub.next_event(subscription)
+                hub.next_event(subscription)
             )
             # Read text first so an authenticated browser frame is bounded
             # before JSON parsing. The process-level Uvicorn limit is configured
@@ -2654,4 +2742,4 @@ async def realtime_socket(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        await websocket.app.state.services.event_hub.unsubscribe(subscription)
+        await hub.unsubscribe(subscription)

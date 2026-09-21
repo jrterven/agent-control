@@ -22,6 +22,8 @@ import { readAgentPreference, saveAgentPreference } from "../lib/agentPreference
 type AuthState = "checking" | "authenticated" | "offline" | "unauthenticated";
 
 type AppState = {
+  preparingChat: boolean;
+  prepareChat: () => void;
   authState: AuthState;
   authGeneration: number;
   userName: string;
@@ -101,6 +103,7 @@ type AppState = {
 };
 
 const emptyPrivateState = {
+  preparingChat: false,
   userName: "Administrador",
   userId: undefined as string | undefined,
   csrfToken: undefined,
@@ -253,6 +256,7 @@ export const useAppStore = create<AppState>((set) => ({
     };
   }),
   setLeftDrawerOpen: (leftDrawerOpen) => set({ leftDrawerOpen }),
+  prepareChat: () => set({ preparingChat: true, selectedSessionId: "", leftDrawerOpen: false }),
   setDesktopSidebarOpen: (desktopSidebarOpen) => {
     saveDesktopSidebarOpen(desktopSidebarOpen);
     set({ desktopSidebarOpen, gatewayMenuOpen: false });
@@ -267,20 +271,21 @@ export const useAppStore = create<AppState>((set) => ({
     const selectedProfileId = profile?.id ?? "";
     const selectedSessionId = state.sessions.find((item) => item.profileId === selectedProfileId && (item.workspaceId ?? "") === state.selectedWorkspaceId)?.id ?? "";
     rememberAgent(state, profile);
-    return { selectedGatewayId, selectedProfileId, selectedSessionId, gatewayMenuOpen: false };
+    return { preparingChat: false, selectedGatewayId, selectedProfileId, selectedSessionId, gatewayMenuOpen: false };
   }),
   selectProfile: (selectedProfileId) => set((state) => {
     const profile = state.profiles.find((item) => item.id === selectedProfileId);
     const selectedSessionId = state.sessions.find((item) => item.profileId === selectedProfileId && (item.workspaceId ?? "") === state.selectedWorkspaceId)?.id ?? "";
     rememberAgent(state, profile);
-    return { selectedProfileId, selectedGatewayId: profile?.gatewayId ?? state.selectedGatewayId, selectedSessionId };
+    return { preparingChat: false, selectedProfileId, selectedGatewayId: profile?.gatewayId ?? state.selectedGatewayId, selectedSessionId };
   }),
-  selectWorkspace: (selectedWorkspaceId) => set((state) => ({ selectedWorkspaceId, selectedSessionId: state.sessions.find((item) => (item.workspaceId ?? "") === selectedWorkspaceId && item.profileId === state.selectedProfileId)?.id ?? "" })),
+  selectWorkspace: (selectedWorkspaceId) => set((state) => ({ preparingChat: false, selectedWorkspaceId, selectedSessionId: state.sessions.find((item) => (item.workspaceId ?? "") === selectedWorkspaceId && item.profileId === state.selectedProfileId)?.id ?? "" })),
   selectSession: (selectedSessionId) => set((state) => {
     const session = state.sessions.find((item) => item.id === selectedSessionId);
     const profile = session ? state.profiles.find((item) => item.id === session.profileId) : undefined;
     rememberAgent(state, profile);
     return {
+      preparingChat: false,
       selectedSessionId: session?.id ?? "",
       selectedProfileId: profile?.id ?? state.selectedProfileId,
       selectedGatewayId: profile?.gatewayId ?? state.selectedGatewayId,
@@ -295,6 +300,8 @@ export const useAppStore = create<AppState>((set) => ({
   setAdvancedMode: (advancedMode) => set({ advancedMode }),
   setOfflineCacheEnabled: (offlineCacheEnabled) => set({ offlineCacheEnabled }),
   hydrateBootstrap: (data) => set((state) => {
+    const temporary = state.sessions.find((item) => item.id === state.selectedSessionId && item.chatMode === "temporary" && data.profiles.some((profile) => profile.id === item.profileId));
+    if (temporary) data = { ...data, sessions: [temporary, ...data.sessions.filter((item) => item.id !== temporary.id)] };
     const owner = agentPreferenceOwner(state);
     const remembered = !state.bootstrapLoaded && owner ? readAgentPreference(owner) : undefined;
     const availableProfiles = data.profiles.filter((profile) => data.gateways.some((gateway) => gateway.id === profile.gatewayId));
@@ -318,10 +325,10 @@ export const useAppStore = create<AppState>((set) => ({
         : data.workspaces.some((item) => item.id === state.selectedWorkspaceId)
           ? state.selectedWorkspaceId
           : data.workspaces[0]?.id ?? "";
-    const selectedSessionId = data.sessions.some((item) => item.id === state.selectedSessionId && item.profileId === selectedProfileId && (item.workspaceId ?? "") === selectedWorkspaceId) ? state.selectedSessionId : data.sessions.find((item) => item.profileId === selectedProfileId && (item.workspaceId ?? "") === selectedWorkspaceId)?.id ?? "";
+    const selectedSessionId = state.preparingChat ? "" : data.sessions.some((item) => item.id === state.selectedSessionId && item.profileId === selectedProfileId && (item.workspaceId ?? "") === selectedWorkspaceId) ? state.selectedSessionId : data.sessions.find((item) => item.profileId === selectedProfileId && (item.workspaceId ?? "") === selectedWorkspaceId)?.id ?? "";
     return { ...data, bootstrapLoaded: true, selectedGatewayId, selectedProfileId, selectedWorkspaceId, selectedSessionId };
   }),
-  addSession: (session) => set((state) => ({ sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)], selectedSessionId: session.id, leftDrawerOpen: false })),
+  addSession: (session) => set((state) => ({ preparingChat: false, sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)], selectedSessionId: session.id, leftDrawerOpen: false })),
   updateSession: (sessionId, update) => set((state) => {
     const current = state.sessions.find((session) => session.id === sessionId);
     const previousWorkspaceId = current?.workspaceId ?? "";

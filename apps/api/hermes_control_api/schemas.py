@@ -346,6 +346,7 @@ class WorkspaceView(ApiModel):
 
 
 class SessionCreate(ApiModel):
+    chat_mode: Literal["memory_read_write", "memory_read_only", "temporary"] = "memory_read_write"
     gateway_id: str | None = None
     profile_name: str | None = Field(default=None, min_length=1, max_length=120)
     profile_id: str | None = None
@@ -385,6 +386,8 @@ class SessionUpdate(ApiModel):
 
 
 class SessionView(ApiModel):
+    chat_mode: Literal["memory_read_write", "memory_read_only", "temporary"] = "memory_read_write"
+    temporary_access: str | None = None
     id: str
     gateway_id: str
     workspace_id: str | None

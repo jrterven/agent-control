@@ -41,6 +41,7 @@ READ_OPERATIONS = frozenset({
 })
 WRITE_OPERATIONS = frozenset({
     "create_profile", "delete_profile", "create_session", "resume_session",
+    "renew_temporary_session", "close_temporary_session",
     "submit_prompt", "attach_prompt_attachment", "detach_prompt_images", "interrupt",
     "respond_approval", "respond_clarification", "delete_session", "create_automation",
     "update_automation", "delete_automation", "trigger_automation", "set_model",

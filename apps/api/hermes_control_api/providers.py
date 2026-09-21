@@ -122,11 +122,20 @@ class FailoverProvider:
     async def search_sessions(self, query, *, limit=20):
         return await self._call("search_sessions", query, limit=limit)
 
-    async def create_session(self, *, title=None):
-        return await self._call("create_session", title=title)
+    async def create_session(self, *, title=None, chat_mode="memory_read_write"):
+        kwargs = {"title": title}
+        if chat_mode != "memory_read_write":
+            kwargs["chat_mode"] = chat_mode
+        return await self._call("create_session", **kwargs)
 
     async def resume_session(self, stored_session_id):
         return await self._call("resume_session", stored_session_id)
+
+    async def renew_temporary_session(self, route):
+        return await self._call("renew_temporary_session", route)
+
+    async def close_temporary_session(self, route):
+        return await self._call("close_temporary_session", route)
 
     async def history(self, route):
         return await self._call("history", route)

@@ -130,6 +130,18 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         normalized_path = request.url.path.rstrip("/") or "/"
+        # Private replies (including their tab access token) must never enter
+        # the durable HTTP receipt ledger. Their session store owns deduplication.
+        if request.url.path.startswith("/api/v1/sessions/tmp_"):
+            return await call_next(request)
+        if request.method == "POST" and normalized_path == "/api/v1/sessions":
+            try:
+                payload = await request.json()
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict) and payload.get("chatMode", payload.get("chat_mode")) == "temporary":
+                return await call_next(request)
+
         if (
             request.method not in {"POST", "PUT", "PATCH", "DELETE"}
             or not request.url.path.startswith("/api/v1/")

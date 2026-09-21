@@ -69,7 +69,7 @@ function captureReturnContext() {
       selectedGatewayId: state.selectedGatewayId,
       selectedProfileId: state.selectedProfileId,
       selectedWorkspaceId: state.selectedWorkspaceId,
-      selectedSessionId: state.selectedSessionId,
+      selectedSessionId: state.selectedSessionId.startsWith("tmp_") ? "" : state.selectedSessionId,
     }));
   } catch {
     // A privacy-restricted browser can reject sessionStorage. Updating still works.

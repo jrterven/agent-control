@@ -88,6 +88,7 @@ export async function bindPrivateCacheOwner(userId: string, legacyPrivateUserNam
 }
 
 export async function saveDraft(sessionId: string, content: string, ownerId?: string) {
+  if (sessionId.startsWith("tmp_")) return;
   // Start the actual put before yielding: a document teardown can discard an
   // owner lookup callback. Captured ownership makes any late write unreadable
   // by a different account; unknown legacy drafts need explicit migration.
@@ -95,6 +96,7 @@ export async function saveDraft(sessionId: string, content: string, ownerId?: st
 }
 
 export async function loadDraft(sessionId: string, ownerId?: string) {
+  if (sessionId.startsWith("tmp_")) return "";
   const context = await privateContext(ownerId);
   const record = await db.drafts.get(sessionId);
   return await cacheOwnerMatches(context) && record?.ownerId === context.ownerId ? record?.content ?? "" : "";
@@ -274,6 +276,7 @@ export async function saveEncryptedTranscript(
   messages: ChatMessage[],
   ownerId?: string,
 ) {
+  if (sessionId.startsWith("tmp_")) return;
   const context = await privateContext(ownerId);
   if (!sessionId || !workspaceId || !messages.length) return;
   const sanitized = sanitizeTranscript(messages);
@@ -350,6 +353,7 @@ export async function saveOfflineSnapshot(
   const context = await privateContext(ownerId);
   const workspaceId = selectedWorkspaceId || data.workspaces[0]?.id || "";
   const sessions = data.sessions
+    .filter((session) => session.chatMode !== "temporary" && !session.id.startsWith("tmp_"))
     .filter((session) => !workspaceId || session.workspaceId === workspaceId)
     .slice(0, 200)
     .map((session) => ({
@@ -483,6 +487,7 @@ export async function saveShellSnapshot(
   selectedSessionId?: string,
   ownerId?: string,
 ) {
+  data = { ...data, sessions: data.sessions.filter((session) => session.chatMode !== "temporary" && !session.id.startsWith("tmp_")) };
   const context = await privateContext(ownerId);
   const session = data.sessions.find((item) => item.id === selectedSessionId)
     ?? data.sessions.find((item) => !selectedWorkspaceId || item.workspaceId === selectedWorkspaceId)

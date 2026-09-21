@@ -291,11 +291,13 @@ def test_initial_alembic_schema_is_explicit_and_reversible(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "0028_mail_plugins"
+        ).scalar_one() == "0029_chat_modes"
     assert {"vision_preferences", "vision_observations", "vision_request_receipts"} <= set(schema.get_table_names())
     assert {"visual_media", "visual_media_route_tombstones"} <= set(schema.get_table_names())
     for table in ("connectors", "connector_device_authorizations"):
         assert {"installation_kind", "hermes_version"} <= {column["name"] for column in schema.get_columns(table)}
+    assert "chat_mode" in {column["name"] for column in schema.get_columns("session_links")}
+    assert any(check["name"] == "ck_session_chat_mode" for check in schema.get_check_constraints("session_links"))
     engine.dispose()
 
     downgrade = subprocess.run(

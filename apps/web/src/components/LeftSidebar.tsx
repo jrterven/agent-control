@@ -5,7 +5,6 @@ import { Badge, Button, IconButton, StatusDot, cx } from "@hermes-control/ui";
 import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
 import { formatConversationTimestamp, formatConversationTimestampLong } from "../lib/dateTime";
-import { createChatForCurrentContext } from "../hooks";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useMediaQuery } from "../lib/useMediaQuery";
 import { useAppStore } from "../store/appStore";
@@ -37,7 +36,8 @@ export function LeftSidebar() {
   const gateways = useAppStore((state) => state.gateways);
   const profiles = useAppStore((state) => state.profiles);
   const workspaces = useAppStore((state) => state.workspaces);
-  const sessions = useAppStore((state) => state.sessions);
+  const allSessions = useAppStore((state) => state.sessions);
+  const sessions = allSessions.filter((session) => session.chatMode !== "temporary");
   const timeZone = useAppStore((state) => state.timeZone);
   const csrfToken = useAppStore((state) => state.csrfToken);
   const demoMode = useAppStore((state) => state.demoMode);
@@ -153,12 +153,7 @@ export function LeftSidebar() {
     setCreatingSession(true);
     setCreateChatError("");
     try {
-      const session = await createChatForCurrentContext();
-      if (!session) {
-        setCreateChatError(t("sidebar.createChatError"));
-        return;
-      }
-      selectSession(session.id);
+      useAppStore.getState().prepareChat();
       await navigate({ to: "/chats" });
     } catch {
       setCreateChatError(t("sidebar.createChatError"));

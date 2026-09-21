@@ -1,0 +1,19 @@
+.conversation__heading-row { display: flex; align-items: center; justify-content: flex-end; padding-right: 12px; border-bottom: 1px solid var(--border); }
+.conversation__heading-row .conversation__title { flex: 1; min-width: 0; border-bottom: 0; }
+.conversation__heading-row:has(.conversation__title:only-child) { border-bottom: 0; }
+.chat-mode-indicator { position: relative; display: inline-flex; flex-shrink: 0; }
+.chat-mode-indicator > button { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border: 0; border-radius: 10px; color: inherit; background: transparent; cursor: pointer; }
+.chat-mode-indicator > button:hover, .chat-mode-indicator > button:focus-visible { background: var(--surface-2, #8882); }
+.chat-mode-tooltip { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; display: grid; gap: 6px; width: min(270px, 75vw); padding: 12px; border: 1px solid var(--border, #8885); border-radius: 10px; background: var(--surface-elevated, #fff); color: var(--text, #17232e); box-shadow: 0 6px 25px #0002; font-size: 13px; font-weight: 400; }
+.new-chat-setup { width: min(900px, 100%); margin: 0 auto; padding: 16px 24px 24px; }
+.chat-mode-picker { border: 0; padding: 0; margin: 0 0 24px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.chat-mode-picker legend { margin-bottom: 12px; font-weight: 600; }
+.chat-mode-option { display: grid; grid-template-columns: 18px 28px 1fr; align-content: start; align-items: center; gap: 10px; border: 1px solid var(--border, #8885); padding: 16px; border-radius: 14px; cursor: pointer; font-size: 14px; }
+.chat-mode-option > span { grid-column: 2 / -1; line-height: 1.5; font-size: 13px; }
+.chat-mode-option small { display: block; margin-top: 8px; }
+.chat-mode-option.is-selected { border-color: var(--accent, #4977d1); background: var(--accent-soft, #4977d110); }
+.chat-mode-option:focus-within { outline: 2px solid var(--accent, #4977d1); outline-offset: 3px; }
+.chat-mode-option.is-unavailable { opacity: .6; cursor: not-allowed; }
+.new-chat-composer { padding: 0; }
+.new-chat-composer textarea { width: 100%; min-height: 90px; resize: vertical; padding: 14px; border: 0; color: inherit; background: transparent; font: inherit; }
+@media (max-width: 650px) { .new-chat-setup { padding: 12px; } .chat-mode-picker { grid-template-columns: 1fr; gap: 8px; } .chat-mode-option { padding: 12px; } }

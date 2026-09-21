@@ -293,6 +293,8 @@ def main(argv=None):
         elif args.command == "check-background":
             from .background_install import background_self_test
             background_self_test()
+            from .chat_modes_install import plugin_source
+            compile(plugin_source(), "hermes_chat_policy.py", "exec")
             print("ok")
         elif args.command in {"background-status", "install-background"}:
             from .background_install import background_profiles
@@ -305,6 +307,8 @@ def main(argv=None):
                     drain(directory)
                     request = marker.read_text()
                     try:
+                        from .chat_modes_install import chat_mode_profiles
+                        chat_mode_profiles(read_json(directory / "config.json"), install=True)
                         result = background_profiles(read_json(directory / "config.json"), install=True)
                     finally:
                         if marker.exists() and not marker.is_symlink() and marker.read_text() == request:

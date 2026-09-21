@@ -13,11 +13,13 @@ from pathlib import Path
 import re
 import sqlite3
 import stat
+import sys
+import types
 import time
 from uuid import uuid4
 
 PLUGIN_NAME = "agent-control-media"
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.1.0"
 MAX_BYTES = 10 * 1024 * 1024
 MAX_QUEUE_BYTES = 256 * 1024 * 1024
 MAX_QUEUE_ITEMS = 512
@@ -72,13 +74,17 @@ def queue_directory(home: Path) -> Path:
 
 
 def open_queue(home: Path) -> sqlite3.Connection:
-    path = queue_directory(home) / "outbox.sqlite3"
-    if path.is_symlink():
-        raise ValueError("MEDIA_OUTBOX_UNSAFE")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    os.close(fd)
-    path.chmod(0o600)
-    db = sqlite3.connect(path, timeout=5)
+    module = sys.modules.get("agent_control_chat_policy")
+    runtime = getattr(module, "active_runtime", None)
+    db = runtime.private_media_queue() if runtime is not None else None
+    if db is None:
+        path = queue_directory(home) / "outbox.sqlite3"
+        if path.is_symlink():
+            raise ValueError("MEDIA_OUTBOX_UNSAFE")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        os.close(fd)
+        path.chmod(0o600)
+        db = sqlite3.connect(path, timeout=5)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=DELETE")
     db.execute("PRAGMA secure_delete=ON")
@@ -182,6 +188,10 @@ def enqueue_images(home: Path, session_id: str, images: list) -> list[dict]:
 def register(ctx):
     from hermes_constants import get_hermes_home
     home = get_hermes_home().resolve()
+    marker = sys.modules.setdefault("agent_control_private_media", types.ModuleType("agent_control_private_media"))
+    if not hasattr(marker, "homes"):
+        marker.homes = set()
+    marker.homes.add(str(home))
 
     def instructions():
         policy = load_policy(home)

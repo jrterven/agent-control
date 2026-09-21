@@ -91,6 +91,7 @@ from .schemas import (
     WorkspaceCreate,
 )
 from .security import SecretVault, random_token, token_hash
+from .temporary_chats import TemporaryChats
 
 
 class NotFoundError(LookupError):
@@ -411,6 +412,7 @@ class AppServices:
     push_notifications: Any | None = None
     visual_media: Any | None = None
     connector_registry: Any | None = None
+    temporary_chats: TemporaryChats = field(default_factory=TemporaryChats)
     profile_creation_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     profile_route_locks: dict[tuple[str, str], ProfileMutationBarrier] = field(
         default_factory=dict
@@ -2997,6 +2999,10 @@ class SessionService:
         self.services = services
         self.gateways = GatewayService(services)
 
+    def event_hub(self, db: Session) -> EventHub:
+        chat = db.info.get("temporary_chat")
+        return chat.events if chat is not None else self.services.event_hub
+
     async def create(self, db: Session, actor: User, payload: SessionCreate) -> SessionLink:
         if payload.profile_id:
             profile = db.get(ProfileRef, payload.profile_id)
@@ -3016,6 +3022,8 @@ class SessionService:
     async def _create_unlocked(
         self, db: Session, actor: User, payload: SessionCreate
     ) -> SessionLink:
+        if payload.chat_mode == "temporary" and "temporary_chat" not in db.info:
+            raise ConflictError("TEMPORARY_STORAGE_REQUIRED")
         gateway_id = payload.gateway_id
         profile_name = payload.profile_name
         if payload.profile_id:
@@ -3036,7 +3044,16 @@ class SessionService:
             WorkspaceService().owned(db, actor, payload.workspace_id)
         connection = await self.gateways.connection(db, gateway_id, profile_name)
         provider = await self.services.provider_pool.get(connection)
-        session = await provider.create_session(title=payload.title)
+        if payload.chat_mode != "memory_read_write":
+            capabilities = await provider.capabilities()
+            if not capabilities.supports("session.mode." + payload.chat_mode):
+                raise ConflictError("CHAT_MODE_UNAVAILABLE")
+        create_options = {"title": payload.title}
+        if payload.chat_mode != "memory_read_write":
+            create_options["chat_mode"] = payload.chat_mode
+        session = await provider.create_session(**create_options)
+        if session.chat_mode != payload.chat_mode:
+            raise ConflictError("CHAT_MODE_NOT_CONFIRMED")
         self.services.session_router.mark_runtime(
             SessionRoute(
                 gateway_id=gateway_id,
@@ -3054,9 +3071,14 @@ class SessionService:
             stored_session_id=session.stored_session_id,
             runtime_session_id=session.runtime_session_id,
             title=session.title,
+            chat_mode=payload.chat_mode,
             status=session.status,
             initial_history_pending=True,
         )
+        if payload.chat_mode == "temporary":
+            if "temporary_chat" not in db.info:
+                raise ConflictError("TEMPORARY_STORAGE_REQUIRED")
+            row.id = db.info["temporary_chat"].id
         self._assign_runtime(
             db, row, session.runtime_session_id, provider.runtime_generation
         )
@@ -3134,6 +3156,8 @@ class SessionService:
             runtime_owners[session.runtime_session_id] = session.stored_session_id
         synchronized: list[SessionLink] = []
         for session in upstream:
+            if session.chat_mode == "temporary":
+                continue
             row = db.scalar(
                 select(SessionLink).where(
                     SessionLink.gateway_id == gateway_id,
@@ -3149,6 +3173,7 @@ class SessionService:
                     workspace_id=workspace_id,
                     profile_name=profile_name,
                     stored_session_id=session.stored_session_id,
+                    chat_mode=session.chat_mode,
                 )
                 db.add(row)
             elif row.owner_id != actor.id:
@@ -3235,6 +3260,16 @@ class SessionService:
             raise NotFoundError("Session not found")
         return row
 
+    async def _require_chat_policy(self, db: Session, row: SessionLink):
+        if row.chat_mode == "memory_read_write":
+            return
+        if row.chat_mode == "temporary" and "temporary_chat" not in db.info:
+            raise ConflictError("TEMPORARY_CHAT_ENDED")
+        connection = await self.gateways.connection(db, row.gateway_id, row.profile_name)
+        provider = await self.services.provider_pool.get(connection)
+        if not (await provider.capabilities()).supports("session.mode." + row.chat_mode):
+            raise ConflictError("CHAT_MODE_UNAVAILABLE")
+
     async def resume(self, db: Session, actor: User, row: SessionLink) -> SessionLink:
         async with profile_row_route_guard(self.services, db, row):
             return await self._resume_unlocked(db, actor, row)
@@ -3242,6 +3277,7 @@ class SessionService:
     async def _resume_unlocked(
         self, db: Session, actor: User, row: SessionLink
     ) -> SessionLink:
+        await self._require_chat_policy(db, row)
         await require_capability(
             db,
             self.services,
@@ -3414,6 +3450,8 @@ class SessionService:
         inventories continue to fail closed.
         """
 
+        if row.chat_mode == "temporary":
+            raise NotFoundError("TEMPORARY_CHAT_ENDED")
         provider = await self.services.provider_pool.get(connection)
         try:
             routed, resumed = await self.services.session_router.ensure_runtime(
@@ -3463,7 +3501,12 @@ class SessionService:
         ):
             return
 
-        replacement = await provider.create_session(title=row.title)
+        options = {"title": row.title}
+        if row.chat_mode != "memory_read_write":
+            options["chat_mode"] = row.chat_mode
+        replacement = await provider.create_session(**options)
+        if replacement.chat_mode != row.chat_mode:
+            raise ConflictError("CHAT_MODE_NOT_CONFIRMED")
         row.stored_session_id = replacement.stored_session_id
         row.runtime_session_id = replacement.runtime_session_id
         row.title = replacement.title or row.title
@@ -3644,7 +3687,7 @@ class SessionService:
             if content_key is not None:
                 safe_item[content_key] = normalizer.sanitize_data(projected_content)
             from .visual_media import get_visual_media_service
-            image_media = get_visual_media_service(self.services).project(db, row, projected_content)
+            image_media = get_visual_media_service(self.services, db).project(db, row, projected_content)
             if image_media:
                 safe_item.setdefault("controlMedia", []).extend(image_media)
             if references:
@@ -3909,7 +3952,7 @@ class SessionService:
         if not _SAFE_MEDIA_ID.fullmatch(media_id):
             raise NotFoundError("Voice note not found")
         from .visual_media import get_visual_media_service
-        visual = get_visual_media_service(self.services)
+        visual = get_visual_media_service(self.services, db)
         image = visual.authorized(db, actor, row, media_id)
         if image is not None:
             try:
@@ -3988,6 +4031,7 @@ class SessionService:
         idempotency_key: str,
         attachments: list[PromptAttachment] | None = None,
     ) -> dict[str, Any]:
+        await self._require_chat_policy(db, row)
         control_prompt = prompt
         await require_capability(
             db,
@@ -4474,7 +4518,7 @@ class SessionService:
                 db, row, routed.runtime_session_id, provider.runtime_generation
             )
             db.commit()
-        interaction_claim = self.services.event_hub.take_interaction(
+        interaction_claim = self.event_hub(db).take_interaction(
             kind="approval",
             request_id=request_id,
             gateway_id=row.gateway_id,
@@ -4495,13 +4539,13 @@ class SessionService:
                 expected_runtime_generation=provider.runtime_generation,
             )
         except RuntimeGenerationChanged as exc:
-            self.services.event_hub.restore_interaction(interaction_claim)
+            self.event_hub(db).restore_interaction(interaction_claim)
             raise ConflictError(
                 "Hermes reconnected before the approval response; wait for the pending request to reappear"
             ) from exc
         except JsonRpcError as exc:
             if exc.code in {4001, 4008, 4009}:
-                self.services.event_hub.forget_interaction(
+                self.event_hub(db).forget_interaction(
                     gateway_id=row.gateway_id,
                     profile_name=row.profile_name,
                     kind="approval",
@@ -4515,7 +4559,7 @@ class SessionService:
                 ) from exc
             raise
         if int(result.get("resolved") or 0) < 1:
-            self.services.event_hub.forget_interaction(
+            self.event_hub(db).forget_interaction(
                 gateway_id=row.gateway_id,
                 profile_name=row.profile_name,
                 kind="approval",
@@ -4586,7 +4630,7 @@ class SessionService:
                 db, row, routed.runtime_session_id, provider.runtime_generation
             )
             db.commit()
-        interaction_claim = self.services.event_hub.take_interaction(
+        interaction_claim = self.event_hub(db).take_interaction(
             kind="clarification",
             request_id=request_id,
             gateway_id=row.gateway_id,
@@ -4609,13 +4653,13 @@ class SessionService:
                 expected_runtime_generation=provider.runtime_generation,
             )
         except RuntimeGenerationChanged as exc:
-            self.services.event_hub.restore_interaction(interaction_claim)
+            self.event_hub(db).restore_interaction(interaction_claim)
             raise ConflictError(
                 "Hermes reconnected before the clarification response; wait for the pending request to reappear"
             ) from exc
         except JsonRpcError as exc:
             if exc.code in {4001, 4008, 4009}:
-                self.services.event_hub.forget_interaction(
+                self.event_hub(db).forget_interaction(
                     gateway_id=row.gateway_id,
                     profile_name=row.profile_name,
                     kind="clarification",
@@ -4631,13 +4675,13 @@ class SessionService:
         status = str(result.get("status") or "")
         remaining = list(result.get("remaining") or [])
         if status == "expired" or not remaining:
-            self.services.event_hub.forget_interaction(
+            self.event_hub(db).forget_interaction(
                 gateway_id=row.gateway_id,
                 profile_name=row.profile_name,
                 kind="clarification",
                 request_id=request_id,
             )
-        elif not self.services.event_hub.restrict_clarification_questions(
+        elif not self.event_hub(db).restrict_clarification_questions(
             gateway_id=row.gateway_id,
             profile_name=row.profile_name,
             request_id=request_id,

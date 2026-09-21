@@ -1,5 +1,6 @@
 import type {
   CapabilitySet,
+  ChatMode,
   ControlTurnOrigin,
   ConnectionState as SharedConnectionState,
   NormalizedEvent,
@@ -7,6 +8,7 @@ import type {
 } from "@hermes-control/shared-types";
 
 export type { BackgroundTask, BackgroundTaskSnapshot, ControlTurnOrigin } from "@hermes-control/shared-types";
+export type { ChatMode } from "@hermes-control/shared-types";
 
 export type ConnectionState = Exclude<SharedConnectionState, "connecting">;
 export type ThemePreference = "dark" | "light" | "auto";
@@ -80,6 +82,8 @@ export type Workspace = {
 };
 
 export type SessionSummary = Pick<SessionRoute, "storedSessionId" | "runtimeSessionId"> & Partial<Pick<SessionRoute, "gatewayId" | "profileName">> & {
+  chatMode?: ChatMode;
+  temporaryAccess?: string;
   id: string;
   workspaceId?: string;
   profileId: string;

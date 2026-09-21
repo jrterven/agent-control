@@ -34,6 +34,17 @@ def _ingest_image(state, connector_id: str, message: dict) -> dict:
         connector = db.get(Connector, connector_id)
         if connector is None:
             return {"id": message["id"], "status": "failed", "errorCode": "forbidden"}
+        if message["sessionId"].startswith("ac_tmp_"):
+            chat = state.services.temporary_chats.for_route(connector.gateway_id, message["profile"], message["sessionId"])
+            if chat is None or chat.owner_id != connector.owner_id:
+                return {"id": message["id"], "status": "failed", "errorCode": "forbidden"}
+            chat.refresh_references(db)
+            with chat.session() as transient:
+                return get_visual_media_service(state.services, transient).ingest(
+                    transient, connector, media_id=message["id"], profile_name=message["profile"],
+                    stored_session_id=message["sessionId"], metadata=message["metadata"],
+                    content=message["content"], thumbnail=message.get("thumbnail"),
+                )
         return get_visual_media_service(state.services).ingest(
             db, connector, media_id=message["id"], profile_name=message["profile"],
             stored_session_id=message["sessionId"], metadata=message["metadata"],

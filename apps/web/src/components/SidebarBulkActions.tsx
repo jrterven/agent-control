@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { FolderSimple, PushPinSimple, PushPinSimpleSlash, Trash, WarningCircle, X } from "@phosphor-icons/react";
 import { Button, IconButton } from "@hermes-control/ui";
 import { useTranslation } from "react-i18next";
@@ -11,7 +11,8 @@ type BulkAction = "move" | "delete" | "pin" | "unpin";
 
 export function useSidebarBulkSelection() {
   const { t } = useTranslation();
-  const sessions = useAppStore((state) => state.sessions);
+  const allSessions = useAppStore((state) => state.sessions);
+  const sessions = useMemo(() => allSessions.filter((session) => session.chatMode !== "temporary"), [allSessions]);
   const profiles = useAppStore((state) => state.profiles);
   const selectedGatewayId = useAppStore((state) => state.selectedGatewayId);
   const authState = useAppStore((state) => state.authState);

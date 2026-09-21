@@ -1,5 +1,6 @@
 import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, EmailReferencePreview, Gateway, ImageMediaMetadata, Profile, PushNotificationConfig, RealtimeEvent, SearchResult, SessionSummary, VoiceProvider, Workspace } from "../types";
 import type { OPENAI_LIVE_VOICES } from "./openaiLiveVoices";
+import type { ChatMode } from "../types";
 import type { AuthMethods, BackgroundTaskSnapshot, ConnectorList, ConnectorPairing, ConnectorView } from "@hermes-control/shared-types";
 import { useAppStore } from "../store/appStore";
 
@@ -160,6 +161,8 @@ export type ReadinessView = {
 };
 
 type SessionWire = {
+  chatMode?: ChatMode;
+  temporaryAccess?: string;
   id: string;
   gatewayId: string;
   workspaceId?: string | null;
@@ -213,6 +216,8 @@ function workspaceFromWire(row: WorkspaceWire): Workspace {
 
 function sessionFromWire(row: SessionWire, fallbackProfileId = ""): SessionSummary {
   return {
+    chatMode: row.chatMode ?? "memory_read_write",
+    temporaryAccess: row.temporaryAccess,
     id: row.id,
     gatewayId: row.gatewayId,
     profileName: row.profileName,
@@ -296,6 +301,13 @@ async function refreshRejectedCsrf(scope: CsrfScope): Promise<string | undefined
   }
 }
 
+export function temporaryChatHeaders(path: string): Record<string, string> {
+  const state = useAppStore.getState();
+  const id = path.match(/\/sessions\/(tmp_[a-f0-9]{32})(?:\/|$)/)?.[1] ?? state.selectedSessionId;
+  const access = id && useAppStore.getState().sessions.find((session) => session.id === id)?.temporaryAccess;
+  return access ? { "X-Temporary-Chat": access } : {};
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const { headers: suppliedHeaders, ...rest } = init ?? {};
   const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
@@ -309,6 +321,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...rest,
     headers: {
       "Accept": "application/json",
+      ...temporaryChatHeaders(path),
       ...(init?.body && !isFormData ? { "Content-Type": "application/json" } : {}),
       ...suppliedHeaders,
     },
@@ -342,7 +355,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 async function requestBlob(path: string): Promise<{ blob: Blob; filename?: string }> {
   const response = await fetch(`/api/v1${path}`, {
     credentials: "same-origin",
-    headers: { "Accept": "application/json" },
+    headers: { "Accept": "application/json", ...temporaryChatHeaders(path) },
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({ message: "No se pudo completar la descarga" }));
@@ -361,6 +374,7 @@ async function requestSpeechStream(text: string, sessionId?: string, csrfToken?:
     signal,
     headers: {
       "Accept": "audio/mpeg",
+      ...temporaryChatHeaders(`/sessions/${sessionId ?? ""}`),
       "Content-Type": "application/json",
       ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
     },
@@ -476,7 +490,7 @@ export const api = {
     headers: { "Idempotency-Key": crypto.randomUUID(), ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) },
     body: JSON.stringify({ gatewayId, profileName }),
   }).then((rows) => rows.map((row) => sessionFromWire(row))),
-  createSession: (profileId: string, workspaceId: string | undefined, csrfToken?: string) => request<SessionWire>("/sessions", { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID(), ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) }, body: JSON.stringify({ profileId, workspaceId }) }).then((row) => sessionFromWire(row, profileId)),
+  createSession: (profileId: string, workspaceId: string | undefined, csrfToken?: string, chatMode: ChatMode = "memory_read_write") => request<SessionWire>("/sessions", { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID(), ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) }, body: JSON.stringify({ profileId, workspaceId, chatMode }) }).then((row) => sessionFromWire(row, profileId)),
   markSessionRead: (sessionId: string, csrfToken?: string) => request<SessionWire>(`/sessions/${encodeURIComponent(sessionId)}/read`, {
     method: "POST",
     headers: mutationHeaders(csrfToken),
@@ -742,6 +756,9 @@ export async function connectRealtime(handlers: RealtimeHandlers, signal: AbortS
       const { ticket } = await api.createRealtimeTicket(csrfToken);
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const query = new URLSearchParams({ ticket });
+      const state = useAppStore.getState();
+      const temporary = state.sessions.find((session) => session.id === state.selectedSessionId && session.chatMode === "temporary");
+      if (temporary) query.set("temporary", temporary.id);
       if (cursors.size) query.set("cursors", JSON.stringify(Object.fromEntries([...cursors.entries()].slice(-64))));
       const socket = new WebSocket(`${protocol}//${window.location.host}/api/v1/realtime?${query.toString()}`);
       await new Promise<void>((resolve, reject) => {
@@ -760,7 +777,7 @@ export async function connectRealtime(handlers: RealtimeHandlers, signal: AbortS
           reject(new Error("Realtime timeout"));
         }, 15_000);
         signal.addEventListener("abort", onAbort, { once: true });
-        socket.onopen = () => { cleanup(); resolve(); };
+        socket.onopen = () => { if (temporary) socket.send(JSON.stringify({ access: temporary.temporaryAccess })); cleanup(); resolve(); };
         socket.onerror = () => { cleanup(); socket.close(); reject(new Error("Realtime unavailable")); };
         if (signal.aborted) onAbort();
       });

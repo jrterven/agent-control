@@ -61,19 +61,55 @@ def resolve_session(db: Session, token: str | None) -> AuthSession | None:
     return row
 
 
-def get_db(request: Request):
+async def get_db(request: Request):
+    body_session_id = ""
+    if request.url.path in {"/api/v1/realtime/live-session", "/api/v1/integrations/elevenlabs/speech", "/api/v1/realtime/speech-token"}:
+        try:
+            body = await request.json()
+            body_session_id = body.get("sessionId", "") if isinstance(body, dict) else ""
+        except ValueError:
+            pass
     with request.app.state.session_factory() as db:
+        auth = None
         if request.app.state.services.settings.deployment_mode == "cloud":
             from .ownership import scope_cloud_session
             auth = resolve_session(db, request.cookies.get(SESSION_COOKIE))
             if auth is not None:
                 scope_cloud_session(db, auth.user_id)
+        session_id = request.path_params.get("session_id", "") or body_session_id
+        if not isinstance(session_id, str):
+            session_id = ""
+        if session_id.startswith("tmp_"):
+            auth = auth or resolve_session(db, request.cookies.get(SESSION_COOKIE))
+            if auth is None:
+                raise HTTPException(401, "Authentication required")
+            chat = request.app.state.services.temporary_chats.owned(session_id, auth.user_id, request.headers.get("X-Temporary-Chat"))
+            if chat is None:
+                if request.url.path.endswith("/temporary/close"):
+                    yield db
+                    return
+                raise HTTPException(410, "TEMPORARY_CHAT_ENDED")
+            from .models import Gateway, ProfileRef
+            if chat.route is not None:
+                gateway, profile, _ = chat.route
+                available = db.scalar(select(ProfileRef.id).join(Gateway, Gateway.id == ProfileRef.gateway_id).where(Gateway.id == gateway, Gateway.enabled.is_(True), ProfileRef.profile_name == profile))
+                if available is None:
+                    raise HTTPException(404, "Conversation not found")
+            # Always authenticate/recheck ownership against the primary store.
+            # Configuration snapshots grant no authority after revocation.
+            chat.refresh_references(db)
+            request.state.temporary_auth = auth
+            with chat.session() as transient_db:
+                yield transient_db
+            return
         yield db
 
 
 def current_auth_session(
     request: Request, db: Session = Depends(get_db)
 ) -> AuthSession:
+    if getattr(request.state, "temporary_auth", None) is not None:
+        return request.state.temporary_auth
     row = resolve_session(db, request.cookies.get(SESSION_COOKIE))
     if row is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")

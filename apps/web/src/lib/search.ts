@@ -20,6 +20,8 @@ export function buildSearchResults(
   { sessions, workspaces, automations, messages, profiles }: SearchSources,
   translate: SearchTranslator = (key, options) => String(i18n.t(key, options)),
 ): SearchResult[] {
+  sessions = sessions.filter((session) => session.chatMode !== "temporary" && !session.id.startsWith("tmp_"));
+  messages = messages.filter((message) => !message.sessionId.startsWith("tmp_"));
   const sessionById = new Map(sessions.map((session) => [session.id, session]));
   const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
 

@@ -45,6 +45,25 @@ class NativeContext:
 
 
 class CopiedHermesPluginRuntimeTest(unittest.TestCase):
+    def test_chat_policy_copy_needs_only_stdlib_and_revokes_storage(self):
+        with tempfile.TemporaryDirectory(prefix="native-chat-plugin-") as temporary:
+            entry = Path(temporary) / "__init__.py"
+            shutil.copyfile(SOURCE.with_name("hermes_chat_policy.py"), entry)
+            spec = importlib.util.spec_from_file_location("isolated_chat_plugin", entry)
+            plugin = importlib.util.module_from_spec(spec)
+            with patch.dict(sys.modules, {spec.name: plugin}):
+                spec.loader.exec_module(plugin)
+                policy = plugin.ChatPolicy("temporary", "ac_tmp_smoke")
+                with plugin.policy_scope(policy):
+                    self.assertIs(plugin.current_policy(), policy)
+                    store = plugin.VolatileSqlite(policy)
+                    conn = store.connect()
+                    self.assertEqual(conn.execute("PRAGMA database_list").fetchone()[2], "")
+                self.assertIsNone(plugin.current_policy())
+                policy.close()
+                with self.assertRaisesRegex(RuntimeError, "TEMPORARY_CHAT_ENDED"):
+                    store.connect()
+
     def test_background_plugin_uses_native_delegation_and_preserves_finite_runs(self):
         with tempfile.TemporaryDirectory(prefix="native-background-plugin-") as temporary:
             home = Path(temporary)

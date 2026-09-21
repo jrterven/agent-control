@@ -1,3 +1,4 @@
+import { createChatForCurrentContext } from "../hooks";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
@@ -116,8 +117,8 @@ describe("paired computer readiness", () => {
     expect(create).not.toHaveBeenCalled();
     await user.click(open);
     await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: "/chats" }));
-    expect(create).toHaveBeenCalledWith(readyProfile.id, undefined, "csrf");
-    expect(useAppStore.getState().selectedSessionId).toBe("new-chat");
+    expect(create).not.toHaveBeenCalled();
+    expect(useAppStore.getState()).toMatchObject({ selectedSessionId: "", preparingChat: true });
     expect(prompt).not.toHaveBeenCalled();
   });
 
@@ -135,6 +136,7 @@ describe("paired computer readiness", () => {
     render(<ConnectorReadiness computer={computer} />);
 
     await user.click(await screen.findByRole("button", { name: "Abrir un chat nuevo" }));
+    await act(async () => { await createChatForCurrentContext(); });
 
     await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: "/chats" }));
     expect(useAppStore.getState()).toMatchObject({ selectedSessionId: created.id, csrfToken: "fresh-csrf" });
@@ -163,13 +165,15 @@ describe("paired computer readiness", () => {
     vi.spyOn(api, "createSession").mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     render(<ConnectorReadiness computer={computer} />);
     await user.click(await screen.findByRole("button", { name: "Abrir un chat nuevo" }));
+    const creation = createChatForCurrentContext();
     await act(async () => {
       useAppStore.getState().resetPrivateState();
       useAppStore.setState({ authState: "authenticated", csrfToken: "new-account", connection: "connected" });
       finish({ ...sessions[0], id: "private-old-account-session" });
+      await creation;
     });
     expect(useAppStore.getState().sessions).toHaveLength(0);
-    expect(navigate).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith({ to: "/chats" });
   });
 
   it("does not hydrate or navigate after the account changes during a poll", async () => {

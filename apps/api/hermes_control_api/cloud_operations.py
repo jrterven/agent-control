@@ -106,6 +106,8 @@ async def drain(request: Request):
     state.cloud_draining = True
     try:
         registry = state.connector_registry
+        if state.services.temporary_chats.entries:
+            raise HTTPException(409, "Temporary conversations are still open")
         if getattr(state, "cloud_mutations_inflight", 0) or any(link.pending for link in registry.links.values()):
             raise HTTPException(409, "Wait for in-flight operations before deploying")
         # Bound the whole preflight, not only individual profile requests. A
@@ -154,6 +156,8 @@ async def drain(request: Request):
                             raise HTTPException(409, "A computer has active or uncertain work")
         if generation != state.cloud_drain_generation or not state.cloud_draining:
             raise HTTPException(409, "The release preflight was canceled; do not restart")
+        if state.services.temporary_chats.entries:
+            raise HTTPException(409, "Temporary conversations are still open")
         if getattr(state, "cloud_mutations_inflight", 0) or any(link.pending for link in registry.links.values()):
             raise HTTPException(409, "Background work is in flight; retry the release preflight")
         return {"safeToRestart": True, "draining": True}

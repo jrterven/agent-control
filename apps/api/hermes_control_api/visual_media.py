@@ -432,7 +432,26 @@ class VisualMediaService:
             return VisualMediaService(self.settings, RehearsalStore()).restore(db, directory)
 
 
-def get_visual_media_service(services) -> VisualMediaService:
+def get_visual_media_service(services, db=None) -> VisualMediaService:
+    chat = db.info.get("temporary_chat") if db is not None else None
+    if chat is not None:
+        if chat.media_service is None:
+            class MemoryBlobStore:
+                def put(self, key, content, media_type):
+                    if chat.closed:
+                        raise MediaValidationError("media_unavailable")
+                    used = sum(len(value) for value in chat.media.values())
+                    if used - len(chat.media.get(key, b"")) + len(content) > 64 * 1024 * 1024:
+                        raise MediaValidationError("quota_exceeded")
+                    chat.media[key] = bytes(content)
+                def get(self, key, maximum):
+                    if chat.closed:
+                        raise MediaValidationError("media_unavailable")
+                    return chat.media[key][:maximum + 1]
+                def delete(self, key):
+                    chat.media.pop(key, None)
+            chat.media_service = VisualMediaService(services.settings, store=MemoryBlobStore())
+        return chat.media_service
     if services.visual_media is None:
         services.visual_media = VisualMediaService(services.settings)
     return services.visual_media

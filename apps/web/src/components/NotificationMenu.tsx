@@ -30,7 +30,8 @@ export function NotificationMenu() {
   const { t, i18n } = useTranslation();
   const open = useAppStore((state) => state.notificationsOpen);
   const setOpen = useAppStore((state) => state.setNotificationsOpen);
-  const sessions = useAppStore((state) => state.sessions);
+  const allSessions = useAppStore((state) => state.sessions);
+  const sessions = useMemo(() => allSessions.filter((session) => session.chatMode !== "temporary"), [allSessions]);
   const timeZone = useAppStore((state) => state.timeZone);
   const workspaces = useAppStore((state) => state.workspaces);
   const csrfToken = useAppStore((state) => state.csrfToken);

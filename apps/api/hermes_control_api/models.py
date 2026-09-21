@@ -288,6 +288,7 @@ class Workspace(Base, Timestamped):
 class SessionLink(Base, Timestamped):
     __tablename__ = "session_links"
     __table_args__ = (
+        CheckConstraint("chat_mode IN ('memory_read_write', 'memory_read_only', 'temporary')", name="ck_session_chat_mode"),
         UniqueConstraint(
             "gateway_id",
             "profile_name",
@@ -314,6 +315,7 @@ class SessionLink(Base, Timestamped):
     runtime_session_id: Mapped[str | None] = mapped_column(String(255))
     runtime_generation: Mapped[str | None] = mapped_column(String(96))
     title: Mapped[str | None] = mapped_column(String(300))
+    chat_mode: Mapped[str] = mapped_column(String(24), default="memory_read_write", server_default="memory_read_write")
     # Owner-selected label used only by Agent Control. ``title`` remains the
     # canonical value reported by Hermes and continues to be refreshed during
     # synchronization.

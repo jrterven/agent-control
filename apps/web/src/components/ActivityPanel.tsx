@@ -246,7 +246,7 @@ export function ActivityPanel() {
           </ol>
         </section>
 
-        {session ? <section className="session-actions" aria-labelledby="session-actions-title">
+        {session && session.chatMode !== "temporary" ? <section className="session-actions" aria-labelledby="session-actions-title">
           <div className="section-title"><span id="session-actions-title"><Archive size={18} /> {t("activity.sessionActions")}</span></div>
           <div className="session-actions__item">
             <span><strong>{t("activity.exportConversation")}</strong><small>{t("activity.exportDescription")}</small></span>

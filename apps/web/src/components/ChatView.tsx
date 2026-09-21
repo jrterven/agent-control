@@ -1,3 +1,5 @@
+import { useTemporaryChat } from "../lib/temporaryChat";
+import { useSessionMedia } from "../lib/useSessionMedia";
 import { CaretDown, Check, Checks, CircleNotch, File, Image, Lightning, Microphone, MicrophoneSlash, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle, Waveform, Wrench, X } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
@@ -20,6 +22,7 @@ import { useSpeechPlayback, type LiveSpeechStatus, type SpeechPlaybackStatus } f
 import { usePwaUpdateStore } from "../lib/pwaUpdate";
 import type { AgentActivityItem, ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageAttachment, MessageMedia, Profile } from "../types";
 import { ProfileAvatar } from "./ProfileAvatar";
+import { ChatModeIndicator, NewChatSetup, type ChatStart } from "./ChatMode";
 import { EmailReferences } from "./EmailReferences";
 import { LiveTranscript, LiveTranscriptRows } from "./LiveTranscript";
 import { isCloudProfileOffline, useCloudConfigurationStore } from "../lib/cloud";
@@ -600,6 +603,7 @@ function VoiceNote({
   number?: number;
 }) {
   const { t } = useTranslation();
+  const mediaUrl = useSessionMedia(sessionId, media.id);
   const label = number
     ? t("chat.voiceNoteNumber", { number })
     : t("chat.voiceNote");
@@ -607,7 +611,7 @@ function VoiceNote({
     <section className="voice-note" aria-label={label}>
       <div className="voice-note__label"><SpeakerHigh size={18} weight="fill" /> <span>{label}</span></div>
       <audio controls preload="metadata" aria-label={t("chat.playVoiceNote")}>
-        <source src={api.sessionMediaUrl(sessionId, media.id)} type={media.mediaType} />
+        <source src={mediaUrl} type={media.mediaType} />
         {t("chat.audioUnsupported")}
       </audio>
     </section>
@@ -932,6 +936,8 @@ export function ChatView() {
   // in the selected workspace. Never leak another profile's first session into
   // that state, even as a visual fallback.
   const session = sessions.find((item) => item.id === sessionId);
+  useTemporaryChat(session);
+  const pendingStart = useRef<{ sessionId: string; action: "voice" | "camera" } | null>(null);
   const visibleMessages = useMemo(() => messages.filter((message) => (
     message.sessionId === sessionId
     && !(message.id === pendingHumanMessageId && streamingMessageId !== pendingHumanMessageId && !message.content.trim() && !message.tools?.length && !message.activity?.length)
@@ -1004,14 +1010,25 @@ export function ChatView() {
   );
 
   const createChat = async () => {
-    if (!canCreateSession || creatingSession) return;
+    useAppStore.getState().prepareChat();
+  };
+  const startChat = async (start: ChatStart) => {
+    if (!canCreateSession || creatingSession) throw new Error("Chat unavailable");
     setCreatingSession(true);
     try {
-      await createChatForCurrentContext();
-    } finally {
-      setCreatingSession(false);
-    }
+      const created = await createChatForCurrentContext(start.mode);
+      if (!created) throw new Error("Chat unavailable");
+      if (start.action) pendingStart.current = { sessionId: created.id, action: start.action };
+      else await submitPrompt(start.text, start.files);
+    } finally { setCreatingSession(false); }
   };
+  useEffect(() => {
+    const pending = pendingStart.current;
+    if (!pending || pending.sessionId !== sessionId) return;
+    pendingStart.current = null;
+    if (pending.action === "voice") void live.start();
+    else void camera.start("on_demand");
+  }, [sessionId, live, camera]);
 
   useEffect(() => {
     if (previousSessionRef.current !== sessionId) {
@@ -1031,7 +1048,11 @@ export function ChatView() {
   return (
     <section className="conversation" aria-labelledby="conversation-title">
       <div className="conversation__header">
-        <div className="conversation__title"><div><span className="eyebrow">{t("chat.conversation")}</span><h1 id="conversation-title">{session?.title ?? t("chat.newConversation")}</h1></div>{session ? <Badge>{session.storedSessionId}</Badge> : null}</div>
+        <div className="conversation__heading-row">
+        <div className="conversation__title"><div><span className="eyebrow">{t("chat.conversation")}</span><h1 id="conversation-title">{session?.title ?? t("chat.newConversation")}</h1></div></div>
+        {session ? <ChatModeIndicator key={sessionId} mode={session.chatMode} /> : null}
+        {session?.chatMode === "temporary" ? <IconButton label={t("chatModes.close")} icon={<X size={20} />} onClick={() => useAppStore.getState().prepareChat()} /> : null}
+        </div>
         {session ? <BackgroundTasks key={sessionId} sessionId={sessionId} /> : null}
       </div>
       <div
@@ -1043,11 +1064,12 @@ export function ChatView() {
           setReadingOlder(!followLatestRef.current);
         }}
       >
-        <div className="date-divider"><span>{t("chat.fixedDate")}</span></div>
+        {!session && profile && canCreateSession ? <NewChatSetup key={`${ownerId}:${profileId}`} profile={profile} disabled={offline || creatingSession} voiceAvailable={liveConfigured} onStart={startChat} /> : null}
+        {session ? <div className="date-divider"><span>{t("chat.fixedDate")}</span></div> : null}
         <div className="message-list">
           {live.transcripts.hasMore || live.transcripts.historyError ? <div className="live-transcript__history"><Button size="sm" variant="ghost" disabled={live.transcripts.loading} onClick={() => { followLatestRef.current = false; live.transcripts.loadMore(); }}>{t(live.transcripts.historyError ? "liveVoice.transcriptLoadError" : "liveVoice.transcriptOlder")}</Button></div> : null}
           {camera.hasMore ? <div className="live-transcript__history"><Button size="sm" variant="ghost" disabled={camera.loadingObservations} onClick={() => { followLatestRef.current = false; void camera.loadMore(); }}>{visionInteractionCopy(i18n.language).older}</Button></div> : null}
-          {timeline.length ? timeline.map((item) => item.kind === "transcript" ? <LiveTranscript key={item.id} call={item.call} agentName={profile?.displayName ?? t("chat.agent")} retry={() => live.transcripts.retrySave(item.id)} /> : item.kind === "vision" ? <VisionObservationCard key={item.id} observation={item.observation} /> : <Message key={item.id} message={item.message} profile={profile} agentName={profile?.displayName ?? t("chat.agent")} automationInstruction={session?.automationGenerated === true && item.id === firstUserMessageId} liveExplanation={{ available: liveConfigured && live.available && !offline, activeMessageId: live.explainingMessageId, disabled: live.active || voiceCaptureActive || Boolean(streamingMessageId), explain: (message) => { speech.stop(); void live.explain(message); } }} speech={{ available: canUseSpeech, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : <div className="empty-chat"><ProfileAvatar profile={profile} size="lg" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
+          {timeline.length ? timeline.map((item) => item.kind === "transcript" ? <LiveTranscript key={item.id} call={item.call} agentName={profile?.displayName ?? t("chat.agent")} retry={() => live.transcripts.retrySave(item.id)} /> : item.kind === "vision" ? <VisionObservationCard key={item.id} observation={item.observation} /> : <Message key={item.id} message={item.message} profile={profile} agentName={profile?.displayName ?? t("chat.agent")} automationInstruction={session?.automationGenerated === true && item.id === firstUserMessageId} liveExplanation={{ available: liveConfigured && live.available && !offline, activeMessageId: live.explainingMessageId, disabled: live.active || voiceCaptureActive || Boolean(streamingMessageId), explain: (message) => { speech.stop(); void live.explain(message); } }} speech={{ available: canUseSpeech, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : !session && canCreateSession ? null : <div className="empty-chat"><ProfileAvatar profile={profile} size="lg" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession && session ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
           <InteractionCards approvals={approvals} clarifications={clarifications} offline={offline} canApprove={canApprove} canClarify={canClarify} />
           {streamingMessageId ? waitingForResponse
             ? <p className="typing-state typing-state--waiting" role="status"><WarningCircle /><span>{t("chat.waitingForResponse", { agent: profile?.displayName ?? "Hermes" })}</span></p>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections import deque
 import contextlib
 from dataclasses import replace
@@ -13,6 +14,7 @@ import random
 import re
 import ssl
 import sqlite3
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -29,11 +31,12 @@ from .storage import OperationLedger, atomic_json
 from .tls import cloud_ssl_context
 from .media_install import media_profiles
 from .background_install import background_profiles
+from .chat_modes_install import chat_mode_profiles
 from .background_tasks import retired_profile, snapshot as background_snapshot, unavailable as background_unavailable
 from hermes_client.compatibility import HERMES_0212_SHA, profile_contract_supports
 from .profile_transfer import ProfileImportManagementServerRequired, ProfileImportRefused, ProfileTransfers, TRANSFER_OPERATIONS
 from .hermes_media_plugin import queue_directory, validate_policy
-from .visual_media import acknowledge as acknowledge_media, next_publication, profile_home
+from .visual_media import acknowledge as acknowledge_media, next_publication, profile_home, fetch_image, normalize_image
 
 ACTIVE = {"pending", "queued", "accepted", "starting", "streaming", "running", "working", "waiting"}
 SAFE_PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$")
@@ -71,6 +74,9 @@ class ConnectorRuntime:
                 dashboard_token=secrets["hermesToken"], trusted_source_sha=config["sourceSha"])
             self.providers[profile] = provider_factory(connection, self.on_event)
         self.ledger = OperationLedger(directory)
+        self.temporary_ledger = OperationLedger(None)
+        self.temporary_receipts = {}
+        self.temporary_expiries = {}
         self.websocket = None
         self.send_lock = asyncio.Lock()
         self.events: deque[tuple[int, dict, int]] = deque()
@@ -85,11 +91,13 @@ class ConnectorRuntime:
         self.visual_media_supported = False
         self.media_states: dict[str, dict] = {}
         self.media_pending: dict[str, str] = {}
+        self.private_media_pending: dict[str, tuple[str, str]] = {}
         self.media_install_at = 0.0
         self.visual_media_limits = validate_policy(None)
         self.background_tasks_supported = False
         self.background_states: dict[str, dict] = {}
         self.background_install_at = 0.0
+        self.chat_modes_install_at = 0.0
         self.background_fingerprints: dict[tuple[str, str], str] = {}
         self.profile_transfer_supported = False
         self.profile_transfers = ProfileTransfers(self)
@@ -185,6 +193,8 @@ class ConnectorRuntime:
     async def on_event(self, event: NormalizedEvent):
         if event.profile_name not in self.providers:
             return
+        if str(event.stored_session_id or "").startswith("ac_tmp_") and (event.profile_name, event.stored_session_id) not in self.temporary_expiries:
+            return
         self.sequence += 1
         message = {"v": VERSION, "type": "event", "sequence": self.sequence, "event": event}
         size = len(encode_message(message))
@@ -194,6 +204,19 @@ class ConnectorRuntime:
             _, _, removed = self.events.popleft()
             self.event_bytes -= removed
             self.replay_lost = True
+        self.event_changed.set()
+
+    def _forget_temporary(self, profile, stored_id):
+        route = (profile, stored_id)
+        self.temporary_expiries.pop(route, None)
+        self.temporary_ledger.discard_receipts(self.temporary_receipts.pop(route, ()))
+        self.events = deque((sequence, message, size) for sequence, message, size in self.events
+                            if (message["event"].profile_name, message["event"].stored_session_id) != route)
+        self.event_bytes = sum(size for _, _, size in self.events)
+        for identifier, owner in list(self.private_media_pending.items()):
+            if owner == route:
+                self.private_media_pending.pop(identifier, None)
+                self.media_pending.pop(identifier, None)
         self.event_changed.set()
 
     def _acknowledge(self, sequence):
@@ -227,10 +250,17 @@ class ConnectorRuntime:
             for profile, provider in tuple(self.providers.items()):
                 try:
                     home = profile_home(Path(self.config["hermesHome"]), profile)
-                    # Do not create outboxes just because an old profile exists.
-                    if not (home / ".agent-control/media/outbox.sqlite3").is_file():
-                        continue
-                    publication = await asyncio.to_thread(next_publication, home, profile)
+                    publication = None
+                    if "session.mode.temporary" in getattr(provider, "chat_mode_features", ()):
+                        pending = await provider._read("control.media.pending")
+                        if pending.get("id"):
+                            content = base64.b64decode(pending["content"], validate=True) if pending.get("content") else await asyncio.to_thread(fetch_image, pending["url"], self.visual_media_limits)
+                            content, thumbnail, metadata = await asyncio.to_thread(normalize_image, content, self.visual_media_limits)
+                            publication = {"v": VERSION, "type": "media.publish", "id": pending["id"], "profile": profile,
+                                "sessionId": pending["sessionId"], "metadata": {**pending["metadata"], **metadata}, "content": content, "thumbnail": thumbnail}
+                            self.private_media_pending[pending["id"]] = (profile, pending["sessionId"])
+                    if publication is None and (home / ".agent-control/media/outbox.sqlite3").is_file():
+                        publication = await asyncio.to_thread(next_publication, home, profile)
                     if publication is None:
                         continue
                     # Bind every publication to an actual stored session on this
@@ -241,7 +271,10 @@ class ConnectorRuntime:
                     self.media_pending[publication["id"]] = profile
                     await send_message(websocket.send, self.send_lock, publication)
                 except SessionHistoryNotFound:
-                    await asyncio.to_thread(acknowledge_media, home, publication["id"], "failed", "forbidden")
+                    if publication and publication["id"] in self.private_media_pending:
+                        await self._media_acknowledge({"id": publication["id"], "status": "failed", "errorCode": "forbidden"})
+                    elif publication:
+                        await asyncio.to_thread(acknowledge_media, home, publication["id"], "failed", "forbidden")
                 except (OSError, ValueError, ConnectionError, TimeoutError):
                     # Durable outbox retries after reconnect or transient local failure.
                     continue
@@ -257,11 +290,20 @@ class ConnectorRuntime:
         if error is not None and (not isinstance(error, str) or not re.fullmatch(r"[a-zA-Z0-9_]{1,80}", error)):
             raise ProtocolError("Invalid media acknowledgement")
         profile = self.media_pending.pop(identifier, None)
+        private = self.private_media_pending.pop(identifier, None)
+        if private:
+            provider = self.providers.get(private[0])
+            if provider:
+                await provider._read("control.media.ack", {**message, "sessionId": private[1]})
+            return
         if profile:
             await asyncio.to_thread(acknowledge_media, profile_home(Path(self.config["hermesHome"]), profile), identifier, message["status"], error)
 
     async def _status_loop(self):
         while not self.closed:
+            for (profile, stored_id), expires in list(self.temporary_expiries.items()):
+                if time.monotonic() >= expires:
+                    self._forget_temporary(profile, stored_id)
             # A maintenance acknowledgement describes a scan performed after
             # this exact request, never an earlier idle snapshot.
             marker = self.directory / "maintenance.request"
@@ -294,6 +336,10 @@ class ConnectorRuntime:
                     available_profiles = await asyncio.wait_for(provider.list_profiles(), 10)
                     if provider.connection.profile_name not in {item.name for item in available_profiles}:
                         continue
+                    if "session.mode.temporary" in getattr(provider, "chat_mode_features", ()):
+                        policy_status = await asyncio.wait_for(provider._read("control.chat_modes"), 10)
+                        if policy_status.get("activeTemporary", 0) > 0:
+                            active = True
                     sessions = await asyncio.wait_for(provider.list_sessions(), 10)
                     if any(session.status in ACTIVE for session in sessions):
                         active = True
@@ -307,6 +353,9 @@ class ConnectorRuntime:
             self.active_work = active
             now = asyncio.get_running_loop().time()
             live_config = {**self.config, "profiles": [name for name in self.config["profiles"] if name not in retired_profiles]}
+            if now >= self.chat_modes_install_at and active is False:
+                await asyncio.to_thread(chat_mode_profiles, live_config, install=True)
+                self.chat_modes_install_at = now + 30
             if self.visual_media_supported and now >= self.media_install_at:
                 self.media_states = await asyncio.to_thread(media_profiles, live_config, install=active is False)
                 self.media_states.update({name: {"state": "retired"} for name in retired_profiles})
@@ -332,6 +381,7 @@ class ConnectorRuntime:
             raise ProtocolError("Invalid operation identity")
         response = {"v": VERSION, "type": "response", "id": request_id, "profile": profile}
         ledger_key = None
+        ledger = self.ledger
         provider = self.providers.get(profile)
         try:
             if operation not in OPERATIONS or (provider is None and operation != "delete_profile"):
@@ -364,12 +414,14 @@ class ConnectorRuntime:
                 name = kwargs.get("name")
                 if not isinstance(name, str) or not SAFE_PROFILE.fullmatch(name) or len(self.providers) >= 64:
                     raise ValueError("INVALID_OPERATION")
+            if (kwargs.get("chat_mode") == "temporary" or any(isinstance(arg, SessionRoute) and arg.stored_session_id.startswith("ac_tmp_") for arg in (*args, *kwargs.values()))):
+                ledger = self.temporary_ledger
             if operation in WRITE_OPERATIONS:
                 if (self.directory / "maintenance.request").exists():
                     raise ValueError("CONNECTOR_MAINTENANCE")
                 next_ledger_key = f"{profile}:{operation}:{operation_id}"
                 digest = hashlib.sha256(encode_message({"v": VERSION, "profile": profile, "operation": operation, "args": args, "kwargs": kwargs})).hexdigest()
-                previous = self.ledger.lookup(next_ledger_key, digest)
+                previous = ledger.lookup(next_ledger_key, digest)
                 if provider is None:
                     # A completed self-delete may be replayed after restart,
                     # but must never reconstruct a provider for its old name.
@@ -402,7 +454,7 @@ class ConnectorRuntime:
                     if (self.directory / "maintenance.request").exists():
                         raise ValueError("CONNECTOR_MAINTENANCE")
                 ledger_key = next_ledger_key
-                state, previous = self.ledger.reserve(ledger_key, digest)
+                state, previous = ledger.reserve(ledger_key, digest)
                 if state == "completed":
                     response.update(decode_message(previous))
                     response["id"] = request_id
@@ -420,8 +472,14 @@ class ConnectorRuntime:
             elif operation == "list_background_tasks":
                 # Drain safety needs the native ledger even before installation
                 # or after opt-out. Availability only controls the chat feature.
-                result = await asyncio.to_thread(self._background_snapshot, profile,
-                    args[0] if args else kwargs.get("stored_session_id"))
+                stored_id = args[0] if args else kwargs.get("stored_session_id")
+                if stored_id and stored_id.startswith("ac_tmp_"):
+                    result = await provider._read("control.session.background", {"stored_session_id": stored_id})
+                else:
+                    result = await asyncio.to_thread(self._background_snapshot, profile, stored_id)
+                if not stored_id and "session.mode.temporary" in getattr(provider, "chat_mode_features", ()):
+                    policy_status = await provider._read("control.chat_modes")
+                    result["activeCount"] = (result.get("activeCount") or 0) + policy_status.get("activeTemporary", 0)
                 result["available"] = (result.get("available") is True and self.background_tasks_supported
                     and self.background_states.get(profile, {}).get("state") == "ready")
             elif operation == "media":
@@ -447,6 +505,7 @@ class ConnectorRuntime:
                             {**self.config, "profiles": [name]}, install=True))
                     except (OSError, ValueError):
                         self.media_states[name] = {"state": "installationFailed"}
+                await asyncio.to_thread(chat_mode_profiles, {**self.config, "profiles": [name]}, install=True)
                 if self.background_tasks_supported:
                     self.background_states.update(await asyncio.to_thread(background_profiles,
                         {**self.config, "profiles": [name]}, install=True))
@@ -490,7 +549,18 @@ class ConnectorRuntime:
                 response.setdefault("generation", "unknown")
                 response.setdefault("inventoryComplete", False)
         if ledger_key:
-            self.ledger.finish(ledger_key, encode_message(response))
+            ledger.finish(ledger_key, encode_message(response))
+            if ledger is self.temporary_ledger:
+                stored_id = getattr(response.get("result"), "stored_session_id", None)
+                route = next((arg for arg in (*args, *kwargs.values()) if isinstance(arg, SessionRoute)), None)
+                stored_id = route.stored_session_id if route else stored_id
+                if stored_id:
+                    key = (profile, stored_id)
+                    self.temporary_receipts.setdefault(key, set()).add(ledger_key)
+                    if "error" not in response and operation in {"create_session", "renew_temporary_session"}:
+                        self.temporary_expiries[key] = time.monotonic() + 300
+                    elif operation == "close_temporary_session":
+                        self._forget_temporary(profile, stored_id)
         return response
 
     async def _respond(self, message, websocket):
@@ -590,6 +660,7 @@ class ConnectorRuntime:
             for provider in tuple(self.providers.values()):
                 await provider.close()
             self.ledger.close()
+            self.temporary_ledger.close()
             atomic_json(self.directory / "status.json", {"activeWork": None, "fresh": False,
                 "observedAt": datetime.now(timezone.utc).isoformat(), "connected": False,
                 "connectionError": self.connection_error, "version": __version__, "maintenance": False})

@@ -140,3 +140,4 @@ export interface ApiError {
   correlationId?: string;
   details?: Record<string, unknown>;
 }
+export type ChatMode = "memory_read_write" | "memory_read_only" | "temporary";

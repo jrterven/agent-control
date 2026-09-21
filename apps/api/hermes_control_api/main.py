@@ -205,6 +205,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     cloud_event_locks = WeakValueDictionary()
 
     def persist_event(event):
+        transient = service_container.temporary_chats.for_event(event)
+        if transient is not None:
+            persist_normalized_event(transient.session, event, vault=vault)
+            return transient.owner_id, None
+        if str(event.stored_session_id or "").startswith("ac_tmp_"):
+            return None, None
         recipient_user_id = None
         if settings.deployment_mode == "cloud":
             with session_factory() as db:
@@ -222,6 +228,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return recipient_user_id, completion
 
     async def publish_persisted_event(event, recipient_user_id, completion):
+        transient = service_container.temporary_chats.for_event(event)
+        if transient is not None:
+            event.private_data.clear()
+            transient.events.remember_correlation(event)
+            await transient.events.publish(event, recipient_user_id=transient.owner_id)
+            if transient.reconciler is None:
+                transient.reconciler = PromptHistoryReconciler(transient.session, service_container)
+            transient.reconciler.schedule(event)
+            return
+        if str(event.stored_session_id or "").startswith("ac_tmp_"):
+            return
         if settings.deployment_mode == "cloud" and recipient_user_id is None:
             return
         # Private validated cache seeds have completed their only durable use.
@@ -405,6 +422,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session_factory, service_container
         )
         mail_watcher = asyncio.create_task(app.state.mail_service.reconcile(app), name="mail-mcp-reconcile")
+        temporary_watcher = asyncio.create_task(service_container.temporary_chats.reap(service_container), name="temporary-chat-expiry")
         try:
             yield
         finally:
@@ -412,16 +430,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             capability_watcher.cancel()
             email_reference_cache_watcher.cancel()
             mail_watcher.cancel()
+            temporary_watcher.cancel()
             for watcher in (
                 automation_watcher,
                 capability_watcher,
                 email_reference_cache_watcher,
                 mail_watcher,
+                temporary_watcher,
             ):
                 with contextlib.suppress(asyncio.CancelledError):
                     await watcher
             await push_notification_service.close()
             await prompt_reconciler.close()
+            service_container.temporary_chats.dispose()
             await connector_registry.close()
             await provider_pool.close()
             engine.dispose()

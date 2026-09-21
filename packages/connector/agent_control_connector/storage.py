@@ -70,13 +70,16 @@ class OperationLedger:
     MAX_RECEIPTS_BYTES = 64 * 1024 * 1024
     MAX_DATABASE_BYTES = 128 * 1024 * 1024
 
-    def __init__(self, directory: Path):
-        private_dir(directory)
-        path = directory / "operations.sqlite3"
-        if path.is_symlink():
+    def __init__(self, directory: Path | None):
+        if directory is not None:
+            private_dir(directory)
+        path = directory / "operations.sqlite3" if directory is not None else None
+        if path is not None and path.is_symlink():
             raise ValueError("Invalid operation ledger")
-        self.db = sqlite3.connect(path)
-        path.chmod(0o600)
+        self.db = sqlite3.connect(path if path is not None else ":memory:")
+        if path is not None:
+            path.chmod(0o600)
+        self.db.execute("PRAGMA temp_store=MEMORY")
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         page_size = self.db.execute("PRAGMA page_size").fetchone()[0]
@@ -132,3 +135,9 @@ class OperationLedger:
 
     def close(self):
         self.db.close()
+
+    def discard_receipts(self, keys):
+        """Erase private results while retaining hashes that prevent redispatch."""
+        with self.db:
+            self.db.executemany("UPDATE operations SET state='unknown',result=NULL WHERE key=?", ((key,) for key in keys))
+        self.receipt_bytes = self.db.execute("SELECT coalesce(sum(length(result)),0) FROM operations").fetchone()[0]

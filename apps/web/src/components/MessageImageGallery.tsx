@@ -1,3 +1,5 @@
+import { useSessionMedia } from "../lib/useSessionMedia";
+import type { ImgHTMLAttributes } from "react";
 import { ArrowSquareOut, CaretLeft, CaretRight, CircleNotch, DownloadSimple, ImageSquare, MagnifyingGlassMinus, MagnifyingGlassPlus, WarningCircle, X } from "@phosphor-icons/react";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -10,6 +12,11 @@ import type { ImageMediaMetadata } from "../types";
 const acceptedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
 const maxPolls = 7;
 type ImageState = { metadata?: ImageMediaMetadata; failed?: boolean; waiting?: boolean };
+
+function SessionImage({ sessionId, mediaId, variant, ...props }: { sessionId: string; mediaId: string; variant: "thumbnail" | "full" } & ImgHTMLAttributes<HTMLImageElement>) {
+  const url = useSessionMedia(sessionId, mediaId, variant);
+  return <img {...props} src={url} />;
+}
 
 function validMetadata(metadata: ImageMediaMetadata, id: string) {
   return metadata.id === id && metadata.kind === "image"
@@ -69,7 +76,7 @@ export function MessageImageGallery({ sessionId, references }: { sessionId: stri
       const source = safeImageSource(metadata?.sourceUrl);
       return <figure className="message-image" key={`${reference.id}:${index}`}>
         {ready ? <button className="message-image__open" type="button" aria-label={t("images.open", { alt })} onClick={(event) => { openerRef.current = event.currentTarget; setOpened(index); }}>
-          <img src={api.sessionMediaUrl(sessionId, reference.id, "thumbnail")} alt={alt} loading="lazy" decoding="async" width={metadata.width} height={metadata.height} onError={() => markFailed(reference.id)} />
+          <SessionImage sessionId={sessionId} mediaId={reference.id} variant="thumbnail" alt={alt} loading="lazy" decoding="async" width={metadata.width} height={metadata.height} onError={() => markFailed(reference.id)} />
           <span className="message-image__expand" aria-hidden="true"><MagnifyingGlassPlus size={19} /></span>
         </button> : <div className="message-image__placeholder" role="status">
           {image?.failed ? <WarningCircle aria-hidden="true" size={25} /> : <ImageSquare aria-hidden="true" size={25} />}
@@ -102,6 +109,7 @@ function ImageViewer({ references, images, sessionId, index, onIndex, onClose, o
   const stageRef = useRef<HTMLDivElement>(null);
   const [zoomed, setZoomed] = useState(false);
   const reference = references[index];
+  const fullUrl = useSessionMedia(sessionId, reference.id, "full");
   const image = images[reference.id];
   const metadata = image?.metadata;
   const ready = metadata?.status === "ready" && !image?.failed;
@@ -140,13 +148,13 @@ function ImageViewer({ references, images, sessionId, index, onIndex, onClose, o
         <button type="button" aria-label={t("images.close")} onClick={onClose}><X /></button>
       </header>
       <div className={`image-viewer__stage${zoomed ? " is-zoomed" : ""}`} ref={stageRef}>
-        {ready ? <img src={api.sessionMediaUrl(sessionId, reference.id, "full")} alt={alt} onError={() => onFailure(reference.id)} /> : <div className="message-image__placeholder" role="status">{image?.failed ? <WarningCircle /> : <CircleNotch />}<span>{t(image?.failed ? "images.failed" : "images.pending")}</span><button type="button" onClick={onRetry}>{t("images.retry")}</button></div>}
+        {ready ? <img src={fullUrl} alt={alt} onError={() => onFailure(reference.id)} /> : <div className="message-image__placeholder" role="status">{image?.failed ? <WarningCircle /> : <CircleNotch />}<span>{t(image?.failed ? "images.failed" : "images.pending")}</span><button type="button" onClick={onRetry}>{t("images.retry")}</button></div>}
       </div>
       <footer className="image-viewer__footer">
         <div className="image-viewer__caption" id={descriptionId}><strong>{alt}</strong>{metadata?.caption ? <p>{metadata.caption}</p> : null}{metadata ? <small>{t(`images.${metadata.provenance === "web" || metadata.provenance === "generated" ? metadata.provenance : "local"}`)}</small> : null}</div>
         <nav className="image-viewer__actions" aria-label={t("images.gallery")}>
           {source ? <a href={source} target="_blank" rel="noopener noreferrer"><ArrowSquareOut aria-hidden="true" />{metadata?.sourceTitle || t("images.source")}</a> : null}
-          {ready ? <a href={api.sessionMediaUrl(sessionId, reference.id, "full")} download={`${reference.id}.${metadata.mediaType === "image/jpeg" ? "jpg" : metadata.mediaType === "image/webp" ? "webp" : "png"}`}><DownloadSimple aria-hidden="true" />{t("images.download")}</a> : null}
+          {ready ? <a href={fullUrl} download={`${reference.id}.${metadata.mediaType === "image/jpeg" ? "jpg" : metadata.mediaType === "image/webp" ? "webp" : "png"}`}><DownloadSimple aria-hidden="true" />{t("images.download")}</a> : null}
           <button type="button" aria-label={t("images.previous")} disabled={index === 0} onClick={() => onIndex(index - 1)}><CaretLeft /></button>
           <button type="button" aria-label={t("images.next")} disabled={index + 1 === references.length} onClick={() => onIndex(index + 1)}><CaretRight /></button>
         </nav>

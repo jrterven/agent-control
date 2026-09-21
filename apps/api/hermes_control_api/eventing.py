@@ -94,6 +94,22 @@ class EventHub:
         self._max_interaction_bytes = min(16 * 1024, max_event_bytes)
         self._lock = asyncio.Lock()
 
+    def clear(self) -> None:
+        """Release a closed temporary chat's replay, interaction and queue data."""
+        self._replay.clear()
+        self._buffers.clear()
+        self._route_buffer_bytes.clear()
+        self._total_buffer_bytes = 0
+        self._correlated_runs.clear()
+        self._correlated_run_bytes = 0
+        self._interactions.clear()
+        for subscription in self._subscriptions:
+            while not subscription.queue.empty():
+                subscription.queue.get_nowait()
+            subscription.queued_bytes = 0
+            # Wake its socket so the closed-chat check terminates it promptly.
+            subscription.queue.put_nowait(({"type": "control.closed"}, 0))
+
     def interaction_matches(
         self,
         *,

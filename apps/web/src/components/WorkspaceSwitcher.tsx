@@ -16,7 +16,7 @@ export function WorkspaceSwitcher() {
   const selectedWorkspaceId = useAppStore((state) => state.selectedWorkspaceId);
   const selectWorkspace = useAppStore((state) => state.selectWorkspace);
   const workspaces = useAppStore((state) => state.workspaces);
-  const unassignedCount = useAppStore((state) => state.sessions.filter((session) => !session.workspaceId).length);
+  const unassignedCount = useAppStore((state) => state.sessions.filter((session) => !session.workspaceId && session.chatMode !== "temporary").length);
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);

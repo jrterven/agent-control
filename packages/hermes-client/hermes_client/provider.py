@@ -28,6 +28,7 @@ from .admin import (
     writable_config_projection,
 )
 from .email_references import project_email_reference_prompt
+from .chat_modes import ChatMode, validate_chat_mode, mode_capability
 from .transfer_config import parse_transfer_config, project_transfer_config
 from .limits import (
     UpstreamPayloadError,
@@ -353,7 +354,9 @@ class HermesProvider(Protocol):
     async def search_sessions(
         self, query: str, *, limit: int = 20
     ) -> list[HermesSearchResult]: ...
-    async def create_session(self, *, title: str | None = None) -> HermesSession: ...
+    async def create_session(self, *, title: str | None = None, chat_mode: ChatMode = "memory_read_write") -> HermesSession: ...
+    async def renew_temporary_session(self, route: SessionRoute) -> None: ...
+    async def close_temporary_session(self, route: SessionRoute) -> None: ...
     async def resume_session(self, stored_session_id: str) -> HermesSession: ...
     async def history(
         self, route: SessionRoute, *, expected_runtime_generation: str | None = None
@@ -515,6 +518,7 @@ class HermesGatewayProvider:
         self._background_continuations: OrderedDict[str, datetime] = OrderedDict()
         self._human_continuations: OrderedDict[tuple[str, str], tuple[str, int | None]] = OrderedDict()
         self._history_floors: OrderedDict[str, int] = OrderedDict()
+        self._restricted_sessions: set[str] = set()
 
     @property
     def runtime_generation(self) -> str:
@@ -1265,6 +1269,15 @@ class HermesGatewayProvider:
             except (httpx.HTTPError, ValueError):
                 if not rpc_available:
                     raise
+        chat_features = set()
+        if rpc_available and audited is not None and reported_revision_consistent:
+            try:
+                policy = await self._read("control.chat_modes")
+                if isinstance(policy, dict) and policy.get("version") == 1 and isinstance(policy.get("modes"), list):
+                    chat_features = {mode_capability(mode) for mode in policy["modes"] if mode in {"memory_read_only", "temporary"}}
+            except (JsonRpcError, ConnectionError, OSError, TimeoutError, ValueError):
+                pass
+        self.chat_mode_features = frozenset(chat_features)
         return CapabilitySet(
             protocol="dashboard-jsonrpc" if rpc_available else "openai-compatible",
             version=version,
@@ -1280,7 +1293,7 @@ class HermesGatewayProvider:
             ),
             methods=frozenset(methods),
             features=frozenset(
-                ({"streaming"} if "prompt.submit" in methods else set())
+                chat_features | ({"streaming"} if "prompt.submit" in methods else set())
                 | ({"profiles"} if "profiles.list" in methods else set())
                 | ({"replay"} if "session.events.since" in methods else set())
                 | ({"api-fallback"} if not rpc_available else set())
@@ -1690,6 +1703,8 @@ class HermesGatewayProvider:
             await self._cleanup_profile_transfer_file(destination_path)
 
     async def list_background_tasks(self, stored_session_id: str | None = None) -> dict[str, Any]:
+        if stored_session_id and stored_session_id.startswith("ac_tmp_"):
+            return await self._read("control.session.background", {"stored_session_id": stored_session_id})
         # Native delegation.status is process-global and subagent.list is an
         # owner-transport snapshot that omits async delegations entirely. Only
         # the connector's profile-scoped durable reader can prove an inventory.
@@ -1791,7 +1806,23 @@ class HermesGatewayProvider:
             )
         return results
 
-    async def create_session(self, *, title: str | None = None) -> HermesSession:
+    async def create_session(self, *, title: str | None = None, chat_mode: ChatMode = "memory_read_write") -> HermesSession:
+        validate_chat_mode(chat_mode)
+        if chat_mode != "memory_read_write":
+            capabilities = await self.capabilities()
+            if not capabilities.supports(mode_capability(chat_mode)):
+                raise ValueError("CHAT_MODE_UNAVAILABLE")
+            # Restricted sessions may never use the legacy REST fallback, whose
+            # create contract ignores policy. An attested RPC must echo it.
+            await self._ensure_connected()
+            raw = await self.rpc.request("control.session.create", {"title": title, "chat_mode": chat_mode})
+            if raw.get("chat_mode") != chat_mode:
+                raise RuntimeError("CHAT_MODE_NOT_CONFIRMED")
+            session = self._session(raw)
+            self._remember_route(SessionRoute(self.connection.gateway_id, self.connection.profile_name, session.stored_session_id, session.runtime_session_id))
+            self._history_floors[session.stored_session_id] = 0
+            self._trim_continuations()
+            return session
         try:
             await self._ensure_connected()
         except (ConnectionError, OSError, TimeoutError):
@@ -1839,6 +1870,12 @@ class HermesGatewayProvider:
             self._trim_continuations()
         return session
 
+    async def renew_temporary_session(self, route: SessionRoute) -> None:
+        await self._read("control.session.renew", {"session_id": route.stored_session_id})
+
+    async def close_temporary_session(self, route: SessionRoute) -> None:
+        await self._read("control.session.close", {"session_id": route.stored_session_id})
+
     async def resume_session(self, stored_session_id: str) -> HermesSession:
         try:
             raw = await self._read(
@@ -1866,7 +1903,7 @@ class HermesGatewayProvider:
             await self._emit_resumed_interactions(raw, session)
             return session
         except (ConnectionError, OSError, TimeoutError):
-            if self.api is None:
+            if self.api is None or stored_session_id.startswith(("ac_tmp_", "ac_ro_")) or stored_session_id in self._restricted_sessions:
                 raise
             body = await bounded_json_request(
                 self.api, "GET", self._api_path("/api/sessions")
@@ -1973,6 +2010,10 @@ class HermesGatewayProvider:
 
     async def history_readonly(self, stored_session_id: str) -> list[dict[str, Any]]:
         """Read durable transcript pages without creating a Hermes runtime."""
+
+        if stored_session_id.startswith("ac_tmp_"):
+            raw = await self._read("control.session.history", {"stored_session_id": stored_session_id})
+            return [dict(row) for row in _bounded_rows(raw, key="messages", label="messages", max_items=_MAX_MESSAGES)]
 
         safe_id = quote(stored_session_id, safe="")
         messages: list[dict[str, Any]] = []
@@ -2993,6 +3034,8 @@ class HermesGatewayProvider:
     async def _api_prompt(
         self, route: SessionRoute, prompt: str, operation_id: str
     ) -> PromptReceipt:
+        if route.stored_session_id.startswith(("ac_tmp_", "ac_ro_")) or route.stored_session_id in self._restricted_sessions:
+            raise RuntimeError("CHAT_MODE_UNAVAILABLE")
         if self.api is None:
             raise JsonRpcDisconnected("Hermes API fallback is not configured")
         # No transport retry: a disconnect after POST delivery is ambiguous.
@@ -3068,8 +3111,7 @@ class HermesGatewayProvider:
                 pass
         return PromptReceipt(operation_id=operation_id, status="completed")
 
-    @staticmethod
-    def _session(raw: dict[str, Any]) -> HermesSession:
+    def _session(self, raw: dict[str, Any]) -> HermesSession:
         stored_id = _bounded_text(
             raw.get("stored_session_id") or raw.get("session_key") or raw.get("id"),
             label="stored session id",
@@ -3099,6 +3141,9 @@ class HermesGatewayProvider:
             status = "running"
         else:
             status = str(raw.get("status") or "idle")
+        mode = validate_chat_mode(raw.get("chat_mode", "temporary" if stored_id.startswith("ac_tmp_") else "memory_read_only" if stored_id.startswith("ac_ro_") else "memory_read_write"))
+        if mode != "memory_read_write":
+            self._restricted_sessions.add(stored_id)
         return HermesSession(
             stored_session_id=stored_id,
             runtime_session_id=runtime_id,
@@ -3107,6 +3152,7 @@ class HermesGatewayProvider:
             # human gate, a live turn, inflight output, or auto-continuation.
             # All are active states and must never be classified as interrupted.
             status=status[:30],
+            chat_mode=mode,
         )
 
     @staticmethod
@@ -3362,7 +3408,8 @@ class InMemoryHermesProvider:
                 }
             ),
             features=frozenset(
-                {"streaming", "replay", "automations", "administration"}
+                {
+                    "session.mode.memory_read_only", "session.mode.temporary","streaming", "replay", "automations", "administration"}
             ),
         )
 
@@ -3433,7 +3480,7 @@ class InMemoryHermesProvider:
         return imported
 
     async def list_sessions(self) -> list[HermesSession]:
-        return sorted(self._sessions.values(), key=lambda row: row.updated_at, reverse=True)
+        return sorted((row for row in self._sessions.values() if row.chat_mode != "temporary"), key=lambda row: row.updated_at, reverse=True)
 
     async def search_sessions(
         self, query: str, *, limit: int = 20
@@ -3446,6 +3493,8 @@ class InMemoryHermesProvider:
         for session in sorted(
             self._sessions.values(), key=lambda row: row.updated_at, reverse=True
         ):
+            if session.chat_mode == "temporary":
+                continue
             messages = self._messages.get(session.stored_session_id, [])
             matching_message = next(
                 (
@@ -3480,11 +3529,19 @@ class InMemoryHermesProvider:
                 break
         return matches
 
-    async def create_session(self, *, title: str | None = None) -> HermesSession:
-        stored = uuid4().hex
-        session = HermesSession(stored, uuid4().hex[:8], title or "Nueva conversación")
+    async def create_session(self, *, title: str | None = None, chat_mode: ChatMode = "memory_read_write") -> HermesSession:
+        validate_chat_mode(chat_mode)
+        stored = ("ac_tmp_" if chat_mode == "temporary" else "ac_ro_" if chat_mode == "memory_read_only" else "") + uuid4().hex
+        session = HermesSession(stored, uuid4().hex[:8], title or "Nueva conversación", chat_mode=chat_mode)
         self._sessions[stored] = session
         return session
+
+    async def renew_temporary_session(self, route: SessionRoute) -> None:
+        if route.stored_session_id not in self._sessions:
+            raise SessionHistoryNotFound("TEMPORARY_CHAT_ENDED")
+
+    async def close_temporary_session(self, route: SessionRoute) -> None:
+        await self.delete_session(route)
 
     async def resume_session(self, stored_session_id: str) -> HermesSession:
         existing = self._sessions.get(stored_session_id)
@@ -3496,6 +3553,7 @@ class InMemoryHermesProvider:
             existing.title,
             "idle",
             datetime.now(timezone.utc),
+            existing.chat_mode,
         )
         self._sessions[stored_session_id] = resumed
         return resumed

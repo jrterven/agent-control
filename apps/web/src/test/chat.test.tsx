@@ -730,14 +730,17 @@ describe("mobile-first chat", () => {
     const createSession = vi.spyOn(api, "createSession").mockResolvedValue(createdSession);
 
     render(<ChatView />);
-    const action = screen.getByRole("button", { name: "Nuevo chat" });
-    expect(action).toBeVisible();
-    await user.click(action);
+    expect(screen.getAllByRole("radio")).toHaveLength(3);
+    expect(createSession).not.toHaveBeenCalled();
+    vi.spyOn(api, "submitPrompt").mockResolvedValue({ status: "accepted", operationId: "new-op" } as Awaited<ReturnType<typeof api.submitPrompt>>);
+    await user.type(screen.getByRole("textbox"), "Hola");
+    await user.click(screen.getByRole("button", { name: "Enviar mensaje" }));
 
     await waitFor(() => expect(createSession).toHaveBeenCalledWith(
       writableProfile.id,
       "workspace-papers",
       "csrf-memory-only",
+      "memory_read_write",
     ));
     expect(useAppStore.getState().selectedSessionId).toBe(createdSession.id);
   });

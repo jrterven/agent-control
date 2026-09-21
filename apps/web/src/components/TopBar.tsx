@@ -28,7 +28,7 @@ export function TopBar() {
   const activityOpen = useAppStore((state) => state.activityOpen);
   const desktopContextOpen = useAppStore((state) => state.desktopContextOpen);
   const notificationsOpen = useAppStore((state) => state.notificationsOpen);
-  const unreadCount = useAppStore((state) => state.sessions.filter((session) => session.unread).length);
+  const unreadCount = useAppStore((state) => state.sessions.filter((session) => session.unread && session.chatMode !== "temporary").length);
   const updateAvailable = usePwaUpdateStore((state) => state.status === "available");
   const demoMode = useAppStore((state) => state.demoMode);
   const profiles = useAppStore((state) => state.profiles);

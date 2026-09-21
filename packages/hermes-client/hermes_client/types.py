@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
+from .chat_modes import ChatMode
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -142,6 +144,7 @@ class HermesSession:
     title: str | None = None
     status: str = "idle"
     updated_at: datetime = field(default_factory=utc_now)
+    chat_mode: ChatMode = "memory_read_write"
 
 
 @dataclass(frozen=True, slots=True)
