@@ -18,7 +18,7 @@ export function MailPlugins() {
 const blank = (provider: "hostinger" | "imap"): MailInput => ({ provider, address: "", label: "", username: "", password: "", service: provider === "hostinger" ? "hostinger" : "custom", imapHost: "", smtpHost: "", smtpPort: 465 });
 
 function MailPluginsEditor({ owner, generation }: { owner?: string; generation: number }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const profiles = useAppStore((s) => s.profiles);
   const gateways = useAppStore((s) => s.gateways);
@@ -131,6 +131,7 @@ function MailPluginsEditor({ owner, generation }: { owner?: string; generation: 
       return <div key={provider}><Button variant="secondary" leadingIcon={<Plus />} disabled={disabled || loading || !enabled} onClick={() => connect(provider)}>{t("plugins.connect", { provider: providerName(provider) })}</Button>{!loading && !enabled ? <small>{t("plugins.unavailable")}</small> : null}</div>;
     })}</div>
     <p className="mail-plugins__privacy"><ShieldCheck aria-hidden="true" />{t("plugins.privacy")}</p>
+    <p><a href={`/about${["es", "fr", "de", "pt"].includes(i18n.language.split("-")[0]) ? `-${i18n.language.split("-")[0]}` : ""}.html`} target="_blank" rel="noopener noreferrer">Agent Control · JemAI Labs</a></p>
     {(form || editing) && <form className="mail-plugins__form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
       <fieldset disabled={disabled}><legend>{form ? t("plugins.connect", { provider: providerName(form.provider) }) : t("plugins.edit")}</legend>
         <label>{t("plugins.label")}<input value={form ? form.label : label} maxLength={120} onChange={(e) => form ? field("label", e.target.value) : setLabel(e.target.value)} /></label>

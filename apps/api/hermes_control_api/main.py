@@ -7,6 +7,7 @@ import mimetypes
 import re
 from collections.abc import AsyncIterator
 from pathlib import Path
+from uuid import UUID
 from weakref import WeakValueDictionary
 
 import uvicorn
@@ -449,6 +450,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.cloud_mutations_inflight = 0
     app.include_router(mail_router)
     app.include_router(mail_mcp_router)
+
+    @app.get("/.well-known/microsoft-identity-association.json", include_in_schema=False)
+    async def microsoft_identity_association():
+        # Publish only this installation's configured public application ID.
+        # The provider uses this document to verify the app's publisher domain.
+        try:
+            if not settings.mail_outlook_enabled:
+                raise ValueError()
+            application_id = str(UUID(settings.mail_outlook_client_id))
+        except (ValueError, TypeError, AttributeError):
+            return JSONResponse(status_code=404, content={"code": "NOT_FOUND"})
+        return JSONResponse({"associatedApplications": [{"applicationId": application_id}]}, headers={"Cache-Control": "no-store"})
 
     @app.exception_handler(MailError)
     async def mail_error_handler(request: Request, exc: MailError):

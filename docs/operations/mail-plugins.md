@@ -15,6 +15,26 @@ importing credentials from existing Hermes integrations are outside this release
 
 ## Provider activation
 
+### Public company identity
+
+The public `/about.html` page (also `about-es.html`, `about-fr.html`,
+`about-de.html`, `about-pt.html`) identifies Agent Control as a JemAI Labs product
+and links to `support@jemailabs.com`. It is accessible without authentication
+and outside the PWA navigation fallback. It describes mailbox consent and data
+processing; it does not replace the full privacy policy or terms required for
+public OAuth verification.
+
+Microsoft can verify the application's publisher domain using
+`/.well-known/microsoft-identity-association.json`. This uncached public endpoint
+contains only the configured Outlook client UUID when Outlook is enabled; it
+returns 404 otherwise. It does not expose a secret or grant mailbox permissions.
+Use the deployed application domain and existing app registration. Do not change
+tenant-wide domains, credentials, callbacks, or account grants for branding.
+Google requires a Google account or an administered Google Group for its support
+email selector. Brand/domain configuration does not imply provider verification.
+
+### Configuration
+
 Use HTTPS `HERMES_CONTROL_PUBLIC_BASE_URL`, the existing vault key, and the mail
 settings in `deploy/cloud/cloud.env.example`. Gmail/Outlook buttons remain
 disabled unless their flag, client ID and client secret are configured. These

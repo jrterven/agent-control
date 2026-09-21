@@ -16,6 +16,22 @@ from hermes_control_api.security import hash_password
 from .conftest import mutation_headers
 
 
+def test_publisher_association_exposes_only_configured_public_id(client, app):
+    path = "/.well-known/microsoft-identity-association.json"
+    assert client.get(path).status_code == 404
+    app.state.settings.mail_outlook_enabled = True
+    app.state.settings.mail_outlook_client_id = "misconfigured-not-a-public-id"
+    assert client.get(path).status_code == 404
+    app.state.settings.mail_outlook_client_id = "edc26d1e-418e-44f0-af5d-486e24d5f525"
+    app.state.settings.mail_outlook_client_secret = "SECRET-NEVER-PUBLISH"
+    response = client.get(path)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {"associatedApplications": [{"applicationId": app.state.settings.mail_outlook_client_id}]}
+    assert "SECRET" not in response.text
+
+
 @pytest.fixture
 def mail(authenticated, app, monkeypatch):
     client, csrf = authenticated

@@ -41,7 +41,7 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: "/index.html",
-        navigateFallbackDenylist: [/^\/api\//, /^\/ws\//],
+        navigateFallbackDenylist: [/^\/api\//, /^\/ws\//, /^\/\.well-known\//, /^\/about(?:-(?:es|fr|de|pt))?\.html$/],
         cleanupOutdatedCaches: true,
         importScripts: ["/notification-sw.js"],
         // Realtime dictation cannot work offline. Keep its large, lazy SDK out

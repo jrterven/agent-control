@@ -403,7 +403,7 @@ class SecurityBoundaryMiddleware(BaseHTTPMiddleware):
             "camera=(self), microphone=(self), geolocation=()"
         )
         path = request.url.path
-        if path.startswith("/api/") or response.status_code >= 400:
+        if path.startswith(("/api/", "/.well-known/")) or response.status_code >= 400:
             response.headers["Cache-Control"] = "no-store"
         elif path in {"/sw.js", "/boot-recovery.js"} or path.endswith(".webmanifest") or path.endswith(".html") or "." not in path.rsplit("/", 1)[-1]:
             response.headers["Cache-Control"] = "no-cache"
