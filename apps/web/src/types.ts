@@ -307,6 +307,7 @@ export type AutomationRun = {
 };
 
 export type SearchResult = {
+  source?: "text" | "live" | null;
   id: string;
   targetId?: string;
   kind: "session" | "message" | "automation" | "workspace";

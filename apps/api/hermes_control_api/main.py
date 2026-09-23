@@ -52,6 +52,7 @@ from .realtime import persist_normalized_event
 from .prompt_reconciliation import PromptHistoryReconciler
 from .security import SecretVault
 from .supervision import SupervisorHealth, supervise_periodic
+from .semantic_search import SemanticSearch
 from .services import (
     AppServices,
     AutomationService,
@@ -73,6 +74,11 @@ _LOG_SECRET = re.compile(
     r"|sutkn_[A-Za-z0-9][A-Za-z0-9._~-]{7,})(?![A-Za-z0-9._~-])"
     r"|gh[pousr]_[A-Za-z0-9]{20,}"
 )
+_LOG_SEARCH = re.compile(r"([?&]q=)[^&\s\"']+")
+
+
+def _redact_log(value: str) -> str:
+    return _LOG_SEARCH.sub(r"\1[REDACTED]", _LOG_SECRET.sub("[REDACTED]", value))
 
 
 def _mark_orphans(session_factory, services: AppServices) -> int:
@@ -145,15 +151,15 @@ class RedactingLogFilter(logging.Filter):
             # intact while redacting string members; flattening them either
             # crashes access logging or leaves literal % placeholders.
             if isinstance(record.msg, str):
-                record.msg = _LOG_SECRET.sub("[REDACTED]", record.msg)
+                record.msg = _redact_log(record.msg)
             if isinstance(record.args, tuple):
                 record.args = tuple(
-                    _LOG_SECRET.sub("[REDACTED]", value) if isinstance(value, str) else value
+                    _redact_log(value) if isinstance(value, str) else value
                     for value in record.args
                 )
             return True
         message = record.getMessage()
-        record.msg = _LOG_SECRET.sub("[REDACTED]", message)
+        record.msg = _redact_log(message)
         record.args = ()
         return True
 
@@ -423,6 +429,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         mail_watcher = asyncio.create_task(app.state.mail_service.reconcile(app), name="mail-mcp-reconcile")
         temporary_watcher = asyncio.create_task(service_container.temporary_chats.reap(service_container), name="temporary-chat-expiry")
+        app.state.semantic_search.initialize()
+        semantic_watcher = asyncio.create_task(app.state.semantic_search.run(), name="semantic-search-index")
         try:
             yield
         finally:
@@ -431,12 +439,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             email_reference_cache_watcher.cancel()
             mail_watcher.cancel()
             temporary_watcher.cancel()
+            semantic_watcher.cancel()
             for watcher in (
                 automation_watcher,
                 capability_watcher,
                 email_reference_cache_watcher,
                 mail_watcher,
                 temporary_watcher,
+                semantic_watcher,
             ):
                 with contextlib.suppress(asyncio.CancelledError):
                     await watcher
@@ -466,6 +476,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.elevenlabs_scribe_client = ElevenLabsScribeClient()
     app.state.elevenlabs_speech_client = ElevenLabsSpeechClient()
     app.state.openai_live_client = OpenAILiveClient()
+    app.state.semantic_search = SemanticSearch(service_container)
+    app.state.semantic_search.paused = lambda: app.state.cloud_draining
     app.state.vision_service = VisionService(vault)
     app.state.mail_service = MailService(service_container)
     app.state.cloud_mutations_inflight = 0

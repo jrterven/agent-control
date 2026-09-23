@@ -16,7 +16,6 @@ import { Badge, Button, Field, Panel, StatusDot, Switch, cx } from "@hermes-cont
 import { api, ApiError, type AutomationUpdateInput, type ReadinessView } from "../lib/api";
 import { clearPrivateCache, clearTranscriptCache, savePreference } from "../lib/db";
 import { createAndProvisionGateway } from "../lib/gatewayProvisioning";
-import { buildSearchResults } from "../lib/search";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { useAppStore } from "../store/appStore";
 import type { Automation, AutomationRun, Gateway, Profile, SearchResult, SessionSummary, ThemePreference } from "../types";
@@ -1083,81 +1082,7 @@ export function DiagnosticsScreen() {
   return <div className="page-wrap"><PageHeader eyebrow={t("diagnosticsPage.eyebrow")} title={t("diagnosticsPage.title")} description={t("diagnosticsPage.description")} action={<Button leadingIcon={<DownloadSimple />} onClick={exportReport}>{t("diagnosticsPage.export")}</Button>} /><div className="health-hero"><span className="health-hero__icon"><CloudCheck weight="duotone" /></span><div><span className="eyebrow">{t("diagnosticsPage.global")}</span><h2>{healthy ? t("diagnosticsPage.operational") : t("diagnosticsPage.degraded")}</h2><p>{gateway?.name ?? t("diagnosticsPage.noGateway")} · {profile?.displayName ?? t("diagnosticsPage.noProfile")}</p></div><Badge tone={healthy ? "positive" : "warning"}>{healthy ? t("diagnosticsPage.operationalBadge") : t("diagnosticsPage.review")}</Badge></div><div className="diagnostic-grid"><Panel><header><Pulse /><strong>{t("diagnosticsPage.connectivity")}</strong></header><dl><div><dt>Control API</dt><dd><StatusDot tone={readiness?.status === "ready" ? "positive" : "warning"} /> {readiness?.status === "ready" ? t("diagnosticsPage.ready") : readiness ? t("diagnosticsPage.unavailable") : t("diagnosticsPage.checking")}</dd></div><div><dt>{t("diagnosticsPage.localDatabase")}</dt><dd><StatusDot tone={readiness?.database === "ready" ? "positive" : "warning"} /> {statusText(readiness?.database)}</dd></div><div><dt>{t("diagnosticsPage.lastProbe")}</dt><dd><StatusDot tone={readiness?.upstream === "online" ? "positive" : "warning"} /> {statusText(readiness?.upstream)}</dd></div><div><dt>Gateway</dt><dd><StatusDot tone={gateway?.status === "connected" ? "positive" : "warning"} /> {statusText(gateway?.status)}</dd></div><div><dt>Realtime</dt><dd><StatusDot tone={connection === "connected" ? "positive" : "warning"} /> {statusText(connection)}</dd></div></dl></Panel><Panel><header><Code /><strong>{t("diagnosticsPage.compatibility")}</strong></header><dl><div><dt>{t("diagnosticsPage.detectedVersion")}</dt><dd>{gateway?.version ?? t("diagnosticsPage.unknown")}</dd></div><div><dt>SHA</dt><dd><code>{gateway?.sha ?? t("diagnosticsPage.unknown")}</code></dd></div><div><dt>{t("diagnosticsPage.contract")}</dt><dd>{capabilities?.realtime ? "dashboard-jsonrpc" : t("diagnosticsPage.unverified")}</dd></div></dl></Panel></div><Panel className="capability-table"><header><Gauge /><strong>{t("diagnosticsPage.matrix")}</strong></header><div>{capabilityLabels.map(([key, label]) => <span key={key}>{capabilities?.[key] ? <CheckCircle weight="fill" /> : <WarningCircle />}<strong>{label}</strong><small>{capabilities?.[key] ? t("diagnosticsPage.verified") : t("diagnosticsPage.unannounced")}</small></span>)}</div></Panel><Panel className="log-preview"><header><TerminalWindow /><strong>{t("diagnosticsPage.sanitized")}</strong><Badge>{t("diagnosticsPage.noSecrets")}</Badge></header><pre><code>control={readiness?.status ?? "checking"}{"\n"}database={readiness?.database ?? "checking"}{"\n"}upstream={readiness?.upstream ?? "checking"}{"\n"}gateway={gateway?.name ?? "none"}{"\n"}profile={profile?.technicalName ?? "none"}{"\n"}version={gateway?.version ?? "unknown"}{"\n"}sha={gateway?.sha ?? "unknown"}</code></pre></Panel></div>;
 }
 
-export function SearchScreen() {
-  const { t, i18n: translation } = useTranslation();
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | SearchResult["kind"]>("all");
-  const [remoteResults, setRemoteResults] = useState<SearchResult[]>([]);
-  const [partial, setPartial] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [searchError, setSearchError] = useState("");
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const navigate = useNavigate();
-  const authState = useAppStore((state) => state.authState);
-  const demoMode = useAppStore((state) => state.demoMode);
-  const sessions = useAppStore((state) => state.sessions);
-  const workspaces = useAppStore((state) => state.workspaces);
-  const automations = useAppStore((state) => state.automations);
-  const messages = useAppStore((state) => state.messages);
-  const profiles = useAppStore((state) => state.profiles);
-  const selectSession = useAppStore((state) => state.selectSession);
-  const selectWorkspace = useAppStore((state) => state.selectWorkspace);
-  const allResults = useMemo(() => buildSearchResults({ sessions, workspaces, automations, messages, profiles }, t), [automations, messages, profiles, sessions, t, workspaces]);
-  const localResults = useMemo(() => {
-    const locale = translation.resolvedLanguage ?? translation.language;
-    const needle = query.trim().toLocaleLowerCase(locale);
-    return allResults.filter((result) => (filter === "all" || result.kind === filter) && (!needle || `${result.title} ${result.excerpt} ${result.meta}`.toLocaleLowerCase(locale).includes(needle)));
-  }, [allResults, filter, query, translation.language, translation.resolvedLanguage]);
-  const useLocalSearch = demoMode || authState !== "authenticated";
-  useEffect(() => {
-    const normalized = query.trim();
-    if (useLocalSearch || normalized.length < 2) {
-      setRemoteResults([]);
-      setPartial(false);
-      setLoading(false);
-      setSearchError("");
-      return undefined;
-    }
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      setLoading(true);
-      setSearchError("");
-      void api.search(normalized, filter, 100, controller.signal)
-        .then((response) => {
-          setRemoteResults(response.items);
-          setPartial(response.partial);
-        })
-        .catch((error) => {
-          if (controller.signal.aborted) return;
-          setRemoteResults([]);
-          setPartial(false);
-          setSearchError(error instanceof Error ? error.message : t("searchPage.queryError"));
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setLoading(false);
-        });
-    }, 250);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [filter, query, t, useLocalSearch]);
-  const results = useLocalSearch ? localResults : remoteResults;
-  const virtualizer = useVirtualizer({ count: results.length, getScrollElement: () => viewportRef.current, estimateSize: () => 84, overscan: 6 });
-  const openResult = (result: SearchResult) => {
-    if (result.kind === "automation") { void navigate({ to: "/automations" }); return; }
-    if (result.kind === "workspace" && result.targetId) selectWorkspace(result.targetId);
-    else if (result.targetId) selectSession(result.targetId);
-    void navigate({ to: "/chats" });
-  };
-  const filters: Array<[typeof filter, string]> = [["all", t("searchPage.all")], ["message", t("searchPage.messages")], ["session", t("searchPage.sessions")], ["workspace", t("searchPage.workspaces")], ["automation", t("searchPage.automations")]];
-  const emptyCopy = query.trim().length < 2
-    ? t("searchPage.minChars")
-    : loading
-      ? t("searchPage.loading")
-      : searchError || t("searchPage.noMatches");
-  return <div className="page-wrap search-page"><PageHeader eyebrow={t("searchPage.eyebrow")} title={t("searchPage.title")} description={t("searchPage.description")} /><label className="search-box"><MagnifyingGlass /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("searchPage.placeholder")} /><kbd>⌘ K</kbd></label><div className="search-filters">{filters.map(([value, label]) => <button key={value} type="button" aria-pressed={filter === value} className={filter === value ? "is-active" : ""} onClick={() => setFilter(value)}>{label}</button>)}</div>{partial ? <p className="form-warning" role="status"><WarningCircle /> {t("searchPage.partial")}</p> : null}<div className="virtual-results" ref={viewportRef} aria-busy={loading}><div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>{virtualizer.getVirtualItems().map((row) => { const result = results[row.index]; return <button key={result.id} type="button" className="search-result" style={{ transform: `translateY(${row.start}px)`, height: row.size }} onClick={() => openResult(result)}><span className="search-result__icon">{result.kind === "automation" ? <Lightning /> : result.kind === "workspace" ? <FolderOpen /> : <FileText />}</span><span><strong>{result.title}</strong><small>{result.excerpt}</small></span><span className="search-result__meta">{result.meta}<ArrowRight /></span></button>; })}</div>{results.length === 0 ? <p className="empty-state" role="status">{emptyCopy}</p> : null}</div></div>;
-}
+export { SearchScreen } from "./SearchScreen";
 
 export function SettingsScreen() {
   const { t, i18n: translation } = useTranslation();

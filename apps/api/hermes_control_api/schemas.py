@@ -453,6 +453,7 @@ class SearchItemView(ApiModel):
     title: str
     excerpt: str
     meta: str
+    source: Literal["text", "live"] | None = None
 
 
 class SearchResponse(ApiModel):

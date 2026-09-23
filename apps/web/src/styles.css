@@ -895,6 +895,10 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .search-filters { display: flex; gap: 5px; margin: 12px 0; overflow-x: auto; }
 .search-filters button { min-height: 44px; border: 1px solid transparent; border-radius: 999px; padding: 0 12px; color: var(--muted); background: transparent; white-space: nowrap; cursor: pointer; }
 .search-filters button.is-active { color: var(--accent); border-color: var(--border-accent); background: var(--accent-soft); }
+.semantic-search-status { padding: 12px 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.semantic-search-status .search-filters { flex-wrap: wrap; align-items: center; }
+.semantic-search-status button { cursor: pointer; }
+.search-page [role="tab"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .virtual-results { height: min(540px, calc(100dvh - 310px)); overflow-y: auto; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-0); }
 .search-result { position: absolute; inset: 0 0 auto; width: 100%; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 0; border-bottom: 1px solid var(--border); padding: 10px 13px; text-align: left; background: transparent; cursor: pointer; }
 .search-result:hover { background: var(--surface-2); }

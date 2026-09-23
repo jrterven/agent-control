@@ -41,6 +41,7 @@ def scope_cloud_session(db: Session, owner_id: str) -> None:
         with_loader_criteria(m.AuditEvent, m.AuditEvent.actor_user_id == owner_id, include_aliases=True),
     ]
     for model in (m.Workspace, m.SessionLink, m.Automation, m.LiveTranscript,
+                  m.SemanticPreference, m.SemanticIndexState, m.SemanticFragment,
                   m.EmailReferenceCache, m.PushSubscription, m.Tag, m.SessionTag,
                   m.AttachmentReference, m.Draft, m.UserIntegration,
                   m.UserVoicePreference, m.OpenAIProfileVoicePreference,

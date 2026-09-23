@@ -143,6 +143,9 @@ class FailoverProvider:
     async def history_readonly(self, stored_session_id):
         return await self._call("history_readonly", stored_session_id)
 
+    async def history_page(self, stored_session_id, *, offset=0, limit=100):
+        return await self._call("history_page", stored_session_id, offset=offset, limit=limit)
+
     async def submit_prompt(self, route, prompt, *, operation_id):
         return await self._call(
             "submit_prompt", route, prompt, operation_id=operation_id, prompt=True

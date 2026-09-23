@@ -1564,6 +1564,7 @@ def delete_push_subscription(
 async def global_search(
     request: Request,
     q: str = Query(min_length=2, max_length=200),
+    mode: str = Query(default="lexical", pattern="^(lexical|semantic)$"),
     kind: str = Query(
         default="all",
         pattern="^(all|session|message|workspace|automation)$",
@@ -1572,6 +1573,8 @@ async def global_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    if mode == "semantic":
+        return await request.app.state.semantic_search.search(user.id, q, min(limit, 20))
     return await SearchService(services(request)).search(
         db, user, query=q, kind=kind, limit=limit
     )

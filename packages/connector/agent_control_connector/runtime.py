@@ -515,6 +515,7 @@ class ConnectorRuntime:
             if operation == "list_profiles":
                 result = [item for item in result if item.name in self.providers]
             if operation == "capabilities":
+                result = replace(result, features=result.features | {"connector.historyPageV1"})
                 if (self.profile_transfer_supported
                         and self.config.get("sourceSha") == HERMES_0212_SHA
                         and profile_contract_supports(self.config.get("sourceSha"), result.version, "profiles.transfer")

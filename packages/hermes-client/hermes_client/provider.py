@@ -362,6 +362,7 @@ class HermesProvider(Protocol):
         self, route: SessionRoute, *, expected_runtime_generation: str | None = None
     ) -> list[dict[str, Any]]: ...
     async def history_readonly(self, stored_session_id: str) -> list[dict[str, Any]]: ...
+    async def history_page(self, stored_session_id: str, *, offset: int = 0, limit: int = 100) -> dict[str, Any]: ...
     async def submit_prompt(
         self,
         route: SessionRoute,
@@ -2055,6 +2056,35 @@ class HermesGatewayProvider:
         self._observe_history_continuations(stored_session_id, messages)
         return messages
 
+    async def history_page(self, stored_session_id: str, *, offset: int = 0, limit: int = 100) -> dict[str, Any]:
+        """Bounded durable history; never resumes a session or reads temporary chats."""
+        if stored_session_id.startswith("ac_tmp_") or not stored_session_id:
+            raise ValueError("Persistent session required")
+        if not 0 <= offset <= 2_147_483_647 or not 1 <= limit <= 500:
+            raise ValueError("Invalid history page")
+        try:
+            while True:
+                try:
+                    raw = await bounded_json_request(self.http, "GET",
+                        f"/api/sessions/{quote(stored_session_id, safe='')}/messages",
+                        max_bytes=1024 * 1024,
+                        params={"profile": self.connection.profile_name, "offset": offset,
+                                "limit": limit, "order": "oldest"})
+                    break
+                except UpstreamPayloadTooLarge:
+                    # Leave room for the connector envelope. Retry the same
+                    # offset with a smaller page, never skip oversized content.
+                    if limit == 1:
+                        raise
+                    limit = max(1, limit // 2)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise SessionHistoryNotFound(stored_session_id) from None
+            raise
+        rows = [dict(item) for item in _bounded_rows(raw, key="messages", label="history page", max_items=limit)]
+        self._observe_history_continuations(stored_session_id, rows)
+        return {"messages": rows, "next_offset": offset + len(rows), "complete": len(rows) < limit}
+
     async def submit_prompt(
         self,
         route: SessionRoute,
@@ -3565,6 +3595,12 @@ class InMemoryHermesProvider:
 
     async def history_readonly(self, stored_session_id: str) -> list[dict[str, Any]]:
         return list(self._messages[stored_session_id])
+
+    async def history_page(self, stored_session_id: str, *, offset: int = 0, limit: int = 100) -> dict[str, Any]:
+        if stored_session_id.startswith("ac_tmp_") or offset < 0 or not 1 <= limit <= 500:
+            raise ValueError("Invalid history page")
+        rows = list(self._messages[stored_session_id][offset:offset + limit])
+        return {"messages": rows, "next_offset": offset + len(rows), "complete": len(rows) < limit}
 
     async def submit_prompt(
         self,

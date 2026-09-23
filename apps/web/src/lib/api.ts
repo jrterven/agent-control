@@ -251,6 +251,18 @@ export class ApiError extends Error {
   }
 }
 
+export type SemanticSearchStatus = {
+  enabled: boolean;
+  configured: boolean;
+  total: number;
+  indexed: number;
+  pending: number;
+  failed: number;
+  errorCode: string | null;
+  state: "disabled" | "blocked" | "indexing" | "ready";
+  revision: string;
+};
+
 type CsrfScope = { ownerId: string; token: string | null; authGeneration: number };
 let csrfRefresh: (CsrfScope & { promise: Promise<string | undefined> }) | undefined;
 
@@ -448,6 +460,12 @@ export const api = {
     `/search?q=${encodeURIComponent(query)}&kind=${encodeURIComponent(kind)}&limit=${encodeURIComponent(String(limit))}`,
     { signal },
   ),
+  semanticSearch: (query: string, signal?: AbortSignal) => request<{ items: SearchResult[]; partial: boolean }>(
+    `/search?q=${encodeURIComponent(query)}&mode=semantic&limit=20`, { signal }),
+  semanticSearchStatus: (signal?: AbortSignal) => request<SemanticSearchStatus>("/search/semantic/status", { signal }),
+  setSemanticSearch: (enabled: boolean, csrfToken?: string) => request<SemanticSearchStatus>("/search/semantic/settings", {
+    method: "PUT", headers: mutationHeaders(csrfToken), body: JSON.stringify({ enabled }),
+  }),
   createWorkspace: (payload: { name: string; description?: string }, csrfToken?: string) => request<WorkspaceWire>("/workspaces", {
     method: "POST",
     headers: { "Idempotency-Key": crypto.randomUUID(), ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) },

@@ -418,6 +418,61 @@ class LiveTranscript(Base, Timestamped):
     payload_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class SemanticPreference(Base, Timestamped):
+    __tablename__ = "semantic_preferences"
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    credential_version: Mapped[str | None] = mapped_column(String(64))
+
+
+class SemanticIndexState(Base, Timestamped):
+    """Durable queue and publication pointer; a failed generation stays private."""
+    __tablename__ = "semantic_index_states"
+    __table_args__ = (ForeignKeyConstraint(
+        ["session_link_id", "owner_id"], ["session_links.id", "session_links.owner_id"],
+        ondelete="CASCADE", name="fk_semantic_state_session_owner",
+    ),)
+    session_link_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(36), index=True)
+    source_version: Mapped[str] = mapped_column(String(64))
+    indexed_version: Mapped[str | None] = mapped_column(String(64))
+    active_generation: Mapped[str | None] = mapped_column(String(36))
+    building_generation: Mapped[str | None] = mapped_column(String(36))
+    history_offset: Mapped[int] = mapped_column(Integer, default=0)
+    history_complete: Mapped[bool] = mapped_column(Boolean, default=False)
+    history_tail_ciphertext: Mapped[str | None] = mapped_column(Text)
+    live_offset: Mapped[int] = mapped_column(Integer, default=0)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[str | None] = mapped_column(String(36))
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SemanticFragment(Base):
+    __tablename__ = "semantic_fragments"
+    __table_args__ = (
+        ForeignKeyConstraint(["session_link_id", "owner_id"],
+                             ["session_links.id", "session_links.owner_id"], ondelete="CASCADE",
+                             name="fk_semantic_fragment_session_owner"),
+        UniqueConstraint("session_link_id", "generation", "source", "content_hash", name="uq_semantic_fragment"),
+        Index("ix_semantic_fragment_owner_generation", "owner_id", "session_link_id", "generation"),
+        CheckConstraint("payload_ciphertext LIKE 'v1.%'", name="ck_semantic_fragment_encrypted"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    owner_id: Mapped[str] = mapped_column(String(36))
+    session_link_id: Mapped[str] = mapped_column(String(36))
+    generation: Mapped[str] = mapped_column(String(36))
+    source: Mapped[str] = mapped_column(String(16))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(64))
+    dimensions: Mapped[int] = mapped_column(Integer)
+    version: Mapped[int] = mapped_column(Integer)
+    payload_ciphertext: Mapped[str] = mapped_column(Text)
+
+
 class VisionPreference(Base, Timestamped):
     """Camera choices and an atomic, cross-worker inference lease per owner."""
 

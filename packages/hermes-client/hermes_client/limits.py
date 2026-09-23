@@ -72,10 +72,11 @@ async def bounded_json_request(
         content_length = response.headers.get("content-length")
         if content_length:
             try:
-                if int(content_length) > max_bytes:
-                    raise UpstreamPayloadTooLarge("Hermes response is too large")
+                declared_length = int(content_length)
             except ValueError as exc:
                 raise UpstreamPayloadError("Hermes returned an invalid Content-Length") from exc
+            if declared_length > max_bytes:
+                raise UpstreamPayloadTooLarge("Hermes response is too large")
         body = bytearray()
         async for chunk in response.aiter_bytes():
             if len(body) + len(chunk) > max_bytes:

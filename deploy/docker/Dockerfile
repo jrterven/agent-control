@@ -16,6 +16,7 @@ RUN npm run build --workspace apps/web
 FROM python:3.12-slim-bookworm AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache \
     HERMES_CONTROL_ENVIRONMENT=production \
     HERMES_CONTROL_CREATE_SCHEMA_ON_START=false \
     HERMES_CONTROL_STATIC_DIR=/opt/hermes-control/apps/api/static
@@ -28,7 +29,9 @@ COPY packages/hermes-client/hermes_client packages/hermes-client/hermes_client
 COPY apps/api apps/api
 COPY deploy/docker/entrypoint.sh deploy/docker/entrypoint.sh
 RUN python -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir ./packages/hermes-client ./apps/api
+    && /opt/venv/bin/pip install --no-cache-dir ./packages/hermes-client ./apps/api \
+    && /opt/venv/bin/python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')" \
+    && chmod -R a+rX /opt/tiktoken-cache
 COPY --from=web-build /src/apps/web/dist apps/api/static
 RUN mkdir -p /var/lib/hermes-control \
     && chmod 0755 deploy/docker/entrypoint.sh \

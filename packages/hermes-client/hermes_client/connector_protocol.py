@@ -34,7 +34,7 @@ TYPES = {cls.__name__: cls for cls in (
 )}
 READ_OPERATIONS = frozenset({
     "capabilities", "list_profiles", "list_sessions", "search_sessions", "history",
-    "history_readonly", "list_automations", "list_automation_runs", "list_models",
+    "history_readonly", "history_page", "list_automations", "list_automation_runs", "list_models",
     "get_config", "get_transfer_config", "get_soul", "get_memory", "list_skills", "list_toolsets",
     "list_mcp_servers", "list_channels", "get_usage", "list_secrets", "media", "list_background_tasks",
     "profile_archive_read",

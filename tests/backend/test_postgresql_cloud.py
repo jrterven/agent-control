@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import subprocess
@@ -297,3 +298,62 @@ def test_postgresql_voice_transcripts_append_retry_stay_encrypted_and_owner_scop
         own_path = f"/api/v1/sessions/{bob[1]}/live-transcripts"
         assert client.put(f"{own_path}/{call_id}", headers=headers, json=initial).status_code == 404
         assert client.get(own_path).json()["items"] == []
+
+
+def test_semantic_migration_leases_encryption_and_revocation(pg_url):
+    from types import SimpleNamespace
+    import hashlib
+    import numpy as np
+    from hermes_control_api.connector_models import Connector
+    from hermes_control_api.models import SemanticFragment, SemanticIndexState
+    from hermes_control_api.openai_live import OpenAIIntegrationService
+    from hermes_control_api.security import SecretVault
+    from hermes_control_api.semantic_search import DIMENSIONS, SemanticSearch
+
+    migrate(pg_url, "0029_chat_modes")
+    cfg = settings(pg_url)
+    engine = build_engine(cfg)
+    factory = build_session_factory(engine)
+    vault = SecretVault(b"s" * 32)
+    with factory() as db:
+        owner = User(username="semantic-owner", password_hash="unused")
+        db.add(owner); db.flush()
+        gateway = Gateway(name="semantic-host", owner_id=owner.id, transport_kind="connector",
+                          rest_url="http://unused.invalid", ws_url="ws://unused.invalid")
+        db.add(gateway); db.flush()
+        connector = Connector(owner_id=owner.id, gateway_id=gateway.id, name="Host", profiles=["default"], token_hash="semantic-token")
+        db.add(connector)
+        row = SessionLink(owner_id=owner.id, gateway_id=gateway.id, profile_name="default", stored_session_id="durable", title="Keep me")
+        db.add(row)
+        OpenAIIntegrationService(vault).set_api_key(db, owner, "sk-unit-semantic-postgresql")
+        db.commit()
+        owner_id, session_id, connector_id = owner.id, row.id, connector.id
+    migrate(pg_url)
+    service = SemanticSearch(SimpleNamespace(settings=cfg, vault=vault, session_factory=factory))
+    service.settings(owner_id, True)
+    service.reconcile()
+    ready = Barrier(2)
+    def claim(_):
+        ready.wait(timeout=10)
+        return service.claim()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        jobs = list(pool.map(claim, range(2)))
+    assert sum(job is not None for job in jobs) == 1
+    job = next(job for job in jobs if job)
+    vector = np.zeros(DIMENSIONS, dtype=np.float32); vector[0] = 1
+    content = "bicicleta privada"
+    assert service.save_fragments(job, "text", [(content, hashlib.sha256(content.encode()).hexdigest(), None, vector)])
+    service.finish_page(job, publish=True)
+    assert service.rank(owner_id, vector, 20)["items"][0]["targetId"] == session_id
+    with factory() as db:
+        assert db.get(SessionLink, session_id).title == "Keep me"
+        fragment = db.scalar(select(SemanticFragment))
+        assert content not in fragment.payload_ciphertext
+        db.get(Connector, connector_id).revoked_at = datetime.now(timezone.utc)
+        db.commit()
+    assert service.rank(owner_id, vector, 20)["items"] == []
+    with factory() as db:
+        db.delete(db.get(SessionLink, session_id)); db.commit()
+        assert db.scalar(select(func.count()).select_from(SemanticFragment)) == 0
+        assert db.get(SemanticIndexState, session_id) is None
+    engine.dispose()
