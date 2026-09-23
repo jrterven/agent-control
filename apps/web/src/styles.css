@@ -731,7 +731,7 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .automation-filter-tabs button.is-active { color: var(--text); background: var(--surface-elevated); box-shadow: 0 1px 8px rgb(0 0 0 / 18%); }
 .automation-filter-tabs small { min-width: 20px; height: 20px; display: inline-grid; place-items: center; padding: 0 5px; border-radius: 999px; color: var(--muted-strong); background: var(--surface-3); font-size: 10px; }
 .automation-filter-tabs button.is-active small { color: var(--accent-strong); background: var(--accent-soft-strong); }
-.automation-list { display: grid; gap: 10px; }
+.automation-list { display: grid; gap: 10px; container-type: inline-size; }
 .automation-row { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 14px; }
 .automation-row__icon { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; color: var(--accent); background: var(--accent-soft); font-size: 23px; }
 .automation-row__title { display: flex; flex-wrap: nowrap !important; align-items: center; gap: 8px; }
@@ -742,6 +742,13 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .automation-row__end { display: flex; align-items: center; gap: 10px; }
 .automation-row__end .hc-switch-row > span { display: none; }
 .automation-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.automation-last-run { display: block; margin-top: 8px; color: var(--muted); }
+@container (max-width: 880px) {
+  .automation-row { grid-template-columns: 42px minmax(0, 1fr); }
+  .automation-row__end { grid-column: 2; flex-wrap: wrap; justify-content: flex-start; }
+  .automation-row__end .hc-switch-row { flex-shrink: 0; }
+  .automation-actions { justify-content: flex-start; }
+}
 .automation-empty { padding: 24px; color: var(--muted); text-align: center; }
 .cron-details { margin-top: 8px; color: var(--muted); font-size: 12px; }
 .cron-details summary { min-height: 32px; display: inline-flex; align-items: center; cursor: pointer; color: var(--muted); }
