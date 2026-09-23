@@ -764,8 +764,9 @@ def test_stream_cardinality_uses_tombstones_then_fails_closed_at_capacity():
     assert "CARDINALITY-PRIVATE-TAIL" not in rendered
 
 
+@pytest.mark.parametrize("request_origin", [None, "http://testserver"])
 def test_history_email_preview_and_redirect_are_owned_and_provider_allowlisted(
-    authenticated, app
+    authenticated, app, request_origin
 ):
     client, csrf = authenticated
     session = _create_session(client, csrf, "email-reference-session")
@@ -845,7 +846,10 @@ def test_history_email_preview_and_redirect_are_owned_and_provider_allowlisted(
 
     resolved = client.get(
         reference["openUrl"],
-        headers={"Accept": "application/json"},
+        headers={
+            "Accept": "application/json",
+            **({"Origin": request_origin} if request_origin else {}),
+        },
         follow_redirects=False,
     )
     assert resolved.status_code == 200
@@ -854,7 +858,10 @@ def test_history_email_preview_and_redirect_are_owned_and_provider_allowlisted(
     assert "object-src 'none'" in resolved.headers["content-security-policy"]
     assert "frame-ancestors 'none'" in resolved.headers["content-security-policy"]
     assert resolved.headers["referrer-policy"] == "no-referrer"
-    assert resolved.headers["vary"] == "Accept"
+    # CORS may also vary by Origin; content negotiation must still vary by Accept.
+    assert "accept" in {
+        field.strip().casefold() for field in resolved.headers["vary"].split(",")
+    }
     assert resolved.headers["x-content-type-options"] == "nosniff"
 
     missing = client.get(
