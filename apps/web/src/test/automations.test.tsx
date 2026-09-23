@@ -2,9 +2,16 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
+import { gateways } from "../data";
 import { AutomationsScreen } from "../screens/Screens";
 import { useAppStore } from "../store/appStore";
 import type { Automation, AutomationRun, Profile, Workspace } from "../types";
+
+const navigation = vi.hoisted(() => vi.fn());
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@tanstack/react-router")>(),
+  useNavigate: () => navigation,
+}));
 
 const profile: Profile = {
   id: "profile-newton",
@@ -40,6 +47,7 @@ const workspace: Workspace = {
 
 describe("automation editor contract", () => {
   beforeEach(() => {
+    navigation.mockReset();
     useAppStore.setState({
       profiles: [profile],
       workspaces: [workspace],
@@ -48,6 +56,7 @@ describe("automation editor contract", () => {
       csrfToken: "csrf-memory-only",
       demoMode: false,
       authState: "authenticated",
+      timeZone: "America/Mexico_City",
     });
   });
   afterEach(() => vi.restoreAllMocks());
@@ -56,7 +65,7 @@ describe("automation editor contract", () => {
     const created: Automation = {
       id: "automation-1",
       gatewayId: "gateway-a",
-      workspaceId: workspace.id,
+      workspaceId: "workspace-automation",
       profileName: "default",
       name: "Resumen semanal",
       schedule: "30 8 * * FRI",
@@ -69,11 +78,14 @@ describe("automation editor contract", () => {
       lastStatus: "idle",
     };
     const create = vi.spyOn(api, "createAutomation").mockResolvedValue(created);
+    const ownWorkspace = { ...workspace, id: "workspace-automation", name: created.name };
+    vi.spyOn(api, "bootstrap").mockResolvedValue({ gateways: [{ ...gateways[0], id: "gateway-a" }], profiles: [profile], sessions: [], workspaces: [workspace, ownWorkspace], automations: [{ ...created, profileId: profile.id }] } as Awaited<ReturnType<typeof api.bootstrap>>);
+    vi.spyOn(api, "automationRuns").mockResolvedValue([]);
     const user = userEvent.setup();
     render(<AutomationsScreen />);
 
     await user.click(screen.getByRole("button", { name: "Nueva automatización" }));
-    expect(screen.getByRole("combobox", { name: /Espacio de trabajo/ })).toHaveValue(workspace.id);
+    expect(screen.getByRole("combobox", { name: /Espacio de trabajo/ })).toHaveDisplayValue("Crear un espacio propio (automático)");
     await user.type(screen.getByLabelText("Nombre"), "Resumen semanal");
     await user.type(screen.getByLabelText("Prompt"), "Prepara el resumen semanal");
     await user.click(screen.getByRole("button", { name: "Crear pausada" }));
@@ -81,15 +93,38 @@ describe("automation editor contract", () => {
     await waitFor(() => expect(create).toHaveBeenCalledWith({
       gatewayId: "gateway-a",
       profileName: "default",
-      workspaceId: workspace.id,
       name: "Resumen semanal",
       schedule: "30 8 * * FRI",
       timezone: "Hermes local",
       prompt: "Prepara el resumen semanal",
       enabled: false,
     }, "csrf-memory-only"));
-    expect(await screen.findByText("Resumen semanal")).toBeInTheDocument();
-    expect(screen.getByText("Investigación")).toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().workspaces).toContainEqual(ownWorkspace));
+    expect(await screen.findByRole("button", { name: "Abrir espacio" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Abrir espacio" }));
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("workspace-automation");
+    expect(useAppStore.getState().selectedProfileId).toBe(profile.id);
+    expect(navigation).toHaveBeenCalledWith({ to: "/chats" });
+  });
+
+  it.each([["Investigación", "workspace-research"], ["Sin espacio de trabajo", null]])("respects an explicit %s destination", async (label, workspaceId) => {
+    const create = vi.spyOn(api, "createAutomation").mockResolvedValue({
+      id: "chosen", name: "Radar", workspaceId: workspaceId ?? undefined, gatewayId: profile.gatewayId,
+      profileName: profile.technicalName, schedule: "30 8 * * FRI", timezone: "Hermes local",
+      profileId: profile.id, enabled: false, nextRun: "", nextRuns: [], lastStatus: "idle",
+    });
+    vi.spyOn(api, "automationRuns").mockResolvedValue([]);
+    vi.spyOn(api, "bootstrap").mockRejectedValue(new Error("Refresh unavailable"));
+    const user = userEvent.setup();
+    render(<AutomationsScreen />);
+    await user.click(screen.getByRole("button", { name: "Nueva automatización" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: /Espacio de trabajo/ }), screen.getByRole("option", { name: label }));
+    await user.type(screen.getByLabelText("Nombre"), "Radar");
+    await user.type(screen.getByLabelText("Prompt"), "Resume las noticias");
+    await user.click(screen.getByRole("button", { name: "Crear pausada" }));
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ workspaceId }), "csrf-memory-only"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(create).toHaveBeenCalledTimes(1);
   });
 
   it("moves an existing automation to another workspace", async () => {
@@ -167,6 +202,7 @@ describe("automation editor contract", () => {
     const { container } = render(<AutomationsScreen />);
 
     expect(await screen.findByRole("img", { name: "Resultado no leído" })).toBeInTheDocument();
+    expect(container.querySelector('time[datetime="2030-01-03T15:00:00Z"]')).toHaveTextContent("03/01/2030");
     await user.click(screen.getByRole("tab", { name: /No leídas/ }));
     expect(container.querySelectorAll(".automation-row")).toHaveLength(1);
     expect(container.querySelector(".automation-row")).toHaveTextContent("Informe pendiente");

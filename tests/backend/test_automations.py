@@ -611,3 +611,119 @@ def test_gateway_automation_parser_expands_official_next_run_to_five_occurrences
     assert len(automation.next_runs) == 5
     assert automation.next_runs[0].isoformat() == "2030-01-07T09:00:00-06:00"
     assert [value.weekday() for value in automation.next_runs] == [0, 0, 0, 0, 0]
+
+
+def test_default_workspace_is_private_dedicated_and_idempotent(authenticated, app):
+    from hermes_control_api.models import Workspace
+
+    client, csrf = authenticated
+    payload = automation_payload(client)
+    headers = mutation_headers(csrf, "auto-workspace-once")
+    first = client.post("/api/v1/automations", headers=headers, json=payload)
+    replay = client.post("/api/v1/automations", headers=headers, json=payload)
+    assert first.status_code == replay.status_code == 201
+    assert replay.json() == first.json()
+    second = create_automation(client, csrf, "same-name-separate-workspace")
+    assert first.json()["workspaceId"] != second["workspaceId"]
+    with app.state.session_factory() as db:
+        row = db.get(Automation, first.json()["id"])
+        workspace = db.get(Workspace, row.workspace_id)
+        assert workspace.name == row.name
+        assert workspace.owner_id == row.owner_id
+        assert len(list(db.scalars(select(Workspace).where(Workspace.name == row.name)))) == 2
+
+
+def test_explicit_no_workspace_does_not_create_one(authenticated, app):
+    from hermes_control_api.models import Workspace
+
+    client, csrf = authenticated
+    with app.state.session_factory() as db:
+        before = set(db.scalars(select(Workspace.id)))
+    response = client.post("/api/v1/automations",
+        headers=mutation_headers(csrf, "explicit-no-workspace"),
+        json=automation_payload(client, workspaceId=None))
+    assert response.status_code == 201
+    assert response.json()["workspaceId"] is None
+    with app.state.session_factory() as db:
+        assert set(db.scalars(select(Workspace.id))) == before
+
+
+def test_failed_upstream_create_does_not_leave_a_workspace(authenticated, app, monkeypatch):
+    from hermes_control_api.models import Workspace
+    from hermes_control_api.services import ConflictError
+
+    client, csrf = authenticated
+    with app.state.session_factory() as db:
+        before = set(db.scalars(select(Workspace.id)))
+    monkeypatch.setattr(InMemoryHermesProvider, "create_automation",
+        AsyncMock(side_effect=ConflictError("Cannot create automation")))
+    response = client.post("/api/v1/automations",
+        headers=mutation_headers(csrf, "failed-workspace-create"), json=automation_payload(client))
+    assert response.status_code == 409
+    with app.state.session_factory() as db:
+        assert set(db.scalars(select(Workspace.id))) == before
+
+
+def test_import_creates_workspace_once_and_preserves_explicit_changes(authenticated, app):
+    client, csrf = authenticated
+    route = gateway_id(client)
+
+    async def create_native():
+        with app.state.session_factory() as db:
+            connection = await GatewayService(app.state.services).connection(db, route, "control-dev")
+        provider = await app.state.services.provider_pool.get(connection)
+        await provider.create_automation(HermesAutomation(automation_id="", name="Native radar",
+            schedule="0 8 * * *", timezone="Hermes local", prompt="Prepare a report", enabled=False))
+
+    client.portal.call(create_native)
+    def sync(key):
+        response = client.post("/api/v1/automations/sync",
+            params={"gatewayId": route, "profileName": "control-dev"},
+            headers=mutation_headers(csrf, key))
+        assert response.status_code == 200
+        return response.json()[0]
+    first = sync("import-workspace-first")
+    assert first["workspaceId"]
+    assert sync("import-workspace-again")["workspaceId"] == first["workspaceId"]
+    response = client.patch(f"/api/v1/automations/{first['id']}",
+        headers=mutation_headers(csrf, "import-detach"), json={"workspaceId": None})
+    assert response.status_code == 200
+    assert sync("import-after-detach")["workspaceId"] is None
+
+
+def test_reconciliation_preserves_session_moves_and_uses_new_destination_for_future_runs(authenticated, app):
+    from hermes_control_api.services import AutomationService
+
+    client, csrf = authenticated
+    automation = create_automation(client, csrf, "workspace-reconcile")
+    assert automation["workspaceId"]
+    response = client.post(f"/api/v1/automations/{automation['id']}/trigger",
+        headers=mutation_headers(csrf, "workspace-first-run"))
+    assert response.status_code == 202
+    run = client.get(f"/api/v1/automations/{automation['id']}/runs").json()[0]
+    destination = create_workspace(client, csrf, name="Chosen destination", key="chosen-workspace")
+
+    async def reconcile():
+        with app.state.session_factory() as db:
+            await AutomationService(app.state.services).reconcile_upstream_runs(db, db.get(Automation, automation["id"]))
+
+    for index, workspace_id in enumerate((destination["id"], None)):
+        moved = client.patch(f"/api/v1/sessions/{run['sessionLinkId']}",
+            headers=mutation_headers(csrf, f"move-run-{index}"), json={"workspaceId": workspace_id})
+        assert moved.status_code == 200, moved.text
+        client.portal.call(reconcile)
+        with app.state.session_factory() as db:
+            assert db.get(SessionLink, run["sessionLinkId"]).workspace_id == workspace_id
+    response = client.patch(f"/api/v1/automations/{automation['id']}",
+        headers=mutation_headers(csrf, "change-future-destination"), json={"workspaceId": destination["id"]})
+    assert response.status_code == 200
+    client.portal.call(reconcile)
+    with app.state.session_factory() as db:
+        assert db.get(SessionLink, run["sessionLinkId"]).workspace_id is None
+    triggered = client.post(f"/api/v1/automations/{automation['id']}/trigger",
+        headers=mutation_headers(csrf, "workspace-future-run"))
+    assert triggered.status_code == 202
+    runs = client.get(f"/api/v1/automations/{automation['id']}/runs").json()
+    future = next(r for r in runs if r["id"] == triggered.json()["operationId"])
+    with app.state.session_factory() as db:
+        assert db.get(SessionLink, future["sessionLinkId"]).workspace_id == destination["id"]

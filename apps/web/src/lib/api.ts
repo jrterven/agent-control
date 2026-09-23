@@ -115,7 +115,7 @@ export type SpeechTokenView = {
 export type AutomationCreateInput = {
   gatewayId: string;
   profileName: string;
-  workspaceId: string | null;
+  workspaceId?: string | null;
   name: string;
   schedule: string;
   timezone: string;

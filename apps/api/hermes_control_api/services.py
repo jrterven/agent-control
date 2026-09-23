@@ -4788,6 +4788,16 @@ class AutomationService:
         self.services = services
         self.gateways = GatewayService(services)
 
+    @staticmethod
+    def _create_workspace(db: Session, actor: User, name: str) -> str:
+        # Commit with the automation, so failed creates cannot leave an orphan
+        # workspace. Names are labels, never identities shared across jobs/users.
+        workspace = Workspace(owner_id=actor.id, name=name)
+        db.add(workspace)
+        db.flush()
+        audit(db, actor=actor, action="workspace.create", target_type="workspace", target_id=workspace.id)
+        return workspace.id
+
     async def sync(
         self,
         db: Session,
@@ -4865,6 +4875,7 @@ class AutomationService:
                 row = Automation(
                     owner_id=actor.id,
                     gateway_id=gateway_id,
+                    workspace_id=self._create_workspace(db, actor, item.name),
                     profile_name=profile_name,
                     hermes_automation_id=item.automation_id,
                     name=item.name,
@@ -4935,7 +4946,10 @@ class AutomationService:
         row = Automation(
             owner_id=actor.id,
             gateway_id=payload.gateway_id,
-            workspace_id=payload.workspace_id,
+            workspace_id=(
+                payload.workspace_id if "workspace_id" in payload.model_fields_set
+                else self._create_workspace(db, actor, upstream.name)
+            ),
             profile_name=payload.profile_name,
             hermes_automation_id=upstream.automation_id,
             name=upstream.name,
@@ -5138,7 +5152,14 @@ class AutomationService:
                 )
                 db.add(linked_session)
                 db.flush()
-            else:
+            elif linked_session.workspace_id is None and not db.scalar(
+                select(AutomationRun.id).where(
+                    AutomationRun.session_link_id == linked_session.id,
+                ).limit(1)
+            ):
+                # A normal session sync may discover the run first. Assign its
+                # initial destination once; later polls must preserve moves,
+                # including an explicit move back to No workspace.
                 linked_session.workspace_id = row.workspace_id
             if linked_session is not None and receipt.runtime_session_id:
                 SessionService._assign_runtime(

@@ -523,7 +523,10 @@ class OperationView(ApiModel):
 class AutomationCreate(ApiModel):
     gateway_id: str
     profile_name: str
-    workspace_id: str | None = None
+    workspace_id: str | None = Field(
+        default=None,
+        description="Omit to create a workspace named after the automation; null explicitly selects no workspace.",
+    )
     name: str = Field(min_length=1, max_length=200)
     schedule: str = Field(min_length=1, max_length=200)
     timezone: str = Field(default="Hermes local", min_length=1, max_length=100)
