@@ -11,6 +11,7 @@ import { LeftSidebar } from "./LeftSidebar";
 import { NotificationMenu } from "./NotificationMenu";
 import { TopBar } from "./TopBar";
 import { PwaInstallInvitation } from "./PwaInstallInvitation";
+import { PanelResizeHandle, useDesktopPanelResize } from "./DesktopPanelResize";
 
 export function AppShell({ children, conversation = false }: { children: ReactNode; conversation?: boolean }) {
   const { t } = useTranslation();
@@ -21,6 +22,7 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
   const setUpdateBlocker = usePwaUpdateStore((state) => state.setBlocker);
   const desktopContextOpen = useAppStore((state) => state.desktopContextOpen);
   const desktopSidebarOpen = useAppStore((state) => state.desktopSidebarOpen);
+  const panels = useDesktopPanelResize(desktopSidebarOpen, desktopContextOpen);
 
   useEffect(() => {
     setUpdateBlocker("streaming", hasStreamingResponse);
@@ -34,7 +36,7 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
   }, [updateBlockers, updateDeferred, updateStatus]);
 
   return (
-    <div className={cx("app-shell", !desktopContextOpen && "is-context-collapsed", !desktopSidebarOpen && "is-sidebar-collapsed")}>
+    <div ref={panels.shellRef} style={panels.style} className={cx("app-shell", !desktopContextOpen && "is-context-collapsed", !desktopSidebarOpen && "is-sidebar-collapsed", panels.resizing && "is-panel-resizing")}>
       <a className="skip-link" href="#main-content">{t("nav.skipToContent")}</a>
       <LeftSidebar />
       <div className="app-center">
@@ -43,6 +45,8 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
         <main id="main-content" className={conversation ? "main-content main-content--conversation" : "main-content"}>{children}</main>
       </div>
       <ActivityPanel />
+      <PanelResizeHandle {...panels.handle("left")} />
+      <PanelResizeHandle {...panels.handle("right")} />
       <NotificationMenu />
       <BottomNav />
       <CommandPalette />

@@ -1,5 +1,9 @@
 export const navigationEs = {
   nav: {
+    resizeSidebar: "Ajustar ancho de la barra lateral",
+    resizeContext: "Ajustar ancho del panel de contexto",
+    panelWidth: "{{width}} píxeles",
+    resizePanelHelp: "Arrastra o usa las flechas para ajustar. Inicio y Fin llevan a los límites; doble clic o Enter restaura el ancho inicial.",
     hideSidebar: "Ocultar barra lateral",
     showSidebar: "Mostrar barra lateral",
     skipToContent: "Saltar al contenido",
@@ -121,6 +125,10 @@ export const navigationEs = {
 
 export const navigationEn = {
   nav: {
+    resizeSidebar: "Resize sidebar",
+    resizeContext: "Resize context panel",
+    panelWidth: "{{width}} pixels",
+    resizePanelHelp: "Drag or use the arrow keys to resize. Home and End reach the limits; double-click or Enter restores the default width.",
     hideSidebar: "Hide sidebar",
     showSidebar: "Show sidebar",
     skipToContent: "Skip to content",
@@ -242,6 +250,10 @@ export const navigationEn = {
 
 export const navigationFr = {
   nav: {
+    resizeSidebar: "Redimensionner la barre latérale",
+    resizeContext: "Redimensionner le panneau de contexte",
+    panelWidth: "{{width}} pixels",
+    resizePanelHelp: "Faites glisser ou utilisez les flèches. Début et Fin atteignent les limites ; un double-clic ou Entrée rétablit la largeur initiale.",
     hideSidebar: "Masquer la barre latérale",
     showSidebar: "Afficher la barre latérale",
     skipToContent: "Aller au contenu",
@@ -363,6 +375,10 @@ export const navigationFr = {
 
 export const navigationDe = {
   nav: {
+    resizeSidebar: "Seitenleiste verbreitern oder verkleinern",
+    resizeContext: "Breite des Kontextbereichs ändern",
+    panelWidth: "{{width}} Pixel",
+    resizePanelHelp: "Ziehen oder Pfeiltasten verwenden. Pos1 und Ende erreichen die Grenzen; Doppelklick oder Eingabetaste stellt die Standardbreite wieder her.",
     hideSidebar: "Seitenleiste ausblenden",
     showSidebar: "Seitenleiste anzeigen",
     skipToContent: "Zum Inhalt springen",
@@ -484,6 +500,10 @@ export const navigationDe = {
 
 export const navigationPt = {
   nav: {
+    resizeSidebar: "Ajustar largura da barra lateral",
+    resizeContext: "Ajustar largura do painel de contexto",
+    panelWidth: "{{width}} pixels",
+    resizePanelHelp: "Arraste ou use as setas para ajustar. Início e Fim atingem os limites; clique duplo ou Enter restaura a largura inicial.",
     hideSidebar: "Ocultar barra lateral",
     showSidebar: "Mostrar barra lateral",
     skipToContent: "Pular para o conteúdo",

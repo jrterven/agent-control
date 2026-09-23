@@ -92,7 +92,14 @@ button { color: inherit; }
 .skip-link:focus { top: 12px; }
 .eyebrow { display: block; color: var(--accent); font-size: 11px; font-weight: 780; letter-spacing: .12em; text-transform: uppercase; }
 
-.app-shell { height: 100dvh; display: grid; grid-template-columns: 282px minmax(0, 1fr) 320px; overflow: hidden; background: var(--bg); transition: grid-template-columns 180ms ease; }
+.app-shell { position: relative; height: 100dvh; display: grid; grid-template-columns: var(--sidebar-width, 282px) minmax(0, 1fr) var(--context-width, 320px); overflow: hidden; background: var(--bg); }
+.panel-resize-handle { position: absolute; z-index: 51; top: 0; bottom: 0; width: 10px; cursor: col-resize; touch-action: none; outline: none; }
+.panel-resize-handle--left { left: calc(var(--sidebar-width) - 5px); }
+.panel-resize-handle--right { right: calc(var(--context-width) - 5px); }
+.panel-resize-handle::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; background: transparent; transition: background 120ms ease; }
+.panel-resize-handle:hover::after, .panel-resize-handle:focus-visible::after, .is-panel-resizing .panel-resize-handle::after { background: var(--accent); }
+.panel-resize-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.is-panel-resizing, .is-panel-resizing * { cursor: col-resize !important; user-select: none !important; }
 .app-center { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .main-content { min-height: 0; flex: 1; overflow: auto; background: var(--bg); }
 .main-content--conversation { overflow: hidden; }
@@ -315,11 +322,19 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .scrim { position: fixed; z-index: 44; inset: 0; display: none; border: 0; background: rgb(0 0 0 / .58); }
 
 @media (min-width: 1200px) {
-  .app-shell.is-context-collapsed { grid-template-columns: 282px minmax(0, 1fr) 0; }
-  .app-shell.is-sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr) 320px; }
+  .app-center { container: chat-column / inline-size; }
+  .app-shell.is-context-collapsed { grid-template-columns: var(--sidebar-width, 282px) minmax(0, 1fr) 0; }
+  .app-shell.is-sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr) var(--context-width, 320px); }
   .app-shell.is-sidebar-collapsed.is-context-collapsed { grid-template-columns: 0 minmax(0, 1fr) 0; }
   .app-shell.is-context-collapsed > .activity-panel { visibility: hidden; overflow: hidden; border-left: 0; opacity: 0; pointer-events: none; }
   .app-shell.is-context-collapsed > .notification-menu { right: 18px; }
+  .app-shell:not(.is-context-collapsed) > .notification-menu { right: calc(var(--context-width, 320px) + 20px); }
+}
+
+@container chat-column (max-width: 600px) {
+  .top-bar { height: 112px; flex-shrink: 0; padding-inline: 14px; grid-template-columns: 44px minmax(0, 1fr) 44px 44px; grid-template-rows: 62px 50px; gap: 0 8px; }
+  .workspace-switcher-wrap { grid-column: 1 / -1; grid-row: 2; max-width: none; }
+  .workspace-switcher { justify-content: space-between; min-height: 40px; }
 }
 
 @media (min-width: 780px) {
@@ -982,6 +997,7 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .login-card footer svg { flex: 0 0 auto; color: var(--success); }
 
 @media (max-width: 1199px) {
+  .panel-resize-handle { display: none; }
   .app-shell { grid-template-columns: 260px minmax(0, 1fr); }
   .activity-panel { position: fixed; top: 0; right: 0; width: min(360px, 92vw); transform: translateX(102%); box-shadow: var(--shadow); transition: transform 180ms ease; }
   .activity-panel:not(.is-open) { visibility: hidden; pointer-events: none; }
