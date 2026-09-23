@@ -18,7 +18,7 @@ vi.mock("@tanstack/react-router", () => ({
   Link: ({ to, children, onClick, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { to: string }) => <a href={to} {...props} onClick={(event) => { event.preventDefault(); onClick?.(event); }}>{children}</a>,
 }));
 
-const newSession: SessionSummary = { ...sessions[0], id: "session-new", title: "Nueva conversación", preview: "" };
+const newSession: SessionSummary = { ...sessions[0], id: "session-new", workspaceId: undefined, title: "Nueva conversación", preview: "" };
 
 beforeEach(() => {
   vi.mocked(window.matchMedia).mockImplementation((query) => ({
@@ -108,10 +108,13 @@ describe("new chat navigation", () => {
     await act(async () => { await createChatForCurrentContext(); });
 
     await waitFor(() => expect(navigation.navigate).toHaveBeenCalledWith({ to: "/chats" }));
-    expect(useAppStore.getState()).toMatchObject({ selectedSessionId: newSession.id, csrfToken: "fresh-csrf", authGeneration: generation });
+    expect(useAppStore.getState()).toMatchObject({ selectedSessionId: newSession.id, selectedWorkspaceId: "", csrfToken: "fresh-csrf", authGeneration: generation });
     expect(useAppStore.getState().sessions.filter((session) => session.id === newSession.id)).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(["/api/v1/sessions", "/api/v1/auth/me", "/api/v1/sessions"]);
+    for (const index of [0, 2]) {
+      expect(JSON.parse(fetchMock.mock.calls[index][1].body)).not.toHaveProperty("workspaceId");
+    }
   });
 
   it("discards a completed chat after signing out and back in as the same owner", async () => {
@@ -135,7 +138,7 @@ describe("new chat navigation", () => {
     expect(useAppStore.getState().selectedSessionId).toBe("");
   });
 
-  it.each(["/computers", "/settings"])("opens the mode selector from %s without creating a session", async (pathname) => {
+  it.each(["/computers", "/settings", "/chats"])("opens the mode selector in No workspace from %s without creating a session", async (pathname) => {
     navigation.pathname = pathname;
     const user = userEvent.setup();
     const create = vi.spyOn(api, "createSession");
@@ -145,10 +148,10 @@ describe("new chat navigation", () => {
     expect(navigation.navigate).toHaveBeenCalledWith({ to: "/chats" });
     expect(useAppStore.getState()).toMatchObject({
       preparingChat: true, selectedSessionId: "", selectedProfileId: "profile-newton",
-      selectedGatewayId: "gateway-home", selectedWorkspaceId: "workspace-papers", leftDrawerOpen: false,
+      selectedGatewayId: "gateway-home", selectedWorkspaceId: "", leftDrawerOpen: false,
     });
     useAppStore.getState().hydrateBootstrap({ gateways, profiles, workspaces, sessions, automations: [] });
-    expect(useAppStore.getState().selectedSessionId).toBe("");
+    expect(useAppStore.getState()).toMatchObject({ selectedSessionId: "", selectedWorkspaceId: "", preparingChat: true });
   });
 
   it("preserves preparation after a failed first-send creation", async () => {

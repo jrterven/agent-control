@@ -256,7 +256,7 @@ export const useAppStore = create<AppState>((set) => ({
     };
   }),
   setLeftDrawerOpen: (leftDrawerOpen) => set({ leftDrawerOpen }),
-  prepareChat: () => set({ preparingChat: true, selectedSessionId: "", leftDrawerOpen: false }),
+  prepareChat: () => set({ preparingChat: true, selectedSessionId: "", selectedWorkspaceId: "", leftDrawerOpen: false }),
   setDesktopSidebarOpen: (desktopSidebarOpen) => {
     saveDesktopSidebarOpen(desktopSidebarOpen);
     set({ desktopSidebarOpen, gatewayMenuOpen: false });
