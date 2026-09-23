@@ -1230,6 +1230,7 @@ class ProfileService:
         )
         managed_profiles.update(pending_managed_profiles)
         scoped_capabilities: dict[str, Any] = {}
+        scoped_checked_at: dict[str, datetime] = {}
         for profile in profiles:
             try:
                 scoped_connection = await self.gateway_service.connection(
@@ -1248,6 +1249,7 @@ class ProfileService:
                     ),
                     managed_by_control=profile.name in managed_profiles,
                 )
+                scoped_checked_at[profile.name] = utc_now()
             except Exception:
                 # Discovery remains useful, but an unverified profile must not
                 # inherit capabilities from another route or from mock fallback.
@@ -1292,7 +1294,7 @@ class ProfileService:
             row.capabilities = capability.to_dict() if capability is not None else {}
             row.last_seen_at = now
             if capability is not None:
-                row.capabilities_checked_at = now
+                row.capabilities_checked_at = scoped_checked_at[profile.name]
             else:
                 row.capabilities_checked_at = None
 

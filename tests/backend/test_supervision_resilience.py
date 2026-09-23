@@ -18,10 +18,92 @@ from hermes_client import (
 )
 from hermes_control_api.models import Automation, Gateway, ProfileRef, User, utc_now
 from hermes_control_api.realtime import persist_normalized_event
-from hermes_control_api.services import GatewayService, require_capability
-from hermes_control_api.supervision import SupervisorHealth, supervise_periodic
+from hermes_control_api.services import GatewayService, ProfileService, require_capability
+from hermes_control_api.supervision import IndependentRefresh, SupervisorHealth, supervise_periodic
 
 from .conftest import mutation_headers
+
+
+@pytest.mark.asyncio
+async def test_stalled_gateway_does_not_block_repeated_healthy_renewals():
+    blocked = asyncio.Event()
+    calls = {"slow": 0, "healthy": 0}
+    cancelled = []
+
+    async def refresh(gateway):
+        calls[gateway] += 1
+        if gateway == "slow":
+            try:
+                await blocked.wait()
+            finally:
+                cancelled.append(gateway)
+
+    refresher = IndependentRefresh(refresh, wait_seconds=0.01)
+    try:
+        for count in range(1, 4):
+            await asyncio.wait_for(refresher.run(["slow", "healthy"]), timeout=1)
+            assert calls == {"slow": 1, "healthy": count}
+            assert not cancelled
+        # Disabled/deleted gateways must not leave a probe running or restart it.
+        await refresher.run(["healthy"])
+        assert cancelled == ["slow"]
+        assert calls == {"slow": 1, "healthy": 4}
+    finally:
+        await refresher.close()
+    assert not refresher.tasks
+
+
+@pytest.mark.asyncio
+async def test_deferred_probe_database_failure_is_observed_and_retry_recovers():
+    finish = asyncio.Event()
+    calls = 0
+
+    async def refresh(_gateway):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await finish.wait()
+            raise OperationalError("SELECT redacted", {}, sqlite3.OperationalError("unavailable"))
+
+    refresher = IndependentRefresh(refresh, wait_seconds=0.01)
+    try:
+        await refresher.run(["gateway"])
+        finish.set()
+        await asyncio.sleep(0)
+        with pytest.raises(OperationalError):
+            await refresher.run(["gateway"])
+        await refresher.run(["gateway"])
+        assert calls == 3
+    finally:
+        await refresher.close()
+
+
+@pytest.mark.asyncio
+async def test_capability_refresh_shutdown_cancels_outstanding_reads():
+    cancelled = asyncio.Event()
+
+    async def refresh(_gateway):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    refresher = IndependentRefresh(refresh, wait_seconds=0.01)
+    await refresher.run(["gateway"])
+    await refresher.close()
+    assert cancelled.is_set()
+    assert not refresher.tasks
+
+
+def test_capability_refresh_surfaces_database_failure(authenticated, app, monkeypatch):
+    client, _csrf = authenticated
+
+    async def unavailable(*_args, **_kwargs):
+        raise OperationalError("SELECT redacted", {}, sqlite3.OperationalError("unavailable"))
+
+    monkeypatch.setattr(ProfileService, "sync", unavailable)
+    with pytest.raises(OperationalError):
+        client.portal.call(app.state.warm_capabilities_once)
 
 
 @pytest.mark.asyncio

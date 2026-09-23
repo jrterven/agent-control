@@ -91,6 +91,56 @@ class SupervisorHealth:
         }
 
 
+class IndependentRefresh:
+    """Refresh independent routes without waiting for a stalled neighbour.
+
+    Keep at most one operation per key. A slow operation survives a pass's
+    wait budget, so subsequent passes can renew healthy keys without either
+    cancelling the slow read or piling up duplicate requests behind it.
+    """
+
+    def __init__(self, operation: Callable[[str], Awaitable[None]], *, wait_seconds: float):
+        self.operation = operation
+        self.wait_seconds = wait_seconds
+        self.tasks: dict[str, asyncio.Task[None]] = {}
+        self.lock = asyncio.Lock()
+
+    def _completed(self) -> list[Exception]:
+        errors = []
+        for key, task in list(self.tasks.items()):
+            if not task.done():
+                continue
+            del self.tasks[key]
+            if not task.cancelled() and (error := task.exception()) is not None:
+                errors.append(error)
+        return errors
+
+    async def run(self, keys: list[str]) -> None:
+        async with self.lock:
+            removed = [self.tasks.pop(key) for key in list(self.tasks) if key not in keys]
+            for task in removed:
+                task.cancel()
+            if removed:
+                await asyncio.gather(*removed, return_exceptions=True)
+            errors = self._completed()
+            for key in keys:
+                if key not in self.tasks:
+                    self.tasks[key] = asyncio.create_task(self.operation(key))
+            if self.tasks:
+                await asyncio.wait(self.tasks.values(), timeout=self.wait_seconds)
+            errors.extend(self._completed())
+            if errors:
+                # Observe every result before surfacing a failure to the
+                # supervisor; no task exception is abandoned or logged raw.
+                raise errors[0]
+
+    async def close(self) -> None:
+        for task in self.tasks.values():
+            task.cancel()
+        await asyncio.gather(*self.tasks.values(), return_exceptions=True)
+        self.tasks.clear()
+
+
 async def supervise_periodic(
     operation: Callable[[], Awaitable[None]],
     *,

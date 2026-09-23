@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import timedelta
 
 import pytest
 
@@ -14,7 +15,7 @@ from hermes_client import (
 from hermes_control_api.config import Settings
 from hermes_control_api.database import Base, build_engine, build_session_factory
 from hermes_control_api.eventing import EventHub
-from hermes_control_api.models import Gateway, ProfileRef
+from hermes_control_api.models import Gateway, ProfileRef, utc_now
 from hermes_control_api.providers import FailoverProvider, authoritative_provider_read
 from hermes_control_api.security import SecretVault
 from hermes_control_api.services import AppServices, ProfileService
@@ -164,6 +165,44 @@ async def test_profile_sync_respects_gateway_local_default_display_name():
                 ("profiles", "default"),
                 ("capabilities", "default"),
             ]
+    finally:
+        await pool.close()
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_capability_verification_is_dated_when_probe_finishes(monkeypatch):
+    # A slow discovery/probe must not publish an already expired permission
+    # proof using the time at which profile discovery began.
+    from hermes_control_api import services as service_module
+
+    started = utc_now()
+    clock = [started]
+
+    class SlowProbe(GatewayAliasedDefaultProvider):
+        async def capabilities(self):
+            clock[0] = started + timedelta(seconds=70)
+            return await super().capabilities()
+
+    monkeypatch.setattr(service_module, "utc_now", lambda: clock[0])
+    settings = Settings(environment="test", database_url="sqlite://", provider_mode="real",
+                        vault_key_b64=base64.urlsafe_b64encode(b"t" * 32).decode("ascii"))
+    engine = build_engine(settings)
+    Base.metadata.create_all(engine)
+    pool = ProviderPool(lambda connection: SlowProbe(connection, []))
+    services = AppServices(settings=settings, vault=SecretVault(settings.materialize_vault_key()),
+                           event_hub=EventHub(), provider_pool=pool, session_router=HermesSessionRouter(pool))
+    try:
+        with build_session_factory(engine)() as db:
+            gateway = Gateway(name="Slow probe", rest_url="http://127.0.0.1:19119",
+                              ws_url="ws://127.0.0.1:19119/api/ws", connection_mode="tunnel", enabled=True)
+            db.add(gateway)
+            db.commit()
+            rows = await ProfileService(services).sync(db, gateway.id)
+            assert rows[0].capabilities_checked_at == clock[0]
+            assert service_module.fresh_profile_capabilities(rows[0], now=clock[0], ttl_seconds=60)
+            assert not service_module.fresh_profile_capabilities(
+                rows[0], now=clock[0] + timedelta(seconds=61), ttl_seconds=60)
     finally:
         await pool.close()
         engine.dispose()

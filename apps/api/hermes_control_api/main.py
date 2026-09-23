@@ -51,7 +51,7 @@ from .providers import build_provider_pool
 from .realtime import persist_normalized_event
 from .prompt_reconciliation import PromptHistoryReconciler
 from .security import SecretVault
-from .supervision import SupervisorHealth, supervise_periodic
+from .supervision import IndependentRefresh, SupervisorHealth, supervise_periodic
 from .semantic_search import SemanticSearch
 from .services import (
     AppServices,
@@ -301,13 +301,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     capability_refresh_interval = min(
         settings.capability_refresh_seconds,
-        max(2.5, settings.capability_ttl_seconds / 2),
+        settings.capability_ttl_seconds / 4,
     )
     capability_refresh_health = SupervisorHealth(
         stale_after_seconds=max(
             settings.capability_ttl_seconds,
             capability_refresh_interval * 3,
         )
+    )
+
+    async def refresh_gateway_capabilities(gateway_id: str) -> None:
+        try:
+            with session_factory() as db:
+                await ProfileService(service_container).sync(db, gateway_id)
+        except asyncio.CancelledError:
+            raise
+        except SQLAlchemyError:
+            # Local storage failures must remain visible in supervisor health.
+            raise
+        except Exception:
+            # A sleeping or unavailable user computer is not a cloud failure.
+            pass
+
+    capability_refresh = IndependentRefresh(
+        refresh_gateway_capabilities, wait_seconds=settings.capability_ttl_seconds / 4,
     )
 
     async def warm_capabilities_once() -> None:
@@ -323,20 +340,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             gateway_ids = list(
                 db.scalars(select(Gateway.id).where(Gateway.enabled.is_(True))).all()
             )
-        for gateway_id in gateway_ids:
-            try:
-                with session_factory() as db:
-                    await ProfileService(service_container).sync(db, gateway_id)
-            except asyncio.CancelledError:
-                raise
-            except SQLAlchemyError:
-                # A local database error invalidates the supervisor pass and
-                # must remain visible through its health state.
-                raise
-            except Exception:
-                # One unavailable gateway must not stop refreshes for the
-                # other independently configured gateways.
-                continue
+        # Waiting plus the periodic sleep consume at most half the proof TTL.
+        # A slow gateway retains its own in-flight read while healthy gateways
+        # are renewed on subsequent passes, independently of that read.
+        await capability_refresh.run(gateway_ids)
 
     async def supervise_capabilities() -> None:
         await supervise_periodic(
@@ -450,6 +457,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ):
                 with contextlib.suppress(asyncio.CancelledError):
                     await watcher
+            await capability_refresh.close()
             await push_notification_service.close()
             await prompt_reconciler.close()
             service_container.temporary_chats.dispose()
