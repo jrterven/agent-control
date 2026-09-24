@@ -300,7 +300,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken, prepar
       }
     };
     const client = new OpenAILiveClient({
-      onMicrophone: speaker.microphone,
+      onMicrophone: (stream) => { if (current() && callRef.current === call) speaker.microphone(stream); },
       initiallyPaused: pausedRef.current,
       cameraSession: cameraSessionRef.current,
       negotiate: (sdp, signal) => api.createLiveSession({ sdp, sessionId, profileId, ...(focusMessageId ? { focusMessageId, purpose } : {}) }, csrfToken, signal),
@@ -372,6 +372,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken, prepar
     window.addEventListener("pagehide", pagehide);
     window.addEventListener("offline", offline);
     return () => {
+      speaker.stop();
       mountedRef.current = false;
       epochRef.current += 1;
       intentRef.current = false;
