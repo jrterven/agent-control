@@ -5,6 +5,8 @@ import { liveConversationSeparator, liveDelegationPrefix } from "../lib/liveDele
 import { OpenAILiveClient, liveSupported, type LiveIssue, type LivePhase } from "../lib/openaiLiveClient";
 import { activeResponseId, useAppStore } from "../store/appStore";
 import { useLiveTranscripts } from "./useLiveTranscripts";
+import { useSpeakerRecognition } from "./useSpeakerRecognition";
+import { suggestsVoiceEnrollment } from "../lib/speakerRecognition";
 import type { VisionIntentResult, VisionObservation } from "@hermes-control/shared-types";
 import type { ChatMessage } from "../types";
 
@@ -112,6 +114,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken, prepar
   visualRequestRef.current = prepareVisualRequest;
   const [phase, setPhase] = useState<LivePhase>("idle");
   const [issue, setIssue] = useState<LiveIssue | null>(null);
+  const [enrollmentProposal, setEnrollmentProposal] = useState(false);
   const [active, setActive] = useState(false);
   const [captureActive, setCaptureActive] = useState(false);
   const [working, setWorking] = useState(false);
@@ -133,6 +136,13 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken, prepar
   const intentRef = useRef(false);
   const pausedRef = useRef(false);
   const callRef = useRef<Call | undefined>(undefined);
+  const speakerEventRef = useRef("");
+  const speaker = useSpeakerRecognition("live", sessionId, (next) => {
+    const key = next.job?.id ?? next.phase;
+    if (speakerEventRef.current === key) return;
+    speakerEventRef.current = key;
+    callRef.current?.client.appendSpeakerObservation(next.job?.result?.state ?? next.phase, next.job?.result?.name ?? null, next.observedAt);
+  });
   const closingRef = useRef<Promise<void> | undefined>(undefined);
   const taskRef = useRef<AgentTask | undefined>(undefined);
   const resultRef = useRef<ChatMessage | null>(null);
@@ -290,6 +300,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken, prepar
       }
     };
     const client = new OpenAILiveClient({
+      onMicrophone: speaker.microphone,
       initiallyPaused: pausedRef.current,
       cameraSession: cameraSessionRef.current,
       negotiate: (sdp, signal) => api.createLiveSession({ sdp, sessionId, profileId, ...(focusMessageId ? { focusMessageId, purpose } : {}) }, csrfToken, signal),
@@ -324,7 +335,10 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken, prepar
         }
       },
       onIssue: (next) => { if (current() && callRef.current === call) setIssue(next); },
-      onTranscript: (fragments) => { if (current() && callRef.current === call) recorder.append(fragments); },
+      onTranscript: (fragments) => { if (current() && callRef.current === call) {
+        recorder.append(fragments);
+        if (fragments.some((part) => part.role === "user" && suggestsVoiceEnrollment(part.text))) setEnrollmentProposal(true);
+      } },
       onPlaybackBlocked: (blocked) => { if (current() && callRef.current === call) setPlaybackBlocked(blocked); },
       onDelegation: async (context, _signal, progress, requestText) => (await runRequest(context, progress, requestText)) ?? "",
       onCameraRequest: (context, signal, progress, requestText) => runRequest(context, progress, requestText, undefined, true, signal),
@@ -338,6 +352,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken, prepar
 
   useEffect(() => {
     mountedRef.current = true;
+    setEnrollmentProposal(false);
     intentRef.current = false;
     pausedRef.current = false;
     setActive(false);
@@ -418,7 +433,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken, prepar
     phase, issue, working, waitingApproval, playbackBlocked, supported,
     available: enabled && supported, active, captureActive, pendingResult,
     resumeAvailable: !active && resumable, explainingMessageId,
-    transcripts, start, explain,
+    transcripts, start, explain, speaker: speaker.state, enrollmentProposal,
     setCameraSession: (session: string | null) => {
       cameraSessionRef.current = session;
       callRef.current?.client.setCameraSession(session);

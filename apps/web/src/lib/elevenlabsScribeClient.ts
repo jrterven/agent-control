@@ -5,8 +5,12 @@
 // while preserving a small, auditable lazy chunk.
 import { setScribeMicrophoneSetup } from "@elevenlabs/scribe-registry";
 import { webScribeMicrophoneSetup } from "@elevenlabs/scribe-web-microphone";
+import { copyScribeAudio } from "./scribeMicrophoneObserver";
 
-setScribeMicrophoneSetup(webScribeMicrophoneSetup);
+setScribeMicrophoneSetup((config, onAudioData) => webScribeMicrophoneSetup(config, (pcm) => {
+  onAudioData(pcm);
+  copyScribeAudio(config, pcm);
+}));
 
 export { CommitStrategy, RealtimeEvents, Scribe } from "@elevenlabs/scribe-core";
 export type { RealtimeConnection } from "@elevenlabs/scribe-core";

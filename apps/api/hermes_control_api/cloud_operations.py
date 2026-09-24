@@ -106,6 +106,8 @@ async def drain(request: Request):
     state.cloud_draining = True
     try:
         registry = state.connector_registry
+        if state.speaker_service.tasks:
+            raise HTTPException(409, "Speaker recognition jobs are still in flight")
         if state.services.temporary_chats.entries:
             raise HTTPException(409, "Temporary conversations are still open")
         if getattr(state, "cloud_mutations_inflight", 0) or any(link.pending for link in registry.links.values()):

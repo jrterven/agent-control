@@ -14,6 +14,7 @@ import { conversationTimeline } from "../lib/chatTimeline";
 import { liveDelegationConversation } from "../lib/liveDelegation";
 import { activeResponseId, useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
+import { SpeakerRecognitionStatus } from "./SpeakerRecognitionStatus";
 import { useCameraVision, type CameraVisionState } from "../hooks/useCameraVision";
 import { CameraPreview, CameraVision } from "./CameraVision";
 import { VisionObservationCard, visionInteractionCopy } from "./VisionObservationCard";
@@ -867,6 +868,7 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
             if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void onSubmit(); }
           }}
         />
+        <SpeakerRecognitionStatus state={dictation.active ? dictation.speaker : live.speaker} proposal={dictation.enrollmentProposal || live.enrollmentProposal} />
         {dictation.active || (dictation.issue && !live.active) ? <div className={`dictation-state live-voice-state${dictation.issue ? " dictation-state--error" : ""}`} data-live-phase={dictation.phase}>
           <div className="live-voice-state__row">
           <span className="live-voice-state__status" role={dictation.issue ? "alert" : "status"} aria-live={dictation.issue ? "assertive" : "polite"}>{dictation.issue ? t(`dictation.${dictation.issue}`) : dictation.phase === "connecting" ? t("dictation.connecting") : dictation.phase === "stopping" ? t("dictation.stopping") : dictation.phase === "paused" ? t("dictation.paused") : t("dictation.listening")}</span>

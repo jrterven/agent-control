@@ -43,6 +43,7 @@ from .integrations import (
     TranscriptionTokenLimiter,
 )
 from .middleware import BodySizeLimitMiddleware, IdempotencyMiddleware, SecurityBoundaryMiddleware
+from .pyannote import SpeakerService
 from .models import Automation, Gateway
 from .notifications import PushNotificationService
 from .openai_live import LiveSessionLimiter, OpenAILiveClient
@@ -78,6 +79,8 @@ _LOG_SEARCH = re.compile(r"([?&]q=)[^&\s\"']+")
 
 
 def _redact_log(value: str) -> str:
+    # Signed media URLs carry upload credentials in their query string.
+    value = re.sub(r"(https://[^\s\"?]+)\?[^\s\"]+", r"\1?[REDACTED]", value)
     return _LOG_SEARCH.sub(r"\1[REDACTED]", _LOG_SECRET.sub("[REDACTED]", value))
 
 
@@ -437,10 +440,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         mail_watcher = asyncio.create_task(app.state.mail_service.reconcile(app), name="mail-mcp-reconcile")
         temporary_watcher = asyncio.create_task(service_container.temporary_chats.reap(service_container), name="temporary-chat-expiry")
         app.state.semantic_search.initialize()
+        app.state.speaker_service.initialize()
         semantic_watcher = asyncio.create_task(app.state.semantic_search.run(), name="semantic-search-index")
         try:
             yield
         finally:
+            await app.state.speaker_service.close()
             automation_watcher.cancel()
             capability_watcher.cancel()
             email_reference_cache_watcher.cancel()
@@ -484,6 +489,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.elevenlabs_scribe_client = ElevenLabsScribeClient()
     app.state.elevenlabs_speech_client = ElevenLabsSpeechClient()
     app.state.openai_live_client = OpenAILiveClient()
+    app.state.speaker_service = SpeakerService(session_factory, vault)
     app.state.semantic_search = SemanticSearch(service_container)
     app.state.semantic_search.paused = lambda: app.state.cloud_draining
     app.state.vision_service = VisionService(vault)
@@ -612,7 +618,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         camera_input = (
             request.url.path.startswith("/api/v1/sessions/")
             and "/vision/" in request.url.path
-        ) or request.url.path.startswith(("/api/v1/vision/", "/api/v1/mail/"))
+        ) or request.url.path.startswith(("/api/v1/vision/", "/api/v1/mail/", "/api/v1/speaker-recognition/", "/api/v1/integrations/pyannote"))
         return JSONResponse(
             status_code=422,
             content={

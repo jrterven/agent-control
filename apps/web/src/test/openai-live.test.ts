@@ -112,6 +112,27 @@ describe("GPT-Live WebRTC", () => {
     expect(CueContext.latest.createOscillator).toHaveBeenCalledOnce();
   });
 
+  it("tees the same microphone and sends voice observations only as quiet, non-authorizing context", async () => {
+    const options = setup(); client.dispose();
+    const observe = vi.fn();
+    client = new OpenAILiveClient({ ...options, onMicrophone: observe });
+    expect(client.appendSpeakerObservation("recognized", "Juan", Date.now())).toBe(false);
+    await client.start();
+    Peer.latest.channel.emit({ type: "session.started" });
+    const stream = await getUserMedia.mock.results[0].value;
+    expect(observe).toHaveBeenLastCalledWith(stream);
+    client.appendSpeakerObservation("recognized", "Juan", Date.now());
+    const event = JSON.parse(Peer.latest.channel.send.mock.calls.at(-1)![0]);
+    expect(event.type).toBe("session.thinking.append");
+    expect(event.content).toContain("not authentication or permission");
+    expect(event.content).toContain('"expiresAfterSeconds":30');
+    expect(options.onDelegation).not.toHaveBeenCalled();
+    client.setPaused(true); expect(observe).toHaveBeenLastCalledWith(null);
+    client.setPaused(false); expect(observe).toHaveBeenLastCalledWith(stream);
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    client.stop(); expect(observe).toHaveBeenLastCalledWith(null);
+  });
+
   it("starts a fresh explanation only after session.started with no previous delegation id", async () => {
     const options = setup();
     client.dispose();

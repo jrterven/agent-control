@@ -1289,3 +1289,19 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
   .image-viewer__actions { justify-content: flex-end; }
   .image-viewer__actions a { flex: 1; }
 }
+
+/* Optional speaker pilot; compact controls also fit the mobile settings page. */
+.speaker-settings { display: grid; gap: 14px; scroll-margin-top: 80px; }
+.speaker-settings h3, .speaker-settings h4, .speaker-settings p { margin: 0; }
+.speaker-settings small, .speaker-observation small { color: var(--muted); }
+.speaker-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.speaker-toggle { display: flex; align-items: flex-start; gap: 10px; }
+.speaker-toggle input { margin-top: 4px; flex: 0 0 auto; }
+.speaker-person, .speaker-recording { padding: 14px; border: 1px solid var(--border); border-radius: 12px; display: grid; gap: 10px; }
+.speaker-settings form { display: grid; gap: 12px; }
+.speaker-observation { display: grid; gap: 6px; padding: 8px 12px; font-size: 13px; }
+.speaker-observation ul { padding-left: 18px; }
+.speaker-table { overflow-x: auto; }
+.speaker-table table { width: 100%; text-align: left; border-collapse: collapse; font-size: 13px; }
+.speaker-table th, .speaker-table td { padding: 8px; border-bottom: 1px solid var(--border); }
+.speaker-settings input:not([type=checkbox]), .speaker-settings select, .speaker-observation select { max-width: 100%; min-height: 36px; }

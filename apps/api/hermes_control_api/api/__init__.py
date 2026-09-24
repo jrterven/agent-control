@@ -6,6 +6,7 @@ from .live_routes import router as live_router
 from .live_transcript_routes import router as live_transcript_router
 from .routes import router as core_router
 from .semantic_routes import router as semantic_router
+from .speaker_routes import router as speaker_router
 
 
 router = APIRouter()
@@ -15,5 +16,6 @@ router.include_router(integration_router)
 router.include_router(live_router)
 router.include_router(live_transcript_router)
 router.include_router(semantic_router)
+router.include_router(speaker_router)
 
 __all__ = ["router"]

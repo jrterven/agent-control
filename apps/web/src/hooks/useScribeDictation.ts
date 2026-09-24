@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RealtimeConnection } from "../lib/elevenlabsScribeClient";
 import { ApiError, api } from "../lib/api";
+import { useSpeakerRecognition } from "./useSpeakerRecognition";
+import { observeScribeMicrophone } from "../lib/scribeMicrophoneObserver";
+import { pcmFromBase64, suggestsVoiceEnrollment } from "../lib/speakerRecognition";
 
 export type DictationIssue = "permissionDenied" | "quota" | "network" | "auth" | "unavailable" | "tooLong" | "unconfirmed" | "generic";
 export type DictationPhase = "idle" | "connecting" | "listening" | "transcribing" | "paused" | "stopping" | "error";
@@ -77,11 +80,16 @@ export function useScribeDictation({
   onCommitted: (text: string) => void;
 }) {
   const online = useBrowserOnline();
+  const speaker = useSpeakerRecognition("dictation", sessionId);
+  const speakerRef = useRef(speaker);
+  speakerRef.current = speaker;
+  const removeObserverRef = useRef<(() => void) | undefined>(undefined);
   const supported = browserSupportsScribe();
   const available = enabled && online && supported;
   const [phase, setPhase] = useState<DictationPhase>("idle");
   const [partial, setPartial] = useState("");
   const [issue, setIssue] = useState<DictationIssue | null>(null);
+  const [enrollmentProposal, setEnrollmentProposal] = useState(false);
   const connectionRef = useRef<RealtimeConnection | null>(null);
   const generationRef = useRef(0);
   const startingRef = useRef(false);
@@ -94,6 +102,7 @@ export function useScribeDictation({
   onCommittedRef.current = onCommitted;
 
   const release = useCallback((updateState = true) => {
+    speakerRef.current.stop(); removeObserverRef.current?.(); removeObserverRef.current = undefined;
     generationRef.current += 1;
     startingRef.current = false;
     stoppingRef.current = false;
@@ -113,6 +122,7 @@ export function useScribeDictation({
   }, []);
 
   const fail = useCallback((nextIssue: DictationIssue) => {
+    speakerRef.current.stop(); removeObserverRef.current?.(); removeObserverRef.current = undefined;
     generationRef.current += 1;
     startingRef.current = false;
     stoppingRef.current = false;
@@ -152,18 +162,21 @@ export function useScribeDictation({
       ]);
       if (generationRef.current !== generation || !startingRef.current) return;
       if (tokenView.modelId !== SCRIBE_MODEL) throw new Error("Unexpected transcription model");
+      const microphone = {
+        echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+        workletPaths: { scribeAudioProcessor: "/vendor/elevenlabs/scribeAudioProcessor.js" },
+      };
+      removeObserverRef.current = observeScribeMicrophone(microphone, (pcm) => {
+        if (generationRef.current === generation && readyRef.current && !pausedRef.current && !stoppingRef.current)
+          speakerRef.current.pcm(pcmFromBase64(pcm));
+      });
       const connection = sdk.Scribe.connect({
         token: tokenView.token,
         modelId: SCRIBE_MODEL,
         commitStrategy: sdk.CommitStrategy.VAD,
         includeLanguageDetection: true,
         ...(languageCode ? { languageCode } : {}),
-        microphone: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          workletPaths: { scribeAudioProcessor: "/vendor/elevenlabs/scribeAudioProcessor.js" },
-        },
+        microphone,
       });
       if (generationRef.current !== generation) {
         connection.close();
@@ -175,6 +188,7 @@ export function useScribeDictation({
       connection.on(sdk.RealtimeEvents.SESSION_STARTED, () => {
         if (current()) {
           readyRef.current = true;
+          if (!pausedRef.current && !stoppingRef.current) speakerRef.current.start();
           if (!stoppingRef.current) setPhase(pausedRef.current ? "paused" : "listening");
         }
       });
@@ -196,7 +210,10 @@ export function useScribeDictation({
         }
         partialRef.current = "";
         setPartial("");
-        if (event.text.trim()) onCommittedRef.current(event.text);
+        if (event.text.trim()) {
+          onCommittedRef.current(event.text);
+          if (suggestsVoiceEnrollment(event.text)) setEnrollmentProposal(true);
+        }
         if (stoppingRef.current) {
           release(true);
         } else {
@@ -235,6 +252,7 @@ export function useScribeDictation({
   }, [available, csrfToken, fail, languageCode, sessionId]);
 
   const stop = useCallback(() => {
+    speakerRef.current.stop();
     if (stoppingRef.current) return;
     setIssue(null);
     const connection = connectionRef.current;
@@ -259,6 +277,7 @@ export function useScribeDictation({
     try { connection.mute(); }
     catch { fail("network"); return; }
     pausedRef.current = true;
+    speakerRef.current.stop();
     setPhase("paused");
     // Confirm speech already sent before the pause. Late hypotheses stay
     // provisional, and a late commit must not resume the microphone/UI.
@@ -273,6 +292,7 @@ export function useScribeDictation({
     try { connection.unmute(); }
     catch { fail("network"); return; }
     pausedRef.current = false;
+    speakerRef.current.start();
     setPhase("listening");
   }, [fail]);
 
@@ -280,6 +300,7 @@ export function useScribeDictation({
     // Session/profile changes and auth/offline transitions cannot carry an
     // active microphone or a single-use socket into the next context.
     release(true);
+    setEnrollmentProposal(false);
     return () => release(false);
   }, [available, release, sessionId]);
 
@@ -295,6 +316,8 @@ export function useScribeDictation({
   }, [release]);
 
   return {
+    speaker: speaker.state,
+    enrollmentProposal,
     available,
     phase,
     partial,

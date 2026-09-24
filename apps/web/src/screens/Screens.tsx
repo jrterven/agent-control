@@ -26,6 +26,7 @@ import { AdminConfigScreen } from "../components/AdminConfigScreen";
 import { ElevenLabsIntegration } from "../components/ElevenLabsIntegration";
 import { MailPlugins } from "../components/MailPlugins";
 import { VoiceSettings } from "../components/VoiceSettings";
+import { PyannoteSettings } from "../components/PyannoteSettings";
 import { VisionSettings } from "../components/VisionSettings";
 import i18n from "../i18n";
 import { useLanguagePreference } from "../hooks/useLanguagePreference";
@@ -1191,6 +1192,7 @@ export function SettingsScreen() {
       <VoiceSettings />
       <VisionSettings />
       <ElevenLabsIntegration />
+      <PyannoteSettings />
       <MailPlugins />
       <Panel id="privacy" className="settings-section privacy-settings" aria-labelledby="privacy-title">
         <header><ShieldCheck aria-hidden="true" /><div><strong id="privacy-title">{t("dictation.privacyTitle")}</strong><p>{t("dictation.privacyDescription")}</p></div></header>

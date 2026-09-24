@@ -20,6 +20,8 @@ from .security import constant_time_hash_matches
 
 
 def _request_body_limit(path: str, default: int, attachment_limit: int) -> int:
+    if path.startswith("/api/v1/speaker-recognition/captures/") and "/jobs/" in path:
+        return 960_128
     if path.startswith("/api/v1/sessions/") and path.rstrip("/").endswith("/vision/analyses"):
         # Two JPEG frames, at most 1 MiB decoded each, plus base64 and bounded text.
         return 3 * 1024 * 1024
@@ -149,6 +151,9 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             # Mail OAuth responses contain flow cookies/URLs, and MCP has a
             # dedicated send ledger. Neither belongs in the response cache.
             or request.url.path.startswith("/api/v1/mail/")
+            # Speaker jobs own their UUID receipts. Never cache raw audio,
+            # credentials, names, or biometric observations in the HTTP ledger.
+            or request.url.path.startswith(("/api/v1/speaker-recognition/", "/api/v1/integrations/pyannote"))
             # Camera requests use their own durable UUID receipts, storing encrypted
             # textual results only. Never persist the body or response in this ledger.
             or (normalized_path.startswith("/api/v1/sessions/") and "/vision/" in normalized_path)
