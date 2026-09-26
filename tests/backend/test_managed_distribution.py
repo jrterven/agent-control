@@ -229,12 +229,14 @@ def signed_bootstrap_fixture(tmp_path: Path, signing_key: Path, architecture: st
     root = runtime(tmp_path / "runtime", target)
     public_key = subprocess.run(["openssl", "pkey", "-in", str(signing_key), "-pubout"],
                                 check=True, capture_output=True).stdout
-    for package, module in (("agent_control_connector", "managed_manifest"), ("hermes_client", "compatibility")):
+    for package, modules in (("agent_control_connector", ("managed_manifest", "process_environment")),
+                             ("hermes_client", ("compatibility",))):
         destination = root / "connector" / package
         destination.mkdir()
         (destination / "__init__.py").write_text("")
         source = REPO / "packages" / ("connector" if package == "agent_control_connector" else "hermes-client")
-        shutil.copyfile(source / package / f"{module}.py", destination / f"{module}.py")
+        for module in modules:
+            shutil.copyfile(source / package / f"{module}.py", destination / f"{module}.py")
     # Replace only the external trust/platform inputs. The production verifier's
     # signature, inventory, size, permission and content checks stay unmodified.
     (root / "python/bin/python3").write_text(f"#!{sys.executable}\n"
