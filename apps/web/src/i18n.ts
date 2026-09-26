@@ -23,6 +23,7 @@ import { pwaInstallResources } from "./locales/pwaInstall";
 import { pluginResources } from "./locales/plugins";
 import { semanticSearchResources } from "./locales/semanticSearch";
 import { speakerRecognitionResources } from "./locales/speakerRecognition";
+import { connectorUpdateResources } from "./locales/connectorUpdates";
 
 export const SUPPORTED_LANGUAGES = ["en", "es", "fr", "de", "pt"] as const;
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
@@ -86,6 +87,7 @@ const i18nInitialization = i18n.use(initReactI18next).init({
       asResource(pluginResources[language]),
       asResource(semanticSearchResources[language]),
       asResource(speakerRecognitionResources[language]),
+      asResource(connectorUpdateResources[language]),
     ) }]),
   ),
 });

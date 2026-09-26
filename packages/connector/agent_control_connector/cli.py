@@ -253,6 +253,9 @@ def check_credentials(directory: Path) -> None:
 
 def main(argv=None):
     values = list(sys.argv[1:] if argv is None else argv)
+    if values and values[0] == "update-worker":
+        from .updates import main as update_main
+        return update_main(values[1:])
     if values and values[0] in {"install-service", "update", "rollback", "uninstall"}:
         from .manage import management_main
         return management_main(values)

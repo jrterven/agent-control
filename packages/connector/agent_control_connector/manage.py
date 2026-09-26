@@ -193,7 +193,7 @@ def drain(home: Path) -> None:
             observed = datetime.fromisoformat(value["observedAt"].replace("Z", "+00:00"))
             if (value.get("maintenance") is True and observed >= requested_at
                 and value.get("maintenanceRequestId") == requested_at.isoformat()):
-                if value.get("activeWork") is not False:
+                if value.get("activeWork") is not False or value.get("temporaryChats", 0):
                     raise ValueError("Hermes has active or uncertain work; try again when idle")
                 return
             time.sleep(0.25)

@@ -1227,6 +1227,9 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .connector-card dt { color: var(--muted); }
 .connector-card dd { margin: 0; overflow-wrap: anywhere; }
 .connector-profiles { display: flex; flex-wrap: wrap; gap: 8px; }
+.connector-updates { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+.connector-updates p { margin: 0; }
+.connector-update-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .connector-revoke { display: flex; flex-wrap: wrap; gap: 12px; }
 .connector-revoke p { flex-basis: 100%; }
 .connector-installation-choices { border: 0; padding: 0; margin: 0; display: grid; gap: 12px; min-width: 0; }

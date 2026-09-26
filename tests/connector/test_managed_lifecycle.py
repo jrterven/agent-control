@@ -126,6 +126,21 @@ def test_linux_update_switches_verified_source_and_preserves_identity_history_re
     assert_preserved(item, history, receipts)
 
 
+def test_existing_hermes_update_preserves_external_source_and_home(installation):
+    item = installation
+    item.engine.state["mode"] = "existing"
+    item.engine.save()
+    original = dict(item.engine.state)
+    configuration = (item.engine.connector_dir / "config.json").read_bytes()
+    history, receipts = (item.home / "history.json").read_bytes(), receipt_rows(item.engine)
+    assert service.lifecycle(item.engine, "update", {"releaseRoot": str(item.new)})["status"] == "complete"
+    for key in ("hermesHome", "hermesSource", "sourceSha", "hermesVersion"):
+        assert item.engine.state[key] == original[key]
+    assert (item.engine.connector_dir / "config.json").read_bytes() == configuration
+    assert not list((item.engine.directory / "backups").glob("*/history.json"))
+    assert_preserved(item, history, receipts)
+
+
 @pytest.mark.parametrize("state", ["running", "unknown"])
 def test_uncertain_operation_ledger_prevents_every_service_stop(installation, state):
     item = installation
@@ -338,6 +353,7 @@ while True: time.sleep(1)
         + f"sys.path[:0] = {[str(repo / 'packages/connector'), str(repo / 'packages/hermes-client')]!r}\n"
         + "from agent_control_connector import setup_service as service\n"
         + "service.verify_runtime = lambda root: {}\n"
+        + "service.prepare_owned_tools = lambda engine: None\n"
         + f"engine=SimpleNamespace(directory=Path({str(directory)!r}),root=Path({str(runtime)!r}),connector_dir=Path({str(connector)!r}),token=lambda:'temporary-token',state="
         + repr({"mode": mode, "releaseRoot": str(runtime), "hermesHome": str(home), "restUrl": "http://127.0.0.1:19119"}) + ")\n"
         + "service.supervise(engine)\n")

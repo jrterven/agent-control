@@ -61,6 +61,8 @@ def _ledger_idle(engine):
 
 
 def _owned_home(engine) -> Path:
+    if engine.state.get("mode") == "existing":
+        return None
     expected = engine.directory / "hermes-home"
     actual = Path(engine.state.get("hermesHome", ""))
     if (engine.state.get("mode") != "managed" or actual != expected or actual.is_symlink()
@@ -171,6 +173,8 @@ def lifecycle(engine, method: str, params: dict) -> dict:
                 from .setup_service import all_profiles_idle
                 asyncio.run(all_profiles_idle(engine))
                 _ledger_idle(engine)
+                from .updates import check_intent
+                check_intent(engine.connector_dir, params.get("expectedControl"))
                 tx = {"transactionId": secrets.token_urlsafe(32), "method": method, "createdAt": time.time(),
                       "phase": "prepared", "maintenanceId": maintenance_id, "oldState": dict(engine.state),
                       "oldConfig": read_json(engine.connector_dir / "config.json") if paired else None,
@@ -213,7 +217,11 @@ def lifecycle(engine, method: str, params: dict) -> dict:
             if backup.exists():
                 raise ValueError("Ya existe una copia pendiente. Recupera la actualización anterior.")
             # Preserve symlinks themselves; never copy data outside our home.
-            shutil.copytree(_owned_home(engine), backup, symlinks=True)
+            if _owned_home(engine) is not None:
+                shutil.copytree(_owned_home(engine), backup, symlinks=True)
+            else:
+                private_dir(backup)
+                atomic_json(backup / "setup.json", tx["oldState"])
             tx.update(phase="stopped", backup=str(backup))
             atomic_json(engine.directory / TRANSACTION, tx)
             return {"phase": "stopped", "backupCreated": True}
@@ -225,11 +233,11 @@ def lifecycle(engine, method: str, params: dict) -> dict:
             manifest = verify_runtime(canonical, expected_release=tx["targetRelease"])
             if any(manifest.get(k) != v for k, v in tx["targetManifest"].items()):
                 raise ValueError("El runtime instalado cambió después de prepararlo.")
-            engine.state = {**tx["oldState"], "releaseRoot": str(canonical), "hermesSource": str(canonical / "hermes"),
-                            "sourceSha": manifest["hermesSourceSha"], "hermesVersion": manifest["hermesVersion"],
-                            "extras": tx.get("preservedExtras", {})}
+            engine.state = {**tx["oldState"], "releaseRoot": str(canonical), "extras": tx.get("preservedExtras", {})}
+            if engine.state["mode"] == "managed":
+                engine.state.update(hermesSource=str(canonical / "hermes"), sourceSha=manifest["hermesSourceSha"], hermesVersion=manifest["hermesVersion"])
             engine.save()
-            if tx["oldConfig"]:
+            if tx["oldConfig"] and engine.state["mode"] == "managed":
                 atomic_json(engine.connector_dir / "config.json", {**tx["oldConfig"],
                             "hermesSource": str(canonical / "hermes"), "sourceSha": manifest["hermesSourceSha"]})
             tx["phase"] = "activated"

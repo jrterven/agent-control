@@ -62,6 +62,7 @@ export function CloudInstallerOptions({ existingCommand, loading, initialExistin
       {!checking && (!downloads?.macosArm64 || !downloads.linux) ? <Button size="sm" variant="ghost" leadingIcon={<ArrowClockwise aria-hidden="true" />} onClick={() => setRevision((value) => value + 1)}>{t("onboarding.checkAgain")}</Button> : null}
     </div>}
     <div className="connector-provider-info">
+      <p>{t("connectorUpdates.onboarding")}</p>
       <h3>{t("onboarding.providerTitle")}</h3>
       <p>{t("onboarding.googleIdentity")}</p>
       <ul><li>{t("onboarding.chatgptProvider")}</li><li>{t("onboarding.apiProviders")}</li></ul>

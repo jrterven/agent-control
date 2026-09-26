@@ -60,6 +60,10 @@ saving. No test completion is generated or billed automatically.
 
 ## Lifecycle
 
+Supported releases also provide [coordinated automatic updates](connector-updates.md)
+with owner controls in **My computers**, signed staged rollout and idle/private
+chat restart gates. Legacy installations need one local update first.
+
 Mac offers status, diagnose, updates, rollback, extras and uninstall in the app.
 Linux maintenance uses the installed launcher, which selects its bundled Python:
 

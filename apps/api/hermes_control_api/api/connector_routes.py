@@ -11,7 +11,7 @@ from uuid import uuid4
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 from hermes_client.compatibility import AUDITED_REVISIONS
@@ -20,6 +20,7 @@ from hermes_client.connector_protocol import FrameReader, ProtocolError, VERSION
 from ..auth import aware, current_user, get_db, require_csrf
 from ..connector_models import Connector, DeviceAuthorization
 from ..connectors import PAIR_COOKIE, PROFILE, PairRateLimiter, binding, connector_view, normalized_code, require_pending
+from ..connector_updates import UpdateStatus, update_control
 from ..models import AuthSession, Gateway, GatewayCredential, ProfileRef, User
 from ..remote_provider import ConnectorLink
 from ..security import random_token, token_hash
@@ -270,6 +271,35 @@ async def revoke(connector_id: str, request: Request, auth: AuthSession = Depend
     return {"ok": True}
 
 
+class UpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["now", "postpone", "preferences"]
+    automatic: bool | None = None
+
+
+@router.post("/{connector_id}/update")
+def update_connector(connector_id: str, payload: UpdateRequest, request: Request,
+                     auth: AuthSession = Depends(require_csrf), db: Session = Depends(get_db)):
+    enabled(request)
+    row = db.scalar(select(Connector).where(Connector.id == connector_id, Connector.owner_id == auth.user_id).with_for_update())
+    if row is None or row.revoked_at:
+        raise HTTPException(404, "Connector not found")
+    if not (row.update_status or {}).get("supported"):
+        raise HTTPException(409, "Update this connector once on its computer to enable remote updates")
+    control = update_control(row)
+    if payload.action == "now":
+        control.update(requestId=uuid4().hex, pausedUntil=0)
+    elif payload.action == "postpone":
+        control.update(requestId=None, pausedUntil=int(datetime.now(timezone.utc).timestamp()) + 86400)
+    elif payload.automatic is None:
+        raise HTTPException(422, "Choose the automatic update preference")
+    if payload.automatic is not None:
+        control["automatic"] = payload.automatic
+    row.update_settings = control
+    db.commit()
+    return connector_view(row, request.app.state.connector_registry)
+
+
 @router.websocket("/ws")
 async def connector_socket(websocket: WebSocket):
     if websocket.app.state.settings.deployment_mode != "cloud" or websocket.headers.get("origin"):
@@ -332,9 +362,23 @@ async def connector_socket(websocket: WebSocket):
                 gateway = db.get(Gateway, gateway_id)
                 if current is None or current.revoked_at or owner is None or not owner.is_active or gateway is None or not gateway.enabled:
                     break
+                control = None
+                if message.get("type") == "heartbeat" and message.get("updater") is not None:
+                    try:
+                        diagnostic = UpdateStatus.model_validate(message["updater"]).model_dump()
+                    except ValidationError as error:
+                        raise ProtocolError("Invalid updater status") from error
+                    current.update_status = diagnostic
+                    if diagnostic["release"]:
+                        current.version = diagnostic["release"]
+                    current.last_seen_at = datetime.now(timezone.utc)
+                    control = update_control(current)
+                    db.commit()
                 if current.last_seen_at is None or (datetime.now(timezone.utc) - aware(current.last_seen_at)).total_seconds() >= 10:
                     current.last_seen_at = datetime.now(timezone.utc)
                     db.commit()
+            if control is not None:
+                await send_message(link.send_bytes, link.lock, {"v": VERSION, "type": "update.control", **control})
             if message.get("type") == "media.publish":
                 await _accept_image(websocket.app.state, link, connector_id, message, publications)
             else:

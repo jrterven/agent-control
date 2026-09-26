@@ -35,7 +35,9 @@ def binding(key: bytes, row_id: str, session_id: str) -> str:
 
 
 def connector_view(row: Connector, registry) -> dict:
+    from .connector_updates import update_view
     return {"id": row.id, "name": row.name, "gatewayId": row.gateway_id,
+            "update": update_view(row),
             "installationKind": row.installation_kind, "hermesVersion": row.hermes_version,
             "status": "revoked" if row.revoked_at else "online" if registry.online(row.gateway_id) else "offline",
             "version": row.version, "lastSeenAt": aware(row.last_seen_at).isoformat() if row.last_seen_at else None,

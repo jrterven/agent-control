@@ -250,6 +250,11 @@ the runtime has stopped; it preserves Hermes data and operation deduplication.
 
 ## Updates, recovery and monitoring
 
+For native releases, follow [coordinated connector updates](connector-updates.md).
+Publish signed managed and standalone metadata at 0% rollout, verify canaries,
+then advance the signed policy. A successful web deployment alone does not
+certify or update a customer's native runtime.
+
 Image-capable releases must also follow [private media rollout and recovery](visual-media.md).
 The image archive belongs to the same restored database snapshot; backing up only
 PostgreSQL is insufficient once images are published.

@@ -70,6 +70,23 @@ def phase(engine, nonce, name):
     return mac.lifecycle(engine, "update", {"phase": name, "transactionId": nonce})
 
 
+def test_existing_hermes_app_update_preserves_external_configuration(installation):
+    engine, _, actual = installation
+    engine.state["mode"] = "existing"
+    engine.state["hermesSource"] = "/external/hermes"
+    original = dict(engine.state)
+    config = (engine.connector_dir / "config.json").read_bytes()
+    nonce = prepare(installation)
+    phase(engine, nonce, "stopped")
+    actual["revision"] = NEW
+    phase(engine, nonce, "activate")
+    phase(engine, nonce, "complete")
+    assert (engine.connector_dir / "config.json").read_bytes() == config
+    for key in ("hermesHome", "hermesSource", "sourceSha", "hermesVersion"):
+        assert engine.state[key] == original[key]
+    assert (engine.directory / "hermes-home/history.txt").read_text() == "existing history"
+
+
 def test_durable_update_keeps_drain_until_fresh_readiness_and_preserves_history(installation):
     engine, _, actual = installation
     nonce = prepare(installation)

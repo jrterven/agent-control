@@ -422,6 +422,9 @@ function adminMutation<T>(path: string, method: "PATCH" | "POST" | "DELETE", pay
 export const api = {
   authMethods: () => request<AuthMethods>("/auth/methods"),
   connectors: () => request<ConnectorList>("/connectors"),
+  updateConnector: (id: string, action: "now" | "postpone" | "preferences", automatic: boolean | undefined, csrfToken?: string) => request<ConnectorView>(`/connectors/${encodeURIComponent(id)}/update`, {
+    method: "POST", body: JSON.stringify({ action, ...(automatic === undefined ? {} : { automatic }) }), headers: mutationHeaders(csrfToken),
+  }),
   inspectConnectorPairing: (code: string, csrfToken?: string) => request<ConnectorPairing>("/connectors/pair/inspect", {
     method: "POST", headers: mutationHeaders(csrfToken), body: JSON.stringify({ code }),
   }),

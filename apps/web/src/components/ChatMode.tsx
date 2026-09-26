@@ -5,6 +5,7 @@ import { IconButton } from "@hermes-control/ui";
 import type { ChatMode, Profile } from "../types";
 import { useAppStore } from "../store/appStore";
 import "./ChatMode.css";
+import { useCloudConfigurationStore } from "../lib/cloud";
 
 export const CHAT_MODES: ChatMode[] = ["memory_read_write", "memory_read_only", "temporary"];
 const icons = { memory_read_write: Brain, memory_read_only: BookOpen, temporary: EyeSlash };
@@ -37,6 +38,7 @@ export function NewChatSetup({ profile, disabled, voiceAvailable, onStart }: { p
   const sending = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const demoMode = useAppStore((state) => state.demoMode);
+  const cloud = useCloudConfigurationStore((state) => state.methods?.mode === "cloud");
   const supported = demoMode ? CHAT_MODES : supportedChatModes(profile);
   const start = async (action?: ChatStart["action"]) => {
     if (sending.current || disabled || !supported.includes(mode) || (!action && !text.trim() && !files.length)) return;
@@ -57,6 +59,7 @@ export function NewChatSetup({ profile, disabled, voiceAvailable, onStart }: { p
         </label>;
       })}
     </fieldset>
+    {cloud && supported.length < CHAT_MODES.length ? <a href="/computers">{t("connectorUpdates.checkComputer")}</a> : null}
     <form className="composer-wrap new-chat-composer" onSubmit={(event) => { event.preventDefault(); void start(); }}>
       <div className="composer">
         <textarea aria-label={t("chat.messagePlaceholder", { agent: profile.displayName })} placeholder={t("chat.messagePlaceholder", { agent: profile.displayName })} value={text} disabled={disabled || busy} rows={3} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void start(); } }} />

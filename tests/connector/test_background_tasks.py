@@ -292,13 +292,16 @@ def runtime(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["running", "pendingDelivery", "unavailable", "idle"])
+@pytest.mark.parametrize("kind", ["running", "pendingDelivery", "unavailable", "idle", "temporary"])
 async def test_idle_gate_counts_workers_and_pending_notifications(runtime, tmp_path, monkeypatch, kind):
     if kind != "unavailable":
         db = ledger(tmp_path)
-        if kind != "idle":
+        if kind not in {"idle", "temporary"}:
             task(db, state="running" if kind == "running" else "completed")
         db.close()
+    if kind == "temporary":
+        import time
+        runtime.temporary_expiries[("default", "ac_tmp_open")] = time.monotonic() + 600
     provider = runtime.providers["default"]
     provider.list_profiles = AsyncMock(return_value=[type("Profile", (), {"name": "default"})()])
     provider.list_sessions = AsyncMock(return_value=[])
@@ -309,11 +312,11 @@ async def test_idle_gate_counts_workers_and_pending_notifications(runtime, tmp_p
     monkeypatch.setattr("agent_control_connector.runtime.asyncio.sleep", stop)
     await runtime._status_loop()
     value = json.loads((tmp_path / "status.json").read_text())
-    assert value["activeWork"] is ({"running": True, "pendingDelivery": True, "unavailable": None, "idle": False}[kind])
+    assert value["activeWork"] is ({"running": True, "pendingDelivery": True, "unavailable": None, "idle": False, "temporary": True}[kind])
     provider.observe_background_tasks.assert_called_once()
     observation = provider.observe_background_tasks.call_args.args[0]
     assert observation["complete"] is (kind != "unavailable")
-    assert observation["activeCount"] == {"running": 1, "pendingDelivery": 0, "idle": 0, "unavailable": None}[kind]
+    assert observation["activeCount"] == {"running": 1, "pendingDelivery": 0, "idle": 0, "unavailable": None, "temporary": 0}[kind]
 
 
 @pytest.mark.asyncio

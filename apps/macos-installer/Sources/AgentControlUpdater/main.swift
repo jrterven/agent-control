@@ -205,12 +205,16 @@ func apply(_ request: [String: Any]) async throws {
     // arbitrary URL, hash, app, or replacement revision.
     let offer = try engine(installed, method, [:])
     if offer["recoveryRequired"] as? Bool == true {
+        if request["background"] as? Bool == true { throw UpdateFailure(message: "La actualización pendiente necesita recuperación desde la aplicación.") }
         try await recover(offer, team: team)
         return
     }
     guard offer["actionRequired"] as? Bool == true else { emit("complete", ["status": "current"]); return }
     guard let revision = offer["revision"] as? String,
           revision.range(of: "^[a-f0-9]{40}$", options: .regularExpression) != nil else { throw UpdateFailure(message: "Revisión de actualización no válida.") }
+    if let expected = request["expectedRevision"] as? String, expected != revision {
+        throw UpdateFailure(message: "La publicación cambió. Vuelve a comprobar la actualización.")
+    }
     let stage = home.appendingPathComponent("Applications/.agent-control-update-" + UUID().uuidString)
     try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
     var preserveStage = false
@@ -241,7 +245,9 @@ func apply(_ request: [String: Any]) async throws {
     }
     try verifyApp(candidate, team: team, revision: revision)
     progress("Comprobando que tus agentes hayan terminado…")
-    let prepared = try engine(installed, method, ["phase": "prepare", "targetRoot": candidate.appendingPathComponent("Contents/Resources/runtime").path, "revision": revision])
+    var preparation: [String: Any] = ["phase": "prepare", "targetRoot": candidate.appendingPathComponent("Contents/Resources/runtime").path, "revision": revision]
+    if let control = request["expectedControl"] as? [String: Any] { preparation["expectedControl"] = control }
+    let prepared = try engine(installed, method, preparation)
     guard let transaction = prepared["transactionId"] as? String else { throw UpdateFailure(message: "No se autorizó el cambio de versión.") }
     let previous = managed.appendingPathComponent("app-versions/" + oldRevision + "/Agent Control.app")
     var swapped = false
@@ -260,7 +266,7 @@ func apply(_ request: [String: Any]) async throws {
         _ = try engine(installed, method, ["phase": "complete", "transactionId": transaction])
         // The transaction is committed. Failure to raise the UI must never
         // roll back a healthy running service after its journal was cleared.
-        do { try await reopen(); emit("complete", ["status": "complete", "restartApp": true]) }
+        do { if request["background"] as? Bool != true { try await reopen() }; emit("complete", ["status": "complete", "restartApp": request["background"] as? Bool != true]) }
         catch { emit("complete", ["status": "complete", "restartApp": false]) }
     } catch {
         progress("Recuperando la versión anterior…")

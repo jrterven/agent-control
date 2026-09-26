@@ -35,10 +35,16 @@ def runtime_environment(engine):
     env = {key: value for key, value in os.environ.items() if key in allowed}
     root = Path(engine.state.get("releaseRoot", str(engine.root)))
     env.update(HERMES_HOME=engine.state["hermesHome"],
+               AGENT_CONTROL_MANAGED_DIR=str(engine.directory),
                HERMES_DASHBOARD_SESSION_TOKEN=engine.token(),
                HERMES_DISABLE_LAZY_INSTALLS="1", PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1",
+               PIP_REQUIRE_VIRTUALENV="true",
                PYTHONPATH=os.pathsep.join([str(root / "connector"), str(root / "hermes")]))
     env["PATH"] = str(root / "python/bin") + os.pathsep + env.get("PATH", "/usr/bin:/bin")
+    tool_environment = engine.directory / "tool-environments/default"
+    if (tool_environment / "bin/python").exists():
+        env["PATH"] = str(tool_environment / "bin") + os.pathsep + env["PATH"]
+        env["VIRTUAL_ENV"] = str(tool_environment)
     if engine.state.get("extras", {}).get("browser"):
         from .setup_extras import browser_environment
         env.update(browser_environment(engine, env["PATH"]))
@@ -139,6 +145,8 @@ def supervise(engine):
         verify_runtime(engine.root)
         if (engine.directory / "stop.request").exists():
             return
+        if engine.state["mode"] == "managed":
+            prepare_owned_tools(engine)
         env = runtime_environment(engine)
         python = str(engine.root / "python/bin/python3")
         port = engine.state["restUrl"].rsplit(":", 1)[1]
@@ -204,6 +212,27 @@ def supervise(engine):
             # An explicit, idle-checked restart. Both user service managers
             # restart a nonzero exit; the new instance consumes pending state.
             raise SystemExit(75)
+
+
+def prepare_owned_tools(engine):
+    """Prepare writable tool dependencies and adapters before owned Hermes boots."""
+    target = engine.directory / "tool-environments/default"
+    if not (target / "bin/python").exists():
+        private_dir(target.parent)
+        subprocess.run([str(engine.root / "python/bin/python3"), "-s", "-B", "-m", "venv",
+                        "--system-site-packages", str(target)], check=True, capture_output=True, timeout=120,
+                       env={"HOME": str(Path.home()), "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                            "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"})
+    config_path = engine.connector_dir / "config.json"
+    if config_path.exists():
+        from .chat_modes_install import chat_mode_profiles
+        from .media_install import media_profiles
+        from .background_install import background_profiles
+        config = read_json(config_path)
+        for install in (chat_mode_profiles, media_profiles, background_profiles):
+            states = install(config, install=True)
+            if any(value.get("state") == "installationFailed" for value in states.values()):
+                raise ValueError("No se pudo preparar una integración. Conservamos la instalación para diagnóstico.")
 
 
 async def all_profiles_idle(engine):
@@ -298,7 +327,7 @@ def extract_verified_archive(archive: Path, destination: Path):
         package.extractall(destination, members=members, filter="data")
 
 
-def stage_update(engine):
+def stage_update(engine, *, expected_release=None):
     import hashlib
     import re
     with tempfile.TemporaryDirectory(dir=engine.directory, prefix="download-") as temporary:
@@ -310,6 +339,8 @@ def stage_update(engine):
         release = latest.get("version", "")
         if not re.fullmatch(r"[a-f0-9]{40}", release):
             raise ValueError("No hay una actualización publicada válida.")
+        if expected_release is not None and release != expected_release:
+            raise ValueError("La publicación cambió; vuelve a comprobar la actualización.")
         base = engine.server + "/downloads/agent-control/releases/" + release + "/"
         fetch(base + "SHA256SUMS", temporary / "SHA256SUMS", 65536)
         fetch(base + "SHA256SUMS.sig", temporary / "SHA256SUMS.sig", 8192)
@@ -351,7 +382,7 @@ def lifecycle(engine, method, params):
     if method == "extras-install":
         from .setup_extras import install_extra
         return install_extra(engine, params)
-    if engine.state.get("mode") != "managed" and method != "uninstall":
+    if engine.state.get("mode") != "managed" and method not in {"uninstall", "update", "rollback"}:
         raise ValueError("Esta acción solo administra el Hermes instalado por Agent Control.")
     if sys.platform != "darwin":
         # A failed setup may have persisted state before discovering a name
@@ -422,6 +453,8 @@ def lifecycle(engine, method, params):
     from .setup_extras import validate_extra_transition
     next_extras = validate_extra_transition(engine, target)
     with idle_installation(engine):
+        from .updates import check_intent
+        check_intent(engine.connector_dir, params.get("expectedControl"))
         original_state = dict(engine.state)
         original_config = read_json(engine.connector_dir / "config.json") if (engine.connector_dir / "config.json").exists() else None
         atomic_json(transaction_path, {"oldState": original_state, "oldConfig": original_config,
@@ -430,11 +463,16 @@ def lifecycle(engine, method, params):
         try:
             backup = engine.directory / "backups" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
             private_dir(backup.parent)
-            shutil.copytree(engine.state["hermesHome"], backup, symlinks=True)
-            engine.state.update(releaseRoot=str(target), hermesSource=str(target / "hermes"),
-                                sourceSha=manifest["hermesSourceSha"], hermesVersion=manifest["hermesVersion"], extras=next_extras)
+            if engine.state["mode"] == "managed":
+                shutil.copytree(engine.state["hermesHome"], backup, symlinks=True)
+            else:
+                private_dir(backup)
+                atomic_json(backup / "setup.json", original_state)
+            engine.state.update(releaseRoot=str(target), extras=next_extras)
+            if engine.state["mode"] == "managed":
+                engine.state.update(hermesSource=str(target / "hermes"), sourceSha=manifest["hermesSourceSha"], hermesVersion=manifest["hermesVersion"])
             engine.save()
-            if original_config:
+            if original_config and engine.state["mode"] == "managed":
                 atomic_json(engine.connector_dir / "config.json", {**original_config, "hermesSource": str(target / "hermes"),
                             "sourceSha": manifest["hermesSourceSha"]})
             install_linux_service(engine)

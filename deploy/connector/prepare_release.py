@@ -18,6 +18,7 @@ REPO = Path(__file__).resolve().parents[2]
 if __package__ in {None, ""}:
     sys.path.insert(0, str(REPO))
 from deploy.connector.macos_signing import AppleSigner, NotarizationPending
+from deploy.update_policy import policy
 
 PLATFORMS = ("linux-x86_64", "linux-arm64", "macos-x86_64", "macos-arm64")
 
@@ -126,6 +127,13 @@ def prepare(artifacts: Path, output: Path, revision: str, private_key: Path, *, 
         version = stage / "VERSION"
         version.write_text(revision + "\n")
         version.replace(output / "connector/VERSION")
+        latest = stage / "latest.json"
+        latest.write_text(json.dumps({"schemaVersion": 1, "version": revision, "updates": policy()}, sort_keys=True) + "\n")
+        signature = stage / "latest.json.sig"
+        subprocess.run(["openssl", "dgst", "-sha256", "-sign", str(private_key), "-out", str(signature), str(latest)], check=True, capture_output=True)
+        subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(public), "-signature", str(signature), str(latest)], check=True, capture_output=True)
+        signature.replace(output / "connector/latest.json.sig")
+        latest.replace(output / "connector/latest.json")
     print(f"Prepared signed connector release {revision}; four platform archives verified.")
 
 

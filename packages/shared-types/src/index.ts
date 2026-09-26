@@ -19,6 +19,17 @@ export interface ConnectorView {
   gatewayId?: string | null;
   installationKind?: "managed" | "existing" | null;
   hermesVersion?: string | null;
+  update?: {
+    protocol: number;
+    supported: boolean;
+    release?: string | null;
+    availableRelease?: string | null;
+    state: "current" | "checking" | "available" | "waiting" | "downloading" | "installing" | "failed" | "manual" | "paused";
+    reason?: string | null;
+    checkedAt?: number | null;
+    automatic: boolean;
+    pausedUntil: number;
+  };
 }
 
 export interface ConnectorList {

@@ -10,6 +10,7 @@ import { useCloudConfigurationStore } from "../lib/cloud";
 import { useAppStore } from "../store/appStore";
 import { CloudInstallerOptions } from "../components/CloudInstallerOptions";
 import { ConnectorReadiness } from "../components/ConnectorReadiness";
+import { ConnectorUpdates } from "../components/ConnectorUpdates";
 
 type AccountScope = Pick<ReturnType<typeof useAppStore.getState>, "userId" | "authGeneration">;
 
@@ -189,12 +190,13 @@ export function ConnectorsScreen({ pairing = false }: { pairing?: boolean }) {
       {data?.items.length === 0 ? <CloudEmptyState /> : null}
       <div className="connector-grid">{data?.items.map((item) => <Panel className="settings-section connector-card" key={item.id}>
         <header><Desktop aria-hidden="true" /><div><strong>{item.name}</strong><p><StatusDot tone={item.status === "online" ? "positive" : "warning"} /> {t(`cloud.${item.status}`)}</p></div></header>
-        <dl><div><dt>{t("cloud.version")}</dt><dd>{item.version ?? t("cloud.unknown")}</dd></div><div><dt>{t("cloud.lastSeen")}</dt><dd>{item.lastSeenAt ? formatConversationTimestamp(item.lastSeenAt, i18n.resolvedLanguage ?? i18n.language, timeZone) : t("cloud.neverSeen")}</dd></div></dl>
+        <dl><div><dt>{t("cloud.version")}</dt><dd title={item.update?.release ?? item.version ?? undefined}>{item.update?.release?.slice(0, 8) ?? item.version ?? t("cloud.unknown")}</dd></div><div><dt>{t("cloud.lastSeen")}</dt><dd>{item.lastSeenAt ? formatConversationTimestamp(item.lastSeenAt, i18n.resolvedLanguage ?? i18n.language, timeZone) : t("cloud.neverSeen")}</dd></div></dl>
         {item.installationKind || item.hermesVersion ? <dl>
           {item.installationKind === "managed" || item.installationKind === "existing" ? <div><dt>{t("onboarding.installationKind")}</dt><dd>{t(item.installationKind === "managed" ? "onboarding.kindManaged" : "onboarding.kindExisting")}</dd></div> : null}
           {item.hermesVersion ? <div><dt>{t("onboarding.hermesVersion")}</dt><dd>{item.hermesVersion}</dd></div> : null}
         </dl> : null}
         <div className="connector-profiles">{item.profiles.map((profile) => <Badge key={profile}>{profile}</Badge>)}</div>
+        <ConnectorUpdates item={item} onChange={(updated) => setData((current) => current ? { ...current, items: current.items.map((candidate) => candidate.id === updated.id ? updated : candidate) } : current)} />
         {item.status !== "revoked" ? revokeId === item.id ? <div className="connector-revoke"><p>{t("cloud.revokeConfirm", { name: item.name })}</p><Button variant="danger" disabled={revoking || offline} onClick={() => void revoke()}>{t("cloud.confirmRevoke")}</Button><Button variant="ghost" disabled={revoking} onClick={() => setRevokeId(null)}>{t("cloud.cancel")}</Button></div> : <Button variant="ghost" disabled={revoking || offline} onClick={() => setRevokeId(item.id)}>{t("cloud.revoke")}</Button> : null}
       </Panel>)}</div>
     </>}

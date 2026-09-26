@@ -161,3 +161,40 @@ def test_revoked_computer_can_pair_again_without_reactivating_old_credential(set
         listing = {item["id"]: item for item in client.get("/api/v1/connectors").json()["items"]}
         assert listing[old_computer["id"]]["status"] == "revoked"
         assert listing[new_computer["id"]]["status"] == "online"
+
+
+def test_release_telemetry_and_update_intent_are_owner_scoped(setup):
+    app, client, headers, (other_token, other_headers) = setup
+    authorization = authorize(client)
+    connector = approve(client, headers, authorization)
+    endpoint = f"/api/v1/connectors/{connector['id']}/update"
+    assert client.post(endpoint, json={"action": "now"}, headers=headers).status_code == 409
+    token = client.post("/api/v1/connectors/device/token", json={"deviceCode": authorization["deviceCode"]}).json()
+    with client.websocket_connect("/api/v1/connectors/ws", headers={"Authorization": "Bearer " + token["accessToken"]}) as websocket:
+        reader = FrameReader()
+        assert reader.feed(websocket.receive_bytes())["type"] == "welcome"
+        heartbeat = {"v": 1, "type": "heartbeat", "version": "0.1.0", "profiles": {}, "updater": {
+            "protocol": 1, "supported": True, "release": "a" * 40, "state": "available", "availableRelease": "b" * 40}}
+        for frame in frames(heartbeat):
+            websocket.send_bytes(frame)
+        control = reader.feed(websocket.receive_bytes())
+        assert control == {"v": 1, "type": "update.control", "automatic": True, "requestId": None, "pausedUntil": 0}
+        item = client.get("/api/v1/connectors").json()["items"][0]
+        assert item["version"] == "a" * 40
+        assert item["update"]["availableRelease"] == "b" * 40
+        assert client.post(endpoint, json={"action": "now"}).status_code == 403
+        assert client.post(endpoint, json={"action": "now", "command": "rm -rf /"}, headers=headers).status_code == 422
+        assert client.post(endpoint, json={"action": "preferences", "automatic": False}, headers=headers).status_code == 200
+        assert client.post(endpoint, json={"action": "now"}, headers=headers).status_code == 200
+        for frame in frames(heartbeat):
+            websocket.send_bytes(frame)
+        control = reader.feed(websocket.receive_bytes())
+        assert control["automatic"] is False and len(control["requestId"]) == 32
+        assert client.post(endpoint, json={"action": "postpone"}, headers=headers).status_code == 200
+        for frame in frames(heartbeat):
+            websocket.send_bytes(frame)
+        postponed = reader.feed(websocket.receive_bytes())
+        assert postponed["requestId"] is None and postponed["pausedUntil"] > utc_now().timestamp()
+        client.cookies.set("hc_session", other_token)
+        assert client.post(endpoint, json={"action": "now"}, headers=other_headers).status_code == 404
+        assert client.get("/api/v1/connectors").json()["items"] == []

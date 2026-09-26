@@ -101,6 +101,9 @@ class ConnectorRuntime:
         self.background_fingerprints: dict[tuple[str, str], str] = {}
         self.profile_transfer_supported = False
         self.profile_transfers = ProfileTransfers(self)
+        from .updates import installation
+        self.update_installation = installation(directory)
+        self.update_launch_at = 0.0
 
     async def _background_events(self, profile: str, snapshot: dict):
         if (profile not in self.providers or self.websocket is None or not self.background_tasks_supported
@@ -237,8 +240,10 @@ class ConnectorRuntime:
             await self.event_changed.wait()
 
     async def _heartbeat(self, websocket):
+        from .updates import diagnostic
         while self.websocket is websocket:
             await send_message(websocket.send, self.send_lock, {"v": VERSION, "type": "heartbeat", "version": __version__,
+                "updater": diagnostic(self.directory, self.update_installation),
                 "profiles": {name: {"generation": provider.runtime_generation,
                     "inventoryComplete": provider.session_inventory_complete,
                     "visualMedia": self.media_states.get(name, {"state": "pendingActivation"}),
@@ -348,7 +353,7 @@ class ConnectorRuntime:
                 except Exception:
                     if active is not True:
                         active = None
-            if self.tasks or self.profile_transfers.has_pending():
+            if self.tasks or self.profile_transfers.has_pending() or self.temporary_expiries:
                 active = True
             self.active_work = active
             now = asyncio.get_running_loop().time()
@@ -368,6 +373,8 @@ class ConnectorRuntime:
                 "observedAt": datetime.now(timezone.utc).isoformat(), "connected": self.websocket is not None,
                 "connectionError": self.connection_error,
                 "version": __version__, "maintenance": maintenance_request_id is not None,
+                "release": self.update_installation["release"] if self.update_installation else None,
+                "temporaryChats": len(self.temporary_expiries),
                 "maintenanceRequestId": maintenance_request_id, "visualMedia": self.media_states,
                 "backgroundTasks": self.background_states})
             await asyncio.sleep(3)
@@ -618,6 +625,12 @@ class ConnectorRuntime:
                         self._acknowledge(message.get("sequence"))
                     elif message.get("type") == "media.ack" and self.visual_media_supported:
                         await self._media_acknowledge(message)
+                    elif message.get("type") == "update.control":
+                        from .updates import accept_control, launch_safely
+                        accept_control(self.directory, message)
+                        if time.monotonic() >= self.update_launch_at:
+                            self.update_launch_at = time.monotonic() + 60
+                            await asyncio.to_thread(launch_safely, self.directory, self.update_installation)
                     elif message.get("type") == "request":
                         if len(self.tasks) >= 8:
                             raise ProtocolError("Too many connector operations")

@@ -184,6 +184,30 @@ describe("computer pairing", () => {
 });
 
 describe("my computers", () => {
+  it("explains the one-time bootstrap for older connectors", async () => {
+    render(<ConnectorsScreen />);
+    expect(await screen.findByText("Initial update required")).toBeInTheDocument();
+    expect(screen.getByText(/Update once on this computer/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Update now" })).not.toBeInTheDocument();
+  });
+
+  it("saves update preferences and queues an idle-only update for its computer", async () => {
+    const user = userEvent.setup();
+    const item: ConnectorView = { ...connector, status: "online", update: { protocol: 1, supported: true, release: "a".repeat(40), availableRelease: "b".repeat(40), state: "waiting", reason: "temporary", automatic: true, pausedUntil: 0 } };
+    vi.mocked(api.connectors).mockResolvedValue({ items: [item], installCommand: "" });
+    vi.spyOn(api, "updateConnector").mockImplementation(async (_id, action, automatic) => ({ ...item, update: { ...item.update!, automatic: automatic ?? true, state: action === "postpone" ? "paused" : "waiting" } }));
+    render(<ConnectorsScreen />);
+    expect(await screen.findByText(/Close temporary chats when you are finished/)).toBeInTheDocument();
+    expect(screen.getByText("aaaaaaaa")).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Update automatically when the computer is idle" }));
+    expect(api.updateConnector).toHaveBeenCalledWith("computer-a", "preferences", false, "csrf-test");
+    await user.click(screen.getByRole("button", { name: "Update now" }));
+    expect(api.updateConnector).toHaveBeenCalledWith("computer-a", "now", undefined, "csrf-test");
+    await user.click(screen.getByRole("button", { name: "Postpone 24 hours" }));
+    expect(api.updateConnector).toHaveBeenCalledWith("computer-a", "postpone", undefined, "csrf-test");
+    expect(await screen.findByText("Update postponed")).toBeInTheDocument();
+  });
+
   it.each([["open", "Public beta"], ["invite_only", "Invitation-only beta"]] as const)("labels computer management for %s registration", (registrationMode, label) => {
     useCloudConfigurationStore.setState({ methods: { mode: "cloud", googleEnabled: true, registrationMode, betaMaxUsers: 20 } });
     render(<ConnectorsScreen />);

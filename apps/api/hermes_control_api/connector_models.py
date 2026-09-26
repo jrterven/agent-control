@@ -17,6 +17,8 @@ class Connector(Base, Timestamped):
     version: Mapped[str | None] = mapped_column(String(80))
     installation_kind: Mapped[str | None] = mapped_column(String(16))
     hermes_version: Mapped[str | None] = mapped_column(String(80))
+    update_settings: Mapped[dict | None] = mapped_column(JSON)
+    update_status: Mapped[dict | None] = mapped_column(JSON)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

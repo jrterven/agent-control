@@ -23,6 +23,12 @@ def exercise(root: Path, work: Path) -> None:
     media_self_test()
     background_self_test()
     work.mkdir(parents=True, exist_ok=True)
+    from types import SimpleNamespace
+    from agent_control_connector.setup_service import prepare_owned_tools
+    prepare_owned_tools(SimpleNamespace(root=root, directory=work / "managed", connector_dir=work / "unpaired"))
+    tool_python = work / "managed/tool-environments/default/bin/python"
+    subprocess.run([str(tool_python), "-B", "-c", "import sys,pip; assert sys.prefix != sys.base_prefix"],
+                   check=True, capture_output=True, timeout=30, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
     with tempfile.TemporaryDirectory(prefix="http-smoke-", dir=work) as temporary:
         home = Path(temporary)
         hermes_home = home / "hermes-home"

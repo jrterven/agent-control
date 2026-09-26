@@ -16,6 +16,7 @@ sys.path[:0] = [str(REPO), str(REPO / "packages/connector")]
 from agent_control_connector.managed_manifest import PUBLIC_KEY
 from deploy.managed.build import digest, extract
 from deploy.managed.manifest import create_manifest, file_inventory, sign_manifest, validate_extras
+from deploy.update_policy import policy
 
 
 def prepared_extras(directory: Path | None, release: Path, revision: str, public_key: Path) -> dict:
@@ -107,7 +108,7 @@ def prepare(artifacts: Path, output: Path, revision: str, private_key: Path, dmg
         checksums.write_text("".join(f"{digest(path)}  {path.name}\n" for path in sorted(release.iterdir())))
         subprocess.run(["openssl", "dgst", "-sha256", "-sign", str(private_key), "-out", str(release / "SHA256SUMS.sig"), str(checksums)], check=True, capture_output=True)
         subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(public), "-signature", str(release / "SHA256SUMS.sig"), str(checksums)], check=True, capture_output=True)
-        latest = {"schemaVersion": 1, "version": revision, "downloads": {
+        latest = {"schemaVersion": 1, "version": revision, "updates": policy(), "downloads": {
             "macosArm64": {"url": f"/downloads/agent-control/releases/{revision}/{dmg_name}", "sha256": digest(release / dmg_name), "minOsVersion": "13"},
             "linux": {"installerUrl": "/downloads/agent-control/install.sh"}}}
         installer = stage / "install.sh"
