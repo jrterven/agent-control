@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -78,6 +79,32 @@ def test_native_update_worker_recognizes_shipped_public_metadata(native_command,
     assert result.returncode == 0,result.stderr
     assert (home/"update-worker.lock").is_file()
     assert not (home/"update-status.json").exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux" or not os.environ.get("AGENT_CONTROL_CONNECTOR_ARCHIVE"),
+                    reason="Requires the real frozen Linux artifact")
+def test_native_system_openssl_does_not_inherit_bundled_libraries(native_command,tmp_path):
+    command,environment=native_command
+    openssl=shutil.which("openssl")
+    assert openssl, "Release runner must provide system OpenSSL"
+    wrapper=tmp_path/"system-bin"
+    wrapper.mkdir()
+    marker=tmp_path/"system-openssl-called"
+    program=wrapper/"openssl"
+    program.write_text('#!/bin/sh\n'
+                       f'touch {shlex.quote(str(marker))}\n'
+                       'case "$LD_LIBRARY_PATH" in *_internal*) exit 77;; esac\n'
+                       f'exec {shlex.quote(openssl)} "$@"\n')
+    program.chmod(0o755)
+    environment["PATH"]=str(wrapper)+os.pathsep+environment["PATH"]
+    environment.pop("LD_LIBRARY_PATH",None)
+    environment.pop("LD_LIBRARY_PATH_ORIG",None)
+    result=subprocess.run([*command,"doctor","--data-dir",str(tmp_path/"unpaired")],
+                          env=environment,cwd=tmp_path,capture_output=True,text=True,timeout=20)
+    assert result.returncode == 0,result.stderr
+    assert marker.is_file()
+    assert json.loads(result.stdout)["signatureToolAvailable"] is True
+    assert not (tmp_path/"unpaired").exists()
 
 
 def release(path,version):

@@ -334,8 +334,16 @@ def main(argv=None):
         else:
             result = status(directory)
             if args.command == "doctor":
+                from .process_environment import system_environment
+                try:
+                    openssl = subprocess.run(["openssl", "version"], env=system_environment(),
+                                             capture_output=True, timeout=5)
+                    signature_tool_available = openssl.returncode == 0
+                except (OSError, subprocess.TimeoutExpired):
+                    signature_tool_available = False
                 result.update({"paired": (directory / "config.json").is_file(), "platform": sys.platform,
-                               "supportedPlatform": sys.platform in {"darwin", "linux"}})
+                               "supportedPlatform": sys.platform in {"darwin", "linux"},
+                               "signatureToolAvailable": signature_tool_available})
             print(json.dumps(result))
         return 0
     except KeyboardInterrupt:

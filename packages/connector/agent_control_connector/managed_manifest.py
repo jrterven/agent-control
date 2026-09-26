@@ -15,6 +15,8 @@ import subprocess
 import sys
 import tempfile
 
+from .process_environment import system_environment
+
 PUBLIC_KEY = b"""-----BEGIN PUBLIC KEY-----
 MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAosAhTp2WRUDxiKwfun/+
 AEcs6tJEL2bv+8CwjMqUXFusy/7A1RW2DYK/C+tP9CIuwJJH+gi9fNmqXVi0YiQF
@@ -44,7 +46,7 @@ def verify_signature(document: Path, signature: Path) -> None:
         key.write_bytes(PUBLIC_KEY)
         result = subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(key),
                                  "-signature", str(signature), str(document)],
-                                capture_output=True, timeout=20)
+                                capture_output=True, timeout=20, env=system_environment())
     if result.returncode:
         raise ValueError("Release signature is not from Agent Control")
 

@@ -25,13 +25,14 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 from .tls import cloud_ssl_context
+from .process_environment import system_environment
 
 LABEL = "com.agent-control.connector"
 RELEASE_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}\Z")
 
 
 def run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(args, check=check, capture_output=True, text=True)
+    return subprocess.run(args, check=check, capture_output=True, text=True, env=system_environment())
 
 
 def private_dir(path: Path) -> None:
