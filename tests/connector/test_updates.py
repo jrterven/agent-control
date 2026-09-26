@@ -115,6 +115,18 @@ def test_stale_signed_publication_never_downgrades(computer):
     assert not calls
 
 
+def test_temporary_publication_failure_does_not_quarantine_the_offered_release(computer, monkeypatch):
+    home, _, _, calls = computer
+    atomic_json(home / "update-status.json", {"availableRelease": NEW})
+    def unavailable(*args):
+        raise ValueError("Signature and metadata were read across a publication swap")
+    monkeypatch.setattr(updates, "publication", unavailable)
+    state = run(computer)
+    assert state["state"] == "failed" and state["failedRelease"] is None
+    assert state["nextCheckAt"] <= int(time.time()) + 901
+    assert not calls
+
+
 def test_interrupted_install_requires_recovery_without_rerunning(computer):
     home, _, _, calls = computer
     atomic_json(home / "update-status.json", {"state": "installing", "availableRelease": NEW})

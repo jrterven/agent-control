@@ -253,6 +253,7 @@ def run_once(directory, installed):
         else:
             save("failed", "recovery", failedRelease=state.get("availableRelease"), nextCheckAt=now + 21600)
         return
+    attempted_update = False
     try:
         save("checking", requestId=request, controlHash=control_hash(control), nextCheckAt=now + 900)
         offer = publication(directory, installed, server)
@@ -284,6 +285,7 @@ def run_once(directory, installed):
             save("available", nextCheckAt=now)
             return
         save("downloading", nextCheckAt=now + 3600)
+        attempted_update = True
         apply_update(directory, installed, revision, server, control,
                      lambda: save("installing", nextCheckAt=int(time.time()) + 3600))
         observed = read_optional(directory / "status.json")
@@ -294,10 +296,12 @@ def run_once(directory, installed):
         save("available", nextCheckAt=int(time.time()) + 60)
     except RecoveryRequired:
         save("failed", "recovery", failedRelease=state.get("availableRelease"), nextCheckAt=int(time.time()) + 21600)
-    except Exception:
+    except Exception as error:
         # No exception text, process output, paths or credentials enter telemetry.
         reason = safe_to_start(directory)
-        save("waiting" if reason else "failed", reason or "verification", failedRelease=None if reason else state.get("availableRelease"), nextCheckAt=int(time.time()) + (60 if reason else 21600))
+        quarantine = attempted_update and isinstance(error, ValueError) and reason is None
+        save("waiting" if reason else "failed", reason or "verification", failedRelease=state.get("availableRelease") if quarantine else None,
+             nextCheckAt=int(time.time()) + (60 if reason else 21600 if quarantine else 900))
 
 
 def main(argv=None):
