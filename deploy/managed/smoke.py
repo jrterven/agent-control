@@ -25,6 +25,23 @@ def exercise(root: Path, work: Path) -> None:
     work.mkdir(parents=True, exist_ok=True)
     from types import SimpleNamespace
     from agent_control_connector.setup_service import prepare_owned_tools
+    from agent_control_connector.storage import atomic_json
+    from agent_control_connector.updates import installation, diagnostic
+    managed = work / "managed"
+    atomic_json(managed / "setup.json", {"mode": "managed", "releaseRoot": str(root)})
+    expected_release = json.loads((root / "build-provenance.json").read_text())["release"]
+    assert (root / "build-provenance.json").stat().st_mode & 0o777 == 0o644
+    previous_managed = os.environ.get("AGENT_CONTROL_MANAGED_DIR")
+    os.environ["AGENT_CONTROL_MANAGED_DIR"] = str(managed)
+    try:
+        installed = installation(work / "unpaired")
+        assert installed is not None and installed["release"] == expected_release
+        assert diagnostic(work / "unpaired", installed)["supported"] is True
+    finally:
+        if previous_managed is None:
+            os.environ.pop("AGENT_CONTROL_MANAGED_DIR", None)
+        else:
+            os.environ["AGENT_CONTROL_MANAGED_DIR"] = previous_managed
     prepare_owned_tools(SimpleNamespace(root=root, directory=work / "managed", connector_dir=work / "unpaired"))
     tool_python = work / "managed/tool-environments/default/bin/python"
     subprocess.run([str(tool_python), "-B", "-c", "import sys,pip; assert sys.prefix != sys.base_prefix"],

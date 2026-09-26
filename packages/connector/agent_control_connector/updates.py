@@ -16,6 +16,7 @@ from pathlib import Path
 import random
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -46,16 +47,37 @@ def read_optional(path):
         return {}
 
 
+def read_release_metadata(path):
+    """Read public metadata from the already verified immutable runtime.
+
+    Release files are shipped as 0644. Keep private state on read_json's stricter
+    permission checks; accepting public metadata must not relax those checks.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022 or info.st_size > 16384:
+                return {}
+            data = stream.read(16385)
+            if len(data) > 16384:
+                return {}
+        value = json.loads(data)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def installation(directory: Path):
     """Derive identity from the running executable, never a cloud field."""
     if getattr(sys, "frozen", False):
         root = Path(sys.executable).resolve().parent
-        revision = read_optional(root / "release.json").get("revision")
+        revision = read_release_metadata(root / "release.json").get("revision")
         if RELEASE.fullmatch(str(revision)) and (directory / "current").resolve() == root:
             return {"kind": "connector", "root": root, "release": revision, "command": [str(root / "agent-control-connector"), "update-worker"]}
     root = Path(__file__).resolve().parents[2]
     # Provenance is small and covered by the inventory verified at service boot.
-    revision = read_optional(root / "build-provenance.json").get("release")
+    revision = read_release_metadata(root / "build-provenance.json").get("release")
     managed = os.environ.get("AGENT_CONTROL_MANAGED_DIR")
     if managed and RELEASE.fullmatch(str(revision)):
         home = Path(managed)

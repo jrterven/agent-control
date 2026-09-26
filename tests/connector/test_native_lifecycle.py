@@ -63,6 +63,23 @@ def test_native_cli_version_status_and_failure_exit_codes(native_command,tmp_pat
     assert invoke("run","--data-dir",str(tmp_path/"unpaired")).returncode == 1
 
 
+@pytest.mark.skipif(not os.environ.get("AGENT_CONTROL_CONNECTOR_ARCHIVE"), reason="Requires the real frozen artifact")
+def test_native_update_worker_recognizes_shipped_public_metadata(native_command,tmp_path):
+    command,environment=native_command
+    bundle=Path(command[0]).parent
+    assert (bundle/"release.json").stat().st_mode & 0o777 == 0o644
+    home=tmp_path/"updater-smoke"
+    home.mkdir(mode=0o700)
+    (home/"current").symlink_to(bundle)
+    # No owner control means the worker exits without network, services or
+    # credentials. A zero exit proves the actual frozen installation was found.
+    result=subprocess.run([*command,"update-worker","--data-dir",str(home)],env=environment,
+                          cwd=tmp_path,capture_output=True,text=True,timeout=20)
+    assert result.returncode == 0,result.stderr
+    assert (home/"update-worker.lock").is_file()
+    assert not (home/"update-status.json").exists()
+
+
 def release(path,version):
     path.mkdir(parents=True)
     binary=path/"agent-control-connector"

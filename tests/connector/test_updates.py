@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 import shutil
@@ -12,6 +13,60 @@ from agent_control_connector import updates, managed_manifest, setup_service, ma
 from agent_control_connector.storage import atomic_json, read_json
 
 OLD, NEW = "a" * 40, "b" * 40
+
+
+@pytest.mark.parametrize("mode", ["managed", "existing"])
+def test_managed_installation_reads_public_provenance_but_keeps_setup_private(tmp_path, monkeypatch, mode):
+    root = tmp_path / "release"
+    root.mkdir()
+    metadata = root / "build-provenance.json"
+    metadata.write_text(json.dumps({"release": NEW}))
+    metadata.chmod(0o644)
+    home = tmp_path / "managed"
+    atomic_json(home / "setup.json", {"mode": mode, "releaseRoot": str(root)})
+    monkeypatch.setattr(updates, "__file__", str(root / "connector/agent_control_connector/updates.py"))
+    monkeypatch.setenv("AGENT_CONTROL_MANAGED_DIR", str(home))
+    installed = updates.installation(tmp_path / "connector")
+    assert installed["kind"] == "managed" and installed["release"] == NEW
+    assert updates.diagnostic(tmp_path / "connector", installed)["supported"] is True
+    (home / "setup.json").chmod(0o644)
+    assert updates.installation(tmp_path / "connector") is None
+
+
+def test_frozen_installation_reads_public_release_and_requires_current_executable(tmp_path, monkeypatch):
+    root = tmp_path / "release"
+    root.mkdir()
+    metadata = root / "release.json"
+    metadata.write_text(json.dumps({"revision": NEW}))
+    metadata.chmod(0o644)
+    monkeypatch.setattr(updates.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(updates.sys, "executable", str(root / "agent-control-connector"))
+    monkeypatch.delenv("AGENT_CONTROL_MANAGED_DIR", raising=False)
+    (tmp_path / "current").symlink_to(root)
+    installed = updates.installation(tmp_path)
+    assert installed["kind"] == "connector" and installed["release"] == NEW
+    assert updates.diagnostic(tmp_path, installed)["supported"] is True
+    (tmp_path / "current").unlink()
+    assert updates.installation(tmp_path) is None
+
+
+@pytest.mark.parametrize("kind", ["symlink", "directory", "fifo", "oversized", "invalid", "array", "writable"])
+def test_public_release_metadata_refuses_unsafe_or_invalid_files(tmp_path, kind):
+    path = tmp_path / "metadata.json"
+    if kind == "symlink":
+        target = tmp_path / "target.json"
+        target.write_text('{"revision":"' + NEW + '"}')
+        path.symlink_to(target)
+    elif kind == "directory":
+        path.mkdir()
+    elif kind == "fifo":
+        os.mkfifo(path)
+    else:
+        path.write_text({"oversized": ' ' * 16385, "invalid": '{', "array": '[]', "writable": '{}'}[kind])
+        if kind == "writable":
+            path.write_text('{"revision":"' + NEW + '"}')
+            path.chmod(0o666)
+    assert updates.read_release_metadata(path) == {}
 
 
 @pytest.fixture
