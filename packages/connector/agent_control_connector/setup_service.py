@@ -224,11 +224,11 @@ def prepare_owned_tools(engine):
                        env={"HOME": str(Path.home()), "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                             "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"})
     config_path = engine.connector_dir / "config.json"
-    if config_path.exists():
+    config = read_json(config_path) if config_path.exists() else {**getattr(engine, "state", {}), "profiles": ["default"]}
+    if config.get("hermesHome") and config.get("sourceSha"):
         from .chat_modes_install import chat_mode_profiles
         from .media_install import media_profiles
         from .background_install import background_profiles
-        config = read_json(config_path)
         for install in (chat_mode_profiles, media_profiles, background_profiles):
             states = install(config, install=True)
             if any(value.get("state") == "installationFailed" for value in states.values()):

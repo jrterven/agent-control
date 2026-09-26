@@ -141,6 +141,22 @@ def test_existing_hermes_update_preserves_external_source_and_home(installation)
     assert_preserved(item, history, receipts)
 
 
+def test_first_managed_boot_prepares_chat_modes_before_pairing(tmp_path):
+    import yaml
+    from agent_control_connector.hermes_chat_policy import PLUGIN_NAME
+    directory, home = tmp_path / "managed", tmp_path / "managed/hermes-home"
+    private_dir(home)
+    tools = directory / "tool-environments/default/bin/python"
+    tools.parent.mkdir(parents=True)
+    tools.write_text("fixture interpreter already prepared")
+    engine = SimpleNamespace(directory=directory, connector_dir=tmp_path / "not-paired",
+        state={"hermesHome": str(home), "sourceSha": HERMES_0212_SHA})
+    service.prepare_owned_tools(engine)
+    assert PLUGIN_NAME in yaml.safe_load((home / "config.yaml").read_text())["plugins"]["enabled"]
+    assert (home / "plugins" / PLUGIN_NAME / "installation.json").is_file()
+    assert not engine.connector_dir.exists()
+
+
 @pytest.mark.parametrize("state", ["running", "unknown"])
 def test_uncertain_operation_ledger_prevents_every_service_stop(installation, state):
     item = installation
