@@ -20,7 +20,7 @@ jobs:
             platform: linux-x86_64
           - runner: ubuntu-22.04-arm
             platform: linux-arm64
-          - runner: macos-14
+          - runner: macos-15
             platform: macos-arm64
     runs-on: ${{ matrix.runner }}
     steps:

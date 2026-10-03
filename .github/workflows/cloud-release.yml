@@ -56,7 +56,7 @@ jobs:
             platform: linux-arm64
           - runner: macos-15-intel
             platform: macos-x86_64
-          - runner: macos-14
+          - runner: macos-15
             platform: macos-arm64
     runs-on: ${{ matrix.runner }}
     steps:
