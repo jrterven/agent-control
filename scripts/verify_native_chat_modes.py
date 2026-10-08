@@ -76,10 +76,21 @@ def main():
                     with contextlib.closing(async_delegation._connect()) as jobs:
                         assert jobs.execute("PRAGMA database_list").fetchone()[2] == ""
                     record = server._sessions[sid]
+                    # Native Linux boot redirects tempfile into the retained
+                    # home. Exercise that behavior on every certification OS,
+                    # including a populated tempfile cache and a path alias.
+                    scratch = home / "cache/scratch"
+                    scratch.mkdir(parents=True, exist_ok=True)
+                    scratch_alias = home / "scratch-alias"
+                    scratch_alias.symlink_to(scratch, target_is_directory=True)
+                    for variable in ("TMPDIR", "TMP", "TEMP"):
+                        os.environ[variable] = str(scratch_alias)
+                    tempfile.tempdir = str(scratch_alias)
                     staged, uploaded = server._stage_session_file_attachment(record, raw_path="", name="upload.txt",
                         data_url="data:text/plain;base64," + base64.b64encode(b"upload-canary").decode())
                     assert uploaded and staged.read_bytes() == b"upload-canary"
-                    assert not staged.is_relative_to(home)
+                    assert not staged.resolve().is_relative_to(home.resolve())
+                    assert not list(scratch.rglob("upload.txt"))
                     record["agent"] = agent
                     assert rpc("control.session.background", stored_session_id=key)["tasks"] == []
                     # Exercise the real native worker/finalizer, not a fabricated

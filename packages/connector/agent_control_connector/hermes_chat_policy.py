@@ -13,6 +13,7 @@ from functools import wraps
 import json
 import inspect
 import logging
+import os
 import sys
 import contextlib
 import base64
@@ -28,7 +29,7 @@ MODES = ("memory_read_write", "memory_read_only", "temporary")
 LEASE_SECONDS = 300
 POLICY_VERSION = 1
 PLUGIN_NAME = "agent-control-chat-modes"
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.1.1"
 _current = ContextVar("agent_control_chat_policy", default=None)
 
 
@@ -83,6 +84,38 @@ def policy_scope(policy):
 
 def current_policy():
     return _current.get()
+
+
+def _private_upload_directory(*retained_homes):
+    """Keep explicit private uploads outside every retained Hermes home.
+
+    Hermes 0.21.6 redirects tempfile's environment and cached default into
+    HERMES_HOME/cache/scratch. An explicit, resolved parent is required here;
+    resetting the process default would also affect unrelated conversations.
+    """
+    homes = [Path(home).resolve() for home in retained_homes]
+    candidates = []
+    with contextlib.suppress(OSError):
+        candidates.append(tempfile.gettempdir())
+    if sys.platform == "darwin":
+        with contextlib.suppress(OSError, ValueError):
+            candidates.append(os.confstr("CS_DARWIN_USER_TEMP_DIR"))
+    candidates.extend(("/tmp", "/var/tmp"))
+    for candidate in candidates:
+        if not candidate:
+            continue
+        parent = Path(candidate).resolve()
+        if any(parent.is_relative_to(home) for home in homes):
+            continue
+        try:
+            directory = tempfile.TemporaryDirectory(prefix="agent-control-private-upload-", dir=parent)
+        except OSError:
+            continue
+        if any(Path(directory.name).resolve().is_relative_to(home) for home in homes):
+            directory.cleanup()
+            continue
+        return directory
+    raise RuntimeError("TEMPORARY_CHAT_UPLOAD_UNAVAILABLE")
 
 
 class ReadOnlyMemoryStore:
@@ -566,7 +599,9 @@ class NativePolicyRuntime:
                 policy.require_active()
                 with runtime.lock:
                     if policy.session_id not in runtime.attachment_dirs:
-                        directory = tempfile.TemporaryDirectory(prefix="agent-control-private-upload-")
+                        directory = _private_upload_directory(
+                            runtime.server._hermes_home, home_dir(session, "images").parent,
+                        )
                         runtime.attachment_dirs[policy.session_id] = directory
                         policy.cleanup.append(directory.cleanup)
                     return Path(runtime.attachment_dirs[policy.session_id].name) / name

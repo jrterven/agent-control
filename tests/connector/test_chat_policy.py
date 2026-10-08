@@ -9,6 +9,7 @@ import yaml
 from agent_control_connector.chat_modes_install import install_profile, plugin_source
 from agent_control_connector.hermes_chat_policy import (
     ChatPolicy, ReadOnlyMemoryStore, VolatileSqlite, constrain_agent, current_policy, policy_scope,
+    _private_upload_directory,
 )
 from agent_control_connector.storage import OperationLedger
 
@@ -65,6 +66,36 @@ def test_expiry_cannot_be_renewed_after_deadline(monkeypatch):
     monkeypatch.setattr("agent_control_connector.hermes_chat_policy.time.monotonic", lambda: policy.deadline + 1)
     with pytest.raises(RuntimeError, match="TEMPORARY_CHAT_ENDED"):
         policy.renew()
+
+
+def test_private_uploads_ignore_retained_scratch_and_aliases(tmp_path, monkeypatch):
+    import tempfile
+
+    home = tmp_path / "hermes"
+    profile = home / "profiles/personal"
+    scratch = profile / "cache/scratch"
+    scratch.mkdir(parents=True)
+    alias = tmp_path / "outside-looking-alias"
+    alias.symlink_to(scratch, target_is_directory=True)
+    for key in ("TMPDIR", "TMP", "TEMP"):
+        monkeypatch.setenv(key, str(alias))
+    monkeypatch.setattr(tempfile, "tempdir", str(alias))
+    policy = ChatPolicy("temporary", "ac_tmp_upload")
+    directory = _private_upload_directory(home, profile)
+    policy.cleanup.append(directory.cleanup)
+    path = Path(directory.name) / "upload.txt"
+    path.write_text("private-upload-canary")
+    assert not path.resolve().is_relative_to(home.resolve())
+    assert Path(directory.name).stat().st_mode & 0o777 == 0o700
+    assert not list(scratch.iterdir())
+    assert tempfile.tempdir == str(alias)
+    policy.close()
+    assert not path.exists()
+
+
+def test_private_uploads_fail_closed_without_an_external_root():
+    with pytest.raises(RuntimeError, match="TEMPORARY_CHAT_UPLOAD_UNAVAILABLE"):
+        _private_upload_directory(Path("/"))
 
 
 def test_private_operation_receipts_never_create_a_file(tmp_path):
