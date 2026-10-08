@@ -78,7 +78,19 @@ jobs:
           if-no-files-found: error
 
   mail-e2e:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux
+            browsers: chromium firefox
+            projects: --project=chromium-mobile --project=chromium-tablet --project=chromium-desktop --project=firefox-desktop
+          - runner: macos-15
+            platform: macos
+            browsers: webkit
+            projects: --project=webkit-desktop --project=webkit-mobile
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -86,13 +98,28 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium firefox webkit
-      - run: npm run test:e2e
+      - run: npx playwright install --with-deps ${{ matrix.browsers }}
+      # The live playback gate observes a real audio clock. Linux runners need
+      # an audio sink; WebKit camera streams use the native macOS media backend.
+      # Keep every browser project and camera assertion enabled on these hosts.
+      - name: Start the Linux audio backend
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pulseaudio
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=ci_audio sink_properties=device.description=CI_Audio
+          pactl set-default-sink ci_audio
+          pulseaudio --check
+          pactl list short sinks
+      - run: npm run test:e2e -- ${{ matrix.projects }}
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: mail-browser-results
-          path: test-results/playwright
+          name: browser-results-${{ matrix.platform }}
+          path: |
+            test-results/playwright
+            playwright-report
 
   image:
     needs: [verify, hermes-plugin, mail-e2e]
