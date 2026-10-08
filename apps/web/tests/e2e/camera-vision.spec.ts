@@ -6,7 +6,7 @@ test.use({ serviceWorkers: "block" });
 
 type SmokeState = {
   cameras: number; endedCameras: number; cameraStarts: string[]; microphones: number;
-  callsClosed: number; commentary: string[]; attachments: string[]; remoteAudioTracks: number;
+  callsClosed: number; commentary: string[]; attachments: string[]; remoteAudioTracks: number; playbackMuted: boolean;
 };
 type SmokeWindow = Window & { cameraSmoke: {
   state(): SmokeState; speak(text: string): number; delegate(question?: string): void;
@@ -92,6 +92,13 @@ async function mockCamera(page: Page) {
     const channels: Channel[] = [];
     const remoteContexts: AudioContext[] = [];
     const remoteTracks: MediaStreamTrack[] = [];
+    const playback: HTMLAudioElement[] = [];
+    // Observe the real playback element without replacing its audio behavior.
+    window.Audio = new Proxy(window.Audio, { construct(target, args) {
+      const audio = Reflect.construct(target, args) as HTMLAudioElement;
+      playback.push(audio);
+      return audio;
+    } });
     const renderers: (() => void)[] = [];
     let callsClosed = 0;
     let utterances = 0;
@@ -208,6 +215,7 @@ async function mockCamera(page: Page) {
         endedCameras: cameras.filter((track) => track.readyState === "ended").length,
         cameraStarts, microphones: microphones.filter((track) => track.readyState === "live").length,
         callsClosed, commentary, attachments, remoteAudioTracks: remoteTracks.filter((track) => track.readyState === "live").length,
+        playbackMuted: playback.some((audio) => audio.muted),
       }),
       speak, delegateTurn,
       delegate: (question = "Prepara un informe detallado.") => delegateTurn(speak(question)),
@@ -218,6 +226,17 @@ async function mockCamera(page: Page) {
     scene: async (value: "cup" | "notebook") => {
       summary = value === "cup" ? cupSummary : notebookSummary;
       await page.evaluate((next) => (window as SmokeWindow).cameraSmoke.scene(next), value);
+      // Canvas captureStream and video decoding use the real media clock.
+      // A virtual cooldown jump does not deliver the new frame in WebKit.
+      await page.waitForFunction((next) => {
+        const video = document.querySelector<HTMLVideoElement>(".camera-vision__inline video");
+        if (!video || video.readyState < 2) return false;
+        const canvas = document.createElement("canvas"); canvas.width = 640; canvas.height = 480;
+        const context = canvas.getContext("2d")!;
+        context.drawImage(video, 0, 0, 640, 480);
+        const [red, green] = context.getImageData(430, 260, 1, 1).data;
+        return next === "cup" ? red > 150 && green < 80 : red > 200 && green > 150;
+      }, value);
     } };
 }
 
@@ -501,9 +520,13 @@ test("turning the camera off cancels a pending spoken visual classification with
   await page.evaluate(() => (window as SmokeWindow).cameraSmoke.speak("¿Qué ves en la cámara?"));
   await page.clock.runFor(900);
   await expect.poll(() => mock.intents.length).toBe(1);
+  expect((await mediaState(page)).playbackMuted).toBe(true);
   await stopCamera(page);
+  // The gate proves silence with the real AudioContext clock. Advancing its
+  // wall-clock timeout by 3s instantly races that proof and fabricates failure.
+  await page.clock.resume();
   releaseIntent();
-  await page.clock.runFor(3_000);
+  await expect.poll(async () => (await mediaState(page)).playbackMuted).toBe(false);
   expect(mock.analyses).toHaveLength(0);
   expect(mock.prompts).toHaveLength(0);
   expect((await mediaState(page)).commentary.some((content) => content.includes("Backend agent result"))).toBe(false);

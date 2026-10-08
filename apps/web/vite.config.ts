@@ -73,6 +73,10 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
+          // The synchronous dictation hook and lazy SDK share this registry.
+          // Keep it cached independently so Rollup cannot move it into the
+          // realtime-only chunk excluded from offline startup.
+          "scribe-observer": ["./src/lib/scribeMicrophoneObserver.ts"],
           "vendor-scribe": ["./src/lib/elevenlabsScribeClient.ts"],
           "vendor-react": ["react", "react-dom", "zustand"],
           "vendor-router": ["@tanstack/react-router", "@tanstack/react-query", "@tanstack/react-virtual"],

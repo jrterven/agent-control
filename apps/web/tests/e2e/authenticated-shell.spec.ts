@@ -129,22 +129,34 @@ test.describe("shell responsive con estado autenticado determinista", () => {
     await page.screenshot({ path: `test-results/sidebar-tablet-minimum-${test.info().project.name}.png` });
   });
 
-  test("abre un chat vacío desde Ajustes con el mismo agente y espacio de trabajo", async ({ page }) => {
+  test("prepara un chat desde Ajustes con el mismo agente y lo crea solo al enviar", async ({ page }) => {
     let createCount = 0;
+    let promptCount = 0;
     await page.route("**/api/v1/sessions", async (route) => {
       expect(route.request().method()).toBe("POST");
-      expect(route.request().postDataJSON()).toEqual({ profileId: "profile-newton-e2e", workspaceId: "workspace-e2e" });
+      expect(route.request().postDataJSON()).toEqual({ profileId: "profile-newton-e2e", chatMode: "memory_read_write" });
       createCount += 1;
       await route.fulfill({ json: { ...bootstrapData.sessions[0], id: "session-new-e2e", storedSessionId: "stored-new", title: "Nueva conversación", status: "ready" } });
     });
     await page.route("**/api/v1/sessions/session-new-e2e/messages", (route) => route.fulfill({ json: { items: [] } }));
+    await page.route("**/api/v1/sessions/session-new-e2e/prompts", (route) => {
+      expect(route.request().postDataJSON().content).toBe("Primer mensaje explícito");
+      promptCount += 1;
+      return route.fulfill({ json: { operationId: "new-chat-operation", status: "accepted" } });
+    });
     await page.goto("/settings");
     if (page.viewportSize()!.width < 780) await page.getByRole("button", { name: "Abrir navegación" }).click();
     await page.locator("#left-sidebar").getByRole("button", { name: "Nuevo chat", exact: true }).click();
     await expect(page).toHaveURL(/\/chats$/);
-    await expect(page.getByRole("heading", { name: "Inicia una conversación con Newton" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "Tipo de chat" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Elegir espacio de trabajo: Sin espacio de trabajo" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Mensaje a Newton…" })).toBeEmpty();
     await expect(page.getByText("La sesión está aislada y lista para continuar.")).toHaveCount(0);
-    expect(createCount).toBe(1);
+    expect(createCount).toBe(0);
+    expect(promptCount).toBe(0);
+    await page.getByRole("textbox", { name: "Mensaje a Newton…" }).fill("Primer mensaje explícito");
+    await page.getByRole("button", { name: "Enviar mensaje", exact: true }).click();
+    await expect.poll(() => createCount).toBe(1);
+    await expect.poll(() => promptCount).toBe(1);
   });
 });

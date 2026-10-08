@@ -145,6 +145,11 @@ test("espera al equipo y abre el primer chat solo con una acción explícita", a
   await page.getByRole("button", { name: "Abrir un chat nuevo" }).click();
   await expect(page).toHaveURL(/\/chats$/);
   await expect(page.getByRole("textbox", { name: "Mensaje a Newton…" })).toBeEmpty();
-  expect(created).toBe(1);
+  await expect(page.getByRole("group", { name: "Tipo de chat" })).toBeVisible();
+  expect(created).toBe(0);
   expect(prompts).toBe(0);
+  await page.getByRole("textbox", { name: "Mensaje a Newton…" }).fill("Primer mensaje tras conectar");
+  await page.getByRole("button", { name: "Enviar mensaje", exact: true }).click();
+  await expect.poll(() => created).toBe(1);
+  await expect.poll(() => prompts).toBe(1);
 });

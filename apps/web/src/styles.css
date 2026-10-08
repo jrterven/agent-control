@@ -1136,6 +1136,13 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
   .composer.has-attachments .dictation-state { grid-row: 4; }
 }
 
+/* A keyboard-sized viewport needs the available height for writing and Stop.
+   The same navigation stays available through the top-left menu. */
+@media (max-width: 779px) and (max-height: 500px) {
+  .app-center { padding-bottom: 0; }
+  .bottom-nav { display: none; }
+}
+
 @media (max-width: 420px) {
   .top-bar { padding-inline: 10px; }
   .top-bar__identity .brand-mark { width: 34px; height: 34px; }
