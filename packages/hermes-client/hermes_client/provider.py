@@ -38,11 +38,13 @@ from .limits import (
 )
 from .normalization import EventNormalizer
 from .history import project_history_message
+from .server_requests import ServerRequestBinding, ServerRequestSnapshot, request_payload, valid_request_id
 from .compatibility import (
     AUDITED_REVISIONS as _AUDITED_REVISIONS,
     PROFILE_MANAGEMENT_METHODS as _PROFILE_MANAGEMENT_METHODS_BY_REVISION,
     CONTRACTS,
-    HERMES_0212_SHA,
+    BACKGROUND_TURN_REVISIONS,
+    SERVER_REQUEST_REVISIONS,
 )
 from .transport import (
     JsonRpcClient,
@@ -336,7 +338,7 @@ class HermesProvider(Protocol):
         name: str,
         display_name: str,
     ) -> HermesProfile: ...
-    async def delete_profile(self, name: str) -> None: ...
+    async def delete_profile(self, name: str) -> dict[str, bool] | None: ...
     async def profile_export(self, name: str, transfer_id: str) -> dict[str, Any]: ...
     async def profile_archive_read(self, transfer_id: str, offset: int, length: int) -> bytes: ...
     async def profile_import_begin(self, name: str, transfer_id: str, size: int, sha256: str) -> dict[str, Any]: ...
@@ -465,6 +467,9 @@ class HermesGatewayProvider:
             token=connection.dashboard_token,
             connect_host=connection.ws_connect_host,
             event_callback=self._on_event,
+            server_request_callback=(self._on_server_request if
+                (connection.trusted_source_sha or "").casefold() in SERVER_REQUEST_REVISIONS else None),
+            strict_params=(connection.trusted_source_sha or "").casefold() in SERVER_REQUEST_REVISIONS,
         )
         headers = (
             {"X-Hermes-Session-Token": connection.dashboard_token}
@@ -520,6 +525,10 @@ class HermesGatewayProvider:
         self._human_continuations: OrderedDict[tuple[str, str], tuple[str, int | None]] = OrderedDict()
         self._history_floors: OrderedDict[str, int] = OrderedDict()
         self._restricted_sessions: set[str] = set()
+        self._server_requests: OrderedDict[str, ServerRequestBinding] = OrderedDict()
+        self._server_request_revision = 0
+        self._server_request_snapshot_floor = 0
+        self._closed_server_requests: OrderedDict[tuple[str, str, str, SessionRoute], int] = OrderedDict()
 
     @property
     def runtime_generation(self) -> str:
@@ -634,12 +643,171 @@ class HermesGatewayProvider:
         except asyncio.CancelledError:
             raise
 
+    async def _on_server_request(self, raw: Mapping[str, Any], generation: int) -> bool:
+        if ((self.connection.trusted_source_sha or "").casefold() not in SERVER_REQUEST_REVISIONS
+                or generation != self.rpc.generation or self.event_sink is None):
+            return False
+        parsed = request_payload(raw)
+        if parsed is None:
+            return False
+        identifier, method, runtime_id, payload = parsed
+        route = self._routes.get(runtime_id)
+        if (route is None or self._route_generations.get(runtime_id) != self.runtime_generation
+                or (raw.get("params", {}).get("profile") not in (None, self.connection.profile_name))):
+            return False
+        wire_route = SessionRoute(route.gateway_id, route.profile_name, "", runtime_id)
+        if any((self.runtime_generation, identifier, method, owner) in self._closed_server_requests
+               for owner in (route, wire_route)):
+            return True  # A delayed replay cannot resurrect an acknowledged decision.
+        for key, previous in list(self._server_requests.items()):
+            if previous.generation != self.runtime_generation:
+                self._server_requests.pop(key, None)
+        previous = self._server_requests.get(identifier)
+        if previous is not None and (previous.method != method or previous.route != route
+                or {k: v for k, v in previous.payload.items() if k != "answers"}
+                != {k: v for k, v in payload.items() if k != "answers"}):
+            return False
+        if previous is None and len(self._server_requests) >= 512:
+            return False  # Never evict a still-pending human decision for another request.
+        if method == "clarify" and previous is not None:
+            incoming_answers = payload.get("answers", {})
+            previous_answers = previous.payload.get("answers", {})
+            if any(key in incoming_answers and incoming_answers[key] != value
+                   for key, value in previous_answers.items()):
+                return False
+            # A replay captured before our confirmed lock must not reopen that
+            # question in the same transport generation.
+            payload["answers"] = {**previous_answers, **incoming_answers}
+        questions = payload.get("questions", [])
+        question_ids = frozenset(question["qid"] for question in questions)
+        locked_ids = frozenset(payload.get("answers", {}))
+        binding = ServerRequestBinding(identifier, method, route, self.runtime_generation,
+                                       payload, question_ids, locked_ids)
+        projected = dict(payload)
+        if method == "clarify":
+            # Restored locks must not produce answerable controls a second time.
+            projected["questions"] = [q for q in questions if q["qid"] not in locked_ids]
+            projected["answers"] = {key: value if value is not None else ""
+                                    for key, value in payload.get("answers", {}).items()}
+        event = EventNormalizer(gateway_id=self.connection.gateway_id,
+            profile_name=self.connection.profile_name).normalize({"method": "event", "params": {
+                "type": f"{method}.request", "session_id": runtime_id, "payload": projected}})
+        if len(json.dumps(event.data, separators=(",", ":")).encode("utf-8")) > 16_384:
+            return False
+        self._server_requests[identifier] = binding
+        # Do not use srq as an event ID: a reconnect must rebind the same question
+        # to the new generation, independently of event replay deduplication.
+        event.stored_session_id = route.stored_session_id
+        self._mark_route_for_reattach(route)
+        await self._on_event(event)
+        return True
+
+    def _server_request_snapshot(self) -> ServerRequestSnapshot:
+        generation = self.runtime_generation
+        return ServerRequestSnapshot(generation, self._server_request_revision, frozenset(
+            (binding.identifier, binding.method, binding.route)
+            for binding in self._server_requests.values() if binding.generation == generation))
+
+    def _close_server_request(self, binding: ServerRequestBinding) -> None:
+        self._record_closed_server_request(binding.generation, binding.identifier, binding.method, binding.route)
+        current = self._server_requests.get(binding.identifier)
+        if (current is not None and current.generation == binding.generation
+                and current.method == binding.method and current.route == binding.route):
+            self._server_requests.pop(binding.identifier, None)
+
+    def _record_closed_server_request(self, generation: str, identifier: str, method: str, route: SessionRoute) -> None:
+        # Preserve terminal decisions across late snapshots in this connection.
+        # If bounded tombstones roll over, snapshots older than that boundary
+        # cannot be authoritative; they are ignored rather than reopening UI.
+        self._server_request_revision += 1
+        key = (generation, identifier, method, route)
+        self._closed_server_requests[key] = self._server_request_revision
+        self._closed_server_requests.move_to_end(key)
+        for old_key in list(self._closed_server_requests):
+            if old_key[0] != self.runtime_generation:
+                self._closed_server_requests.pop(old_key, None)
+        while len(self._closed_server_requests) > 4_096:
+            _, revision = self._closed_server_requests.popitem(last=False)
+            self._server_request_snapshot_floor = max(self._server_request_snapshot_floor, revision)
+
+    async def _read_interaction_snapshot(self, method: str, params: dict[str, Any]) -> tuple[Any, ServerRequestSnapshot]:
+        fences = [self._server_request_snapshot()]
+        if (self.connection.trusted_source_sha or "").casefold() in SERVER_REQUEST_REVISIONS:
+            raw = await self._read(method, params, _snapshot_fences=fences)
+        else:
+            raw = await self._read(method, params)
+        return raw, fences[-1]
+
+    async def _restore_server_requests(self, raw: Mapping[str, Any], session: HermesSession,
+                                       snapshot: ServerRequestSnapshot | None = None) -> None:
+        if (self.connection.trusted_source_sha or "").casefold() not in SERVER_REQUEST_REVISIONS:
+            return
+        snapshot = snapshot or self._server_request_snapshot()
+        if (snapshot.generation != self.runtime_generation
+                or snapshot.revision < self._server_request_snapshot_floor):
+            return
+        requests = raw.get("open_requests")
+        if not isinstance(requests, list) or len(requests) > 512 or not session.runtime_session_id:
+            return
+        seen = set()
+        for request in requests:
+            if snapshot.generation != self.runtime_generation:
+                return
+            if not isinstance(request, Mapping) or not isinstance(request.get("params"), Mapping):
+                continue
+            if request["params"].get("session_id") != session.runtime_session_id:
+                continue
+            if await self._on_server_request(request, self.rpc.generation):
+                seen.add(request.get("id"))
+            elif (valid_request_id(request.get("id")) and self.rpc.connected
+                    and request["params"].get("profile") in (None, self.connection.profile_name)):
+                await self.rpc.reject_server_request(request["id"], expected_generation=self.rpc.generation)
+        for identifier, binding in list(self._server_requests.items()):
+            if (snapshot.generation != self.runtime_generation
+                    or snapshot.revision < self._server_request_snapshot_floor):
+                return
+            if (binding.route.stored_session_id == session.stored_session_id
+                    and binding.route.runtime_session_id == session.runtime_session_id
+                    and (identifier, binding.method, binding.route) in snapshot.bindings
+                    and binding.generation == self.runtime_generation and identifier not in seen):
+                await self._on_event(NormalizedEvent.create(type="request.cancel",
+                    gateway_id=self.connection.gateway_id, profile_name=self.connection.profile_name,
+                    runtime_session_id=binding.route.runtime_session_id,
+                    data={"id": identifier, "method": binding.method}))
+
+    def _server_request_for(self, route: SessionRoute, identifier: str, method: str) -> ServerRequestBinding:
+        binding = self._server_requests.get(identifier)
+        if (binding is None or binding.method != method or binding.route != route
+                or binding.generation != self.runtime_generation):
+            raise JsonRpcError(4001, "Question is not pending for this conversation")
+        return binding
+
     async def _on_event(self, event: NormalizedEvent) -> None:
         # A runtime id is only meaningful inside this exact provider
         # connection generation.  Persist the opaque generation alongside the
         # route so an eight-character id reused after restart cannot bind to a
         # stale Control session.
         event.runtime_generation = self.runtime_generation
+        if event.type == "request.cancel":
+            identifier = event.data.get("id")
+            binding = self._server_requests.get(identifier) if isinstance(identifier, str) else None
+            if (binding is None or binding.generation != self.runtime_generation
+                    or event.runtime_session_id != binding.route.runtime_session_id
+                    or event.data.get("method") != binding.method):
+                if (valid_request_id(identifier) and isinstance(event.data.get("method"), str)
+                        and event.data["method"] in {"approval", "clarify"}
+                        and isinstance(event.runtime_session_id, str) and 0 < len(event.runtime_session_id) <= 255):
+                    # A cancel can follow the RPC response before its caller
+                    # has restored the snapshot or bound a resumed runtime.
+                    # Retain only its wire identity. It grants no response
+                    # authority and cannot expire a different owned card.
+                    self._record_closed_server_request(self.runtime_generation, identifier, event.data["method"],
+                        SessionRoute(self.connection.gateway_id, self.connection.profile_name, "", event.runtime_session_id))
+                return
+            self._close_server_request(binding)
+            event.type = f"{binding.method}.expire"
+            event.stored_session_id = binding.route.stored_session_id
+            event.data = {"request_id": identifier}
         self._project_message_turn(event)
         previous_gateway_epoch = self._gateway_epoch
         if (
@@ -695,7 +863,7 @@ class HermesGatewayProvider:
                 event.replay_epoch or self._gateway_epoch,
             )
             self._cursors.move_to_end(cursor_key)
-        native = (self.connection.trusted_source_sha or "").casefold() == HERMES_0212_SHA
+        native = (self.connection.trusted_source_sha or "").casefold() in BACKGROUND_TURN_REVISIONS
         if native and route is not None:
             if event.type in {"message.start", "message.started"}:
                 self._mark_route_for_reattach(route)
@@ -720,7 +888,7 @@ class HermesGatewayProvider:
         Missing starts/reconnects must remain history-correlated and cannot
         settle an arbitrary pending prompt downstream.
         """
-        if (self.connection.trusted_source_sha or "").casefold() != HERMES_0212_SHA or not event.type.startswith(("message.", "tool.", "subagent.")):
+        if (self.connection.trusted_source_sha or "").casefold() not in BACKGROUND_TURN_REVISIONS or not event.type.startswith(("message.", "tool.", "subagent.")):
             return
         turn: dict[str, str] = {"correlation": "history"}
         event.data["controlTurn"] = turn
@@ -788,7 +956,7 @@ class HermesGatewayProvider:
         the ledger mentions it. Only a route previously used by this transport
         may be kept attached. Incomplete/stale scans cannot remove a latch.
         """
-        if (self.connection.trusted_source_sha or "").casefold() != HERMES_0212_SHA:
+        if (self.connection.trusted_source_sha or "").casefold() not in BACKGROUND_TURN_REVISIONS:
             return
         try:
             observed = datetime.fromisoformat(str(snapshot["observedAt"]).replace("Z", "+00:00"))
@@ -816,7 +984,7 @@ class HermesGatewayProvider:
 
     def _observe_history_continuations(self, stored: str, messages: list[dict[str, Any]]) -> None:
         """Release a human latch only with a new, exact durable prompt+answer."""
-        if (self.connection.trusted_source_sha or "").casefold() != HERMES_0212_SHA:
+        if (self.connection.trusted_source_sha or "").casefold() not in BACKGROUND_TURN_REVISIONS:
             return
         ids = [message.get("id") for message in messages]
         if all(type(identifier) is int and identifier >= 0 for identifier in ids):
@@ -908,6 +1076,7 @@ class HermesGatewayProvider:
             reconciliation_reason: str | None = None
             attached_route: SessionRoute | None = None
             try:
+                resumed_snapshot = self._server_request_snapshot()
                 resumed_raw = await self.rpc.request(
                     "session.resume",
                     {
@@ -946,7 +1115,7 @@ class HermesGatewayProvider:
                     self._mark_route_for_reattach(attached_route)
                 else:
                     self._clear_route_for_reattach(route.stored_session_id)
-                await self._emit_resumed_interactions(resumed_raw, resumed)
+                await self._emit_resumed_interactions(resumed_raw, resumed, resumed_snapshot)
 
                 if attached_route.runtime_session_id != previous_runtime_id:
                     self._cursors.pop(previous_runtime_id, None)
@@ -956,6 +1125,7 @@ class HermesGatewayProvider:
                     # replay boundary for it. Durable history is authoritative.
                     reconciliation_reason = "cursor_unavailable"
                 else:
+                    replay_snapshot = self._server_request_snapshot()
                     raw = await self.rpc.request(
                         "session.events.since",
                         {
@@ -978,6 +1148,7 @@ class HermesGatewayProvider:
                             reconciliation_reason = "epoch_changed"
                         if epoch:
                             self._gateway_epoch = epoch
+                        await self._restore_server_requests(raw, resumed, replay_snapshot)
                         if reconciliation_reason != "epoch_changed":
                             for item in (
                                 raw.get("events", [])
@@ -1025,10 +1196,15 @@ class HermesGatewayProvider:
                     )
                 )
 
-    async def _read(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    async def _read(self, method: str, params: dict[str, Any] | None = None, *,
+                    _snapshot_fences: list[ServerRequestSnapshot] | None = None) -> Any:
         await self._ensure_connected()
+        async def request():
+            if _snapshot_fences is not None:
+                _snapshot_fences.append(self._server_request_snapshot())
+            return await self.rpc.request(method, params)
         return await reconnecting_call(
-            lambda: self.rpc.request(method, params), self._reconnect
+            request, self._reconnect
         )
 
     async def _reconnect(self) -> None:
@@ -1398,7 +1574,8 @@ class HermesGatewayProvider:
         # In this audited runtime, deleting a serving profile skips its own PID
         # and removes its home. Probe the process's current profile, not the
         # user's sticky active selection or this adapter's routed profile.
-        if (self.connection.trusted_source_sha or "").casefold() != HERMES_0212_SHA:
+        contract = CONTRACTS.get((self.connection.trusted_source_sha or "").casefold())
+        if not contract or not contract.default_management_server:
             return
         try:
             raw = await bounded_json_request(
@@ -1412,7 +1589,7 @@ class HermesGatewayProvider:
         except Exception as exc:
             raise ProfileManagementServerRequired() from exc
 
-    async def delete_profile(self, name: str) -> None:
+    async def delete_profile(self, name: str) -> dict[str, bool] | None:
         profile_name = _bounded_text(
             name,
             label="profile name",
@@ -1426,6 +1603,9 @@ class HermesGatewayProvider:
         response = _bounded_profile_mutation_response(raw, label="profile deletion")
         if response.get("path") is not None:
             _bounded_remote_path(response["path"], label="deleted profile")
+        if ((self.connection.trusted_source_sha or "").casefold() in SERVER_REQUEST_REVISIONS
+                and (response.get("settlement_pending") is True or response.get("identity_settled") is False)):
+            return {"identity_settlement_pending": True}
 
     async def _cleanup_profile_transfer_file(self, remote_path: str) -> bool:
         try:
@@ -1864,7 +2044,7 @@ class HermesGatewayProvider:
         self._remember_route(
             SessionRoute(self.connection.gateway_id, self.connection.profile_name, session.stored_session_id, session.runtime_session_id)
         )
-        if (self.connection.trusted_source_sha or "").casefold() == HERMES_0212_SHA:
+        if (self.connection.trusted_source_sha or "").casefold() in BACKGROUND_TURN_REVISIONS:
             # A newly created native session is not persisted until its first
             # prompt; a REST 404 here is expected, not a history baseline.
             self._history_floors[session.stored_session_id] = 0
@@ -1879,7 +2059,7 @@ class HermesGatewayProvider:
 
     async def resume_session(self, stored_session_id: str) -> HermesSession:
         try:
-            raw = await self._read(
+            raw, snapshot = await self._read_interaction_snapshot(
                 "session.resume",
                 {
                     # Official 0.20.5/0.20.6 contract uses session_id for the
@@ -1901,7 +2081,7 @@ class HermesGatewayProvider:
                         session.runtime_session_id,
                     )
                 )
-            await self._emit_resumed_interactions(raw, session)
+            await self._emit_resumed_interactions(raw, session, snapshot)
             return session
         except (ConnectionError, OSError, TimeoutError):
             if self.api is None or stored_session_id.startswith(("ac_tmp_", "ac_ro_")) or stored_session_id in self._restricted_sessions:
@@ -1930,7 +2110,7 @@ class HermesGatewayProvider:
             )
 
     async def _emit_resumed_interactions(
-        self, raw: Any, session: HermesSession
+        self, raw: Any, session: HermesSession, snapshot: ServerRequestSnapshot | None = None
     ) -> None:
         """Replay official pending gates returned by ``session.resume``.
 
@@ -1940,6 +2120,9 @@ class HermesGatewayProvider:
         """
 
         if self.event_sink is None or not isinstance(raw, Mapping):
+            return
+        if (self.connection.trusted_source_sha or "").casefold() in SERVER_REQUEST_REVISIONS:
+            await self._restore_server_requests(raw, session, snapshot)
             return
         normalizer = EventNormalizer(
             gateway_id=self.connection.gateway_id,
@@ -2117,7 +2300,7 @@ class HermesGatewayProvider:
         # may mean Hermes already started the turn on this transport.
         self._mark_route_for_reattach(route)
         continuation_key = (route.stored_session_id, operation_id)
-        if (self.connection.trusted_source_sha or "").casefold() == HERMES_0212_SHA:
+        if (self.connection.trusted_source_sha or "").casefold() in BACKGROUND_TURN_REVISIONS:
             self._human_continuations[continuation_key] = (
                 hashlib.sha256(prompt.encode()).hexdigest(), self._history_floors.pop(route.stored_session_id, None))
             self._trim_continuations()
@@ -2134,7 +2317,7 @@ class HermesGatewayProvider:
                     # running. Queue this explicit human request behind a
                     # notification turn instead of applying the default busy
                     # redirect/interrupt mode; idle dispatch is unchanged.
-                    **({"queued": True} if (self.connection.trusted_source_sha or "").casefold() == HERMES_0212_SHA else {}),
+                    **({"queued": True} if (self.connection.trusted_source_sha or "").casefold() in BACKGROUND_TURN_REVISIONS else {}),
                 },
                 expected_generation=rpc_generation,
             )
@@ -2294,6 +2477,20 @@ class HermesGatewayProvider:
             raise ValueError("Unsupported Hermes approval choice")
         if not request_id or len(request_id) > 200:
             raise ValueError("Invalid Hermes approval request id")
+        if (self.connection.trusted_source_sha or "").casefold() in SERVER_REQUEST_REVISIONS:
+            binding = self._server_request_for(route, request_id, "approval")
+            if (choice not in binding.payload.get("choices", [])
+                    or (choice in {"session", "always"} and
+                        (binding.payload.get("allow_session") is False or binding.payload.get("smart_denied") is True))
+                    or (choice == "always" and binding.payload.get("allow_permanent") is False)):
+                raise ValueError("Approval choice is not offered by this request")
+            raw = await self._interaction_request(route, "request.answer",
+                {"id": request_id, "result": {"choice": choice}},
+                expected_runtime_generation=expected_runtime_generation or binding.generation)
+            if not isinstance(raw, Mapping) or raw.get("status") not in {"ok", "expired"}:
+                raise UpstreamPayloadError("Hermes approval response is invalid")
+            self._close_server_request(binding)
+            return {"resolved": 1 if raw["status"] == "ok" else 0}
         raw = await self._interaction_request(
             route,
             "approval.respond",
@@ -2320,6 +2517,42 @@ class HermesGatewayProvider:
     ) -> dict[str, Any]:
         if not request_id or len(request_id) > 200:
             raise ValueError("Invalid Hermes clarification request id")
+        if (self.connection.trusted_source_sha or "").casefold() in SERVER_REQUEST_REVISIONS:
+            binding = self._server_request_for(route, request_id, "clarify")
+            available = binding.question_ids - binding.locked_ids
+            if question_id is None and len(available) == 1:
+                question_id = next(iter(available))
+            if question_id not in available:
+                raise JsonRpcError(4001, "Question is not pending for this conversation")
+            if (not isinstance(answer, (str, list)) or
+                    (isinstance(answer, list) and (len(answer) > 100 or
+                        any(not isinstance(item, str) or len(item) > 1_000 for item in answer)))):
+                raise ValueError("Invalid clarification answer")
+            # Native contract-8 stores a string per qid; Hermes decodes the
+            # JSON array for multi-select just as its own Desktop does.
+            encoded = json.dumps(answer, ensure_ascii=False) if isinstance(answer, list) else answer
+            if len(encoded) > 10_000:
+                raise ValueError("Clarification answer is too large")
+            raw = await self._interaction_request(route, "clarify.lock", {
+                "request_id": request_id, "question_id": question_id, "answer": encoded},
+                expected_runtime_generation=expected_runtime_generation or binding.generation)
+            if not isinstance(raw, Mapping) or raw.get("status") not in {"ok", "expired"}:
+                raise UpstreamPayloadError("Hermes clarification response is invalid")
+            remaining = raw.get("remaining", [])
+            if (not isinstance(remaining, list) or len(remaining) > len(available)
+                    or any(not isinstance(item, str) for item in remaining)
+                    or len(set(remaining)) != len(remaining)
+                    or not set(remaining).issubset(available - {question_id})):
+                raise UpstreamPayloadError("Hermes clarification remaining list is invalid")
+            if raw["status"] == "expired" or not remaining:
+                self._close_server_request(binding)
+            else:
+                current = self._server_requests.get(request_id)
+                if (current is not None and current.generation == binding.generation
+                        and current.method == binding.method and current.route == binding.route):
+                    current.locked_ids |= binding.question_ids - frozenset(remaining)
+                    current.payload["answers"] = {**current.payload.get("answers", {}), question_id: encoded}
+            return {"status": raw["status"], "remaining": list(remaining)}
         params: dict[str, Any] = {
             "request_id": request_id,
             "answer": answer,
@@ -3017,10 +3250,14 @@ class HermesGatewayProvider:
         )
 
     async def replay_since(self, route: SessionRoute, last_seen: int) -> dict[str, Any]:
-        return await self._read(
+        raw, snapshot = await self._read_interaction_snapshot(
             "session.events.since",
             {"session_id": route.runtime_session_id, "last_seen": last_seen},
         )
+        if isinstance(raw, Mapping):
+            await self._restore_server_requests(raw, HermesSession(
+                route.stored_session_id, route.runtime_session_id, None, "idle"), snapshot)
+        return raw
 
     async def close(self) -> None:
         self._closed = True
@@ -3157,6 +3394,9 @@ class HermesGatewayProvider:
             isinstance(raw.get(field), Mapping) and bool(raw.get(field))
             for field in ("pending_approval", "pending_clarify")
         )
+        if (self.connection.trusted_source_sha or "").casefold() in SERVER_REQUEST_REVISIONS:
+            pending_human_gate = pending_human_gate or bool(
+                isinstance(raw.get("open_requests"), list) and raw["open_requests"])
         active_turn = (
             raw.get("running") is True
             or (isinstance(raw.get("inflight"), Mapping) and bool(raw.get("inflight")))

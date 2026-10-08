@@ -33,7 +33,7 @@ from .media_install import media_profiles
 from .background_install import background_profiles
 from .chat_modes_install import chat_mode_profiles
 from .background_tasks import retired_profile, snapshot as background_snapshot, unavailable as background_unavailable
-from hermes_client.compatibility import HERMES_0212_SHA, profile_contract_supports
+from hermes_client.compatibility import HERMES_0216_SHA, HERMES_CONNECTOR_REVISIONS, profile_contract_supports
 from .profile_transfer import ProfileImportManagementServerRequired, ProfileImportRefused, ProfileTransfers, TRANSFER_OPERATIONS
 from .hermes_media_plugin import queue_directory, validate_policy
 from .visual_media import acknowledge as acknowledge_media, next_publication, profile_home, fetch_image, normalize_image
@@ -169,7 +169,7 @@ class ConnectorRuntime:
         await self._forget_deleted_profile(name)
 
     def _background_snapshot(self, profile: str, stored_session_id: str | None = None) -> dict:
-        if self.config.get("sourceSha") != HERMES_0212_SHA:
+        if self.config.get("sourceSha") not in HERMES_CONNECTOR_REVISIONS:
             return background_unavailable()
         try:
             if stored_session_id is None:
@@ -184,7 +184,7 @@ class ConnectorRuntime:
     def _save_media_policy(self, profiles=None):
         for profile in profiles or self.config["profiles"]:
             try:
-                if (self.config.get("sourceSha") == HERMES_0212_SHA
+                if (self.config.get("sourceSha") in HERMES_CONNECTOR_REVISIONS
                         and retired_profile(Path(self.config["hermesHome"]), profile) is not None):
                     continue
                 home = profile_home(Path(self.config["hermesHome"]), profile)
@@ -403,7 +403,7 @@ class ConnectorRuntime:
             else:
                 validate_arguments(operation, args, kwargs)
             if operation in TRANSFER_OPERATIONS:
-                if not self.profile_transfer_supported or self.config.get("sourceSha") != HERMES_0212_SHA:
+                if not self.profile_transfer_supported or self.config.get("sourceSha") not in HERMES_CONNECTOR_REVISIONS:
                     raise ValueError("INVALID_OPERATION")
                 if operation == "profile_export":
                     name = args[0] if args else kwargs.get("name")
@@ -444,9 +444,9 @@ class ConnectorRuntime:
                 if operation == "delete_profile" and previous is None and args[0] not in self.providers:
                     raise ValueError("INVALID_OPERATION")
                 if (operation == "delete_profile" and previous is None
-                        and self.config.get("sourceSha") == HERMES_0212_SHA):
+                        and self.config.get("sourceSha") in HERMES_CONNECTOR_REVISIONS):
                     await provider.assert_default_management_server()
-                if (self.config.get("sourceSha") == HERMES_0212_SHA
+                if (self.config.get("sourceSha") in HERMES_CONNECTOR_REVISIONS
                         and operation in {"delete_profile", "delete_session"}
                         and previous is None):
                     target_profile = args[0] if operation == "delete_profile" else profile
@@ -496,6 +496,12 @@ class ConnectorRuntime:
                 result = await getattr(provider, operation)(*args, **kwargs)
             if operation == "delete_profile":
                 await self._confirm_profile_deleted(provider, args[0])
+                # A logically deleted 0.21.6 profile may still be settling its
+                # remote identity. Preserve only that neutral warning bit after
+                # proving local absence; never ship upstream details or retry it.
+                result = ({"identity_settlement_pending": True}
+                    if self.config.get("sourceSha") == HERMES_0216_SHA
+                    and isinstance(result, dict) and result.get("identity_settlement_pending") is True else None)
             if operation in {"create_profile", "profile_import_finish"}:
                 name = kwargs["name"] if operation == "create_profile" else result.name
                 if result.name != name:
@@ -524,7 +530,7 @@ class ConnectorRuntime:
             if operation == "capabilities":
                 result = replace(result, features=result.features | {"connector.historyPageV1"})
                 if (self.profile_transfer_supported
-                        and self.config.get("sourceSha") == HERMES_0212_SHA
+                        and self.config.get("sourceSha") in HERMES_CONNECTOR_REVISIONS
                         and profile_contract_supports(self.config.get("sourceSha"), result.version, "profiles.transfer")
                         and {"profiles.export", "profiles.import", "profiles.transfer"} <= result.methods):
                     result = replace(result, features=(result.features - {"connector.profileTransferV1", "connector.profileTransferV2"}) | {"connector.profileTransferV3"})

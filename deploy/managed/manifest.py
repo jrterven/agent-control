@@ -54,7 +54,8 @@ def create_manifest(root: Path, revision: str, platform: str, *, extras: dict | 
     if not re.fullmatch("[a-f0-9]{40}", revision) or platform not in PINS["python"]:
         raise ValueError("Invalid runtime release/platform")
     files = file_inventory(root)
-    required = {"python/bin/python3", "hermes/pyproject.toml", "hermes/uv.lock", "bin/agent-control-setup", "build-provenance.json", "licenses.json"}
+    required = {"python/bin/python3", "hermes/pyproject.toml", "hermes/uv.lock", "hermes/install-stamp.json",
+                "manifest.json", "bin/agent-control-setup", "build-provenance.json", "licenses.json"}
     if not required <= files.keys():
         raise ValueError("Runtime is incomplete")
     if (root / "build-provenance.json").stat().st_size > 16_384:
@@ -63,11 +64,27 @@ def create_manifest(root: Path, revision: str, platform: str, *, extras: dict | 
     for key, expected in {"release": revision, "platform": platform, "hermesSourceSha": PINS["hermesSourceSha"], "pythonVersion": PINS["pythonVersion"]}.items():
         if provenance.get(key) != expected:
             raise ValueError("Runtime provenance does not match requested release")
+    for name in ("hermes/install-stamp.json", "manifest.json"):
+        if (root / name).stat().st_size > 16_384:
+            raise ValueError("Hermes runtime identity exceeds size limit")
+    stamp = json.loads((root / "hermes/install-stamp.json").read_text())
+    if not isinstance(stamp, dict) or any(stamp.get(key) != expected for key, expected in {
+        "commit": PINS["hermesSourceSha"], "baseVersion": PINS["hermesVersion"],
+        "updateMechanism": "external", "payload": "runtime", "dirty": False,
+    }.items()):
+        raise ValueError("Hermes runtime identity or update ownership is invalid")
+    layout = json.loads((root / "manifest.json").read_text())
+    if not isinstance(layout, dict) or any(layout.get(key) != expected for key, expected in {
+        "repo": "hermes", "venv": "python", "store": "pm-store",
+    }.items()):
+        raise ValueError("Hermes runtime dependency layout is invalid")
     if extras is None and (root / "extras-catalog.json").exists():
         if (root / "extras-catalog.json").stat().st_size > 16_384:
             raise ValueError("Managed extra catalog exceeds size limit")
         extras = json.loads((root / "extras-catalog.json").read_text())
-    value = {"schemaVersion": 1, "dataSchemaVersion": 1, "release": revision, "platform": platform,
+    # Hermes 0.21.6 changes state.db 30→31 and the FTS layout 2→3. Restoring
+    # only the old executable is not an audited rollback of these writes.
+    value = {"schemaVersion": 1, "dataSchemaVersion": 2, "release": revision, "platform": platform,
              "hermesSourceSha": PINS["hermesSourceSha"], "hermesVersion": PINS["hermesVersion"],
              "pythonVersion": PINS["pythonVersion"], "entrypoint": "bin/agent-control-setup", "files": files}
     if extras is not None:

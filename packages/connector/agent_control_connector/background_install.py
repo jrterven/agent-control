@@ -9,7 +9,7 @@ import subprocess
 from uuid import uuid4
 
 import yaml
-from hermes_client.compatibility import HERMES_0212_SHA
+from hermes_client.compatibility import HERMES_0212_SHA, HERMES_0216_SHA, HERMES_CONNECTOR_REVISIONS
 
 from .hermes_background_plugin import DELIVERY_SHIM, PLUGIN_NAME, PLUGIN_VERSION, disabled, process_identity, string_list
 from .background_tasks import retired_profile
@@ -32,7 +32,9 @@ def background_self_test() -> None:
         raise ValueError("Background opt-out validation failed")
 
 
-def install_profile(home: Path) -> dict:
+def install_profile(home: Path, source_sha=HERMES_0212_SHA) -> dict:
+    if source_sha not in HERMES_CONNECTOR_REVISIONS:
+        raise ValueError("Unsupported background runtime")
     path = home / "config.yaml"
     original = _read(path) if path.exists() else b"{}"
     config = yaml.safe_load(original) or {}
@@ -75,8 +77,8 @@ def install_profile(home: Path) -> dict:
             known.append("delegation")
     changed = (yaml.safe_load(original) or {}) != config
     receipt = json.loads(_read(manifest)) if manifest.exists() else {}
-    if receipt.get("sha256") != digest or receipt.get("sourceSha") != HERMES_0212_SHA or changed:
-        receipt = {"version": PLUGIN_VERSION, "sha256": digest, "sourceSha": HERMES_0212_SHA,
+    if receipt.get("sha256") != digest or receipt.get("sourceSha") != source_sha or changed:
+        receipt = {"version": PLUGIN_VERSION, "sha256": digest, "sourceSha": source_sha,
             "installationId": uuid4().hex}
     if not entry.exists() or _read(entry) != source:
         _write(entry, source)
@@ -94,10 +96,10 @@ def install_profile(home: Path) -> dict:
         if (path.exists() and _read(path) != original) or (not path.exists() and original != b"{}"):
             raise ValueError("Hermes configuration changed during background installation")
         _write(path, yaml.safe_dump(config, sort_keys=False, allow_unicode=True).encode())
-    return probe_profile(home)
+    return probe_profile(home, source_sha)
 
 
-def probe_profile(home: Path) -> dict:
+def probe_profile(home: Path, source_sha=HERMES_0212_SHA) -> dict:
     installation = home / "plugins" / PLUGIN_NAME / "installation.json"
     path = home / "config.yaml"
     config = yaml.safe_load(_read(path)) if path.exists() else {}
@@ -106,7 +108,7 @@ def probe_profile(home: Path) -> dict:
     expected = hashlib.sha256(plugin_source()).hexdigest()
     try:
         receipt = json.loads(_read(installation))
-        if (receipt.get("sha256") != expected or receipt.get("sourceSha") != HERMES_0212_SHA
+        if (receipt.get("sha256") != expected or receipt.get("sourceSha") != source_sha
                 or hashlib.sha256(_read(installation.with_name("__init__.py"))).hexdigest() != expected):
             return {"state": "updateRequired"}
     except (OSError, ValueError):
@@ -118,11 +120,13 @@ def probe_profile(home: Path) -> dict:
                 and type(pid) is int and pid > 1):
             os.kill(pid, 0)
             delivery_ready = (
-                runtime.get("profileDeliveryMode") == "tui-scoped"
+                source_sha == HERMES_0212_SHA
+                and runtime.get("profileDeliveryMode") == "tui-scoped"
                 and runtime.get("profileDeliveryShim") == DELIVERY_SHIM
             ) or (
-                runtime.get("profileDeliveryMode") == "native-gateway"
+                runtime.get("profileDeliveryMode") in {"native-gateway", "native-tui"}
                 and runtime.get("profileDeliveryShim") is None
+                and (runtime.get("profileDeliveryMode") != "native-tui" or source_sha == HERMES_0216_SHA)
             )
             if runtime.get("processIdentity") == process_identity(pid) and delivery_ready:
                 return {"state": "ready" if runtime.get("delegationAvailable") is True else "disabled",
@@ -133,7 +137,7 @@ def probe_profile(home: Path) -> dict:
 
 
 def background_profiles(config: dict, *, install=False) -> dict:
-    if config.get("sourceSha") != HERMES_0212_SHA:
+    if config.get("sourceSha") not in HERMES_CONNECTOR_REVISIONS:
         return {profile: {"state": "unsupportedRuntime"} for profile in config["profiles"]}
     result = {}
     for profile in config["profiles"]:
@@ -142,7 +146,7 @@ def background_profiles(config: dict, *, install=False) -> dict:
                 result[profile] = {"state": "retired"}
                 continue
             home = profile_home(Path(config["hermesHome"]), profile)
-            result[profile] = install_profile(home) if install else probe_profile(home)
+            result[profile] = install_profile(home, config["sourceSha"]) if install else probe_profile(home, config["sourceSha"])
         except (OSError, ValueError, yaml.YAMLError):
             result[profile] = {"state": "installationFailed" if install else "unavailable"}
     return result

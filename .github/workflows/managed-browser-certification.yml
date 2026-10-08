@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       - name: Build pinned browser and verify native sandboxed blank page
         run: python deploy/managed/extras/build.py --revision "$GITHUB_SHA" --platform '${{ matrix.platform }}' --output dist/browser --cache "$RUNNER_TEMP/browser-cache"
       - uses: actions/upload-artifact@v4

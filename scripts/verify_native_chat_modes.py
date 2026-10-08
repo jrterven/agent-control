@@ -13,6 +13,8 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 
 def main():
@@ -80,7 +82,47 @@ def main():
                     assert not staged.is_relative_to(home)
                     record["agent"] = agent
                     assert rpc("control.session.background", stored_session_id=key)["tasks"] == []
+                    # Exercise the real native worker/finalizer, not a fabricated
+                    # ledger. Its only runner is local and performs no model calls.
+                    handle = async_delegation.dispatch_async_delegation_batch(
+                        goals=["private-goal-canary"], context="private-context-canary", toolsets=[],
+                        role="general", model=None, session_key=key, parent_session_id=key,
+                        runner=lambda: {"results": [{"task_index": 0, "status": "completed", "summary": "private-result-canary"}]})
+                    assert handle["status"] == "dispatched", handle
+                    delegation_id = handle["delegation_id"]
+                    deadline = time.monotonic() + 10
+                    while time.monotonic() < deadline:
+                        task = async_delegation.get_durable_delegation(delegation_id)
+                        if task and task["state"] == "completed":
+                            break
+                        time.sleep(.01)
+                    assert task and task["state"] == "completed", task
+                    # Native compression publication must retain its child in RAM
+                    # and attach the same restrictions before any follow-up turn.
+                    child = "private-compression-child"
+                    db.publish_compression_child(parent_session_id=key, child_session_id=child,
+                        source="cli", messages=[{"role": "user", "content": "private-compression-canary"}],
+                        require_compression_lease=False)
+                    assert runtime.policy(child) is policy
+                    assert db.get_messages(child)[0]["content"] == "private-compression-canary"
+                    record["agent"].session_id = child
+                    server._sync_session_key_after_compress(sid, record)
+                    assert record["session_key"] == key
             if mode == "temporary":
+                # A fresh thread has no inherited policy. Native lifecycle/poller
+                # entry must bind it from the session before recovery claims open a DB.
+                def deliver_from_native_scope():
+                    with server._session_profile_runtime_scope(record):
+                        with contextlib.closing(async_delegation._connect()) as jobs:
+                            assert jobs.execute("PRAGMA database_list").fetchone()[2] == ""
+                        event = {"type": "async_delegation", "delegation_id": delegation_id,
+                                 "parent_session_id": key, "session_key": key}
+                        claim = async_delegation.claim_event_delivery(event, "isolated-smoke")
+                        assert claim
+                        async_delegation.complete_event_delivery(event, claim)
+                        assert async_delegation.claim_event_delivery(event, "again") is None
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    executor.submit(deliver_from_native_scope).result(timeout=10)
                 rpc("control.session.renew", session_id=key)
                 assert rpc("control.chat_modes")["activeTemporary"] == 1
                 rpc("control.session.close", session_id=key)
@@ -89,13 +131,18 @@ def main():
                 assert not staged.exists()
                 assert key not in runtime.databases
                 assert rpc("control.chat_modes")["activeTemporary"] == 0
+                assert async_delegation._persist_completion({"delegation_id": delegation_id,
+                    "parent_session_id": key, "session_key": key}, {"summary": "private-late-canary"}) is False
                 for path in home.rglob("*.db"):
                     with sqlite3.connect(path) as persisted:
-                        assert "private-transcript-canary" not in "\n".join(persisted.iterdump())
+                        dump = "\n".join(persisted.iterdump())
+                        for canary in ("private-transcript-canary", "private-goal-canary", "private-result-canary",
+                                       "private-compression-canary", "private-late-canary"):
+                            assert canary not in dump, (canary, path)
             else:
                 server._close_session_by_id(sid)
         assert memory.read_text() == "shared-memory-canary"
-        print("Native chat policy verified: shared recall, blocked memory writes, volatile transcript/jobs, upload cleanup, revoked lease.")
+        print("Native chat policy verified: shared recall, blocked memory writes, volatile transcript/jobs, native worker/compression/delivery, upload cleanup, revoked lease and late completion.")
 
 
 if __name__ == "__main__":

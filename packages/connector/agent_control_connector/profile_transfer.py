@@ -17,7 +17,7 @@ import tarfile
 from typing import Any
 import httpx
 
-from hermes_client.compatibility import HERMES_0212_SHA
+from hermes_client.compatibility import HERMES_CONNECTOR_REVISIONS
 from hermes_client.provider import ProfileManagementServerRequired
 from hermes_client.types import HermesProfile
 
@@ -267,7 +267,7 @@ class ProfileTransfers:
         sessions = await provider.list_sessions()
         if not provider.session_inventory_complete or any(session.status.casefold() in ACTIVE for session in sessions):
             raise ValueError("Profile has active or uncertain work")
-        if self.runtime.config.get("sourceSha") == HERMES_0212_SHA:
+        if self.runtime.config.get("sourceSha") in HERMES_CONNECTOR_REVISIONS:
             evidence = await asyncio.to_thread(self.runtime._background_snapshot, name)
             if (evidence.get("complete") is not True or type(evidence.get("activeCount")) is not int
                     or type(evidence.get("pendingDeliveryCount")) is not int or evidence["activeCount"] != 0

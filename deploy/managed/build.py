@@ -97,22 +97,41 @@ LAUNCHER = '''#!/bin/sh
 set -eu
 release_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 export AGENT_CONTROL_RELEASE_ROOT="$release_root"
-export PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1
+export PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 HERMES_DISABLE_LAZY_INSTALLS=1
 export PYTHONPATH="$release_root/connector:$release_root/hermes"
-export SSL_CERT_FILE="$release_root/python/lib/python3.12/site-packages/certifi/cacert.pem"
 unset PYTHONHOME PYTHONSTARTUP
+SSL_CERT_FILE=$("$release_root/python/bin/python3" -I -B -c 'import certifi; print(certifi.where())')
+export SSL_CERT_FILE
 exec "$release_root/python/bin/python3" -B -m agent_control_connector.setup_engine "$@"
 '''
+
+
+def stamp_runtime(root: Path, target: str, env: dict) -> None:
+    """Declare the sealed dependency layout and external update owner to Hermes PM."""
+    stamp_env = {**env, "HERMES_DESKTOP_VARIANT": "runtime", "HERMES_PAYLOAD_TAG": "v" + PINS["hermesVersion"]}
+    stamp_env.pop("HERMES_BUILD_COMMIT", None)
+    invoke(root / "python/bin/python3", "-B", root / "hermes/scripts/write_install_stamp.py",
+           "--output", root / "hermes/install-stamp.json", "--commit", PINS["hermesSourceSha"],
+           "--branch", "v" + PINS["hermesVersion"], "--base-version", PINS["hermesVersion"],
+           "--distance", "0", "--source", "ci", "--update-mechanism", "external", env=stamp_env, cwd=root / "hermes")
+    # This is Hermes PM's payload manifest, separate from our signed inventory.
+    # Every path is relative so activation still works after relocation. Leaving
+    # PM's tool store separate prevents it from treating the base interpreter as
+    # an uncommitted environment and attempting an online dependency bootstrap.
+    layout = {"schemaVersion": 1, "repo": "hermes", "venv": "python", "store": "pm-store",
+              "target": target, "runtime": {"storePython": "python/bin/python3"}}
+    (root / "manifest.json").write_text(json.dumps(layout, sort_keys=True, indent=2) + "\n")
 
 
 def smoke(root: Path, work: Path) -> None:
     env = {key: value for key, value in os.environ.items() if key in {"PATH", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT"}}
     env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1", HERMES_HOME=str(work / "hermes-home"),
                PYTHONPATH=os.pathsep.join((str(root / "connector"), str(root / "hermes"))),
-               AGENT_CONTROL_RELEASE_ROOT=str(root), HOME=str(work / "home"))
+               AGENT_CONTROL_RELEASE_ROOT=str(root), HERMES_DISABLE_LAZY_INSTALLS="1", HOME=str(work / "home"))
     (work / "home").mkdir(parents=True, exist_ok=True)
     invoke(root / "python/bin/python3", "-B", "-c",
-           "import sys,ssl,sqlite3,anthropic,httpx,websockets,fastapi,uvicorn,mcp,httpx2,hermes_cli,agent_control_connector; assert sys.version_info[:2] == (3,12)", env=env, cwd=work)
+           "import sys,ssl,sqlite3,anthropic,httpx,websockets,fastapi,uvicorn,mcp,httpx2,hermes_cli,agent_control_connector; "
+           f"assert sys.version_info[:3] == {tuple(map(int, PINS['pythonVersion'].split('.')))!r}", env=env, cwd=work)
     invoke(root / "bin/agent-control-setup", "--help", env=env, cwd=work)
     invoke(root / "python/bin/python3", "-B", "-m", "agent_control_connector", "check-media", env=env, cwd=work)
     invoke(root / "python/bin/python3", "-B", "-m", "agent_control_connector", "check-background", env=env, cwd=work)
@@ -157,6 +176,8 @@ def build(output: Path, revision: str, target: str, cache: Path, hermes_source: 
         extra_args = [argument for extra in PINS["baseExtras"] for argument in ("--extra", extra)]
         invoke(sys.executable, "-m", "uv", "export", "--frozen", "--no-dev", "--no-emit-project", *extra_args,
                "--output-file", requirements, "--no-python-downloads", cwd=root / "hermes", stdout=subprocess.DEVNULL)
+        connector_requirements = root / "connector-requirements.lock"
+        shutil.copyfile(stage / "control-source/deploy/managed/connector-requirements.lock", connector_requirements)
         env = os.environ.copy()
         env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1", PIP_DISABLE_PIP_VERSION_CHECK="1", PIP_CONFIG_FILE=os.devnull)
         for key in ("PYTHONHOME", "PIP_EXTRA_INDEX_URL", "PIP_TRUSTED_HOST"):
@@ -164,7 +185,9 @@ def build(output: Path, revision: str, target: str, cache: Path, hermes_source: 
         # All third-party packages must have locked hashes and native wheels.
         # No fallback can compile code or silently choose different versions.
         invoke(root / "python/bin/python3", "-B", "-m", "pip", "install", "--index-url", "https://pypi.org/simple", "--require-hashes", "--only-binary=:all:",
-               "--no-compile", "--no-deps", "-r", requirements, env=env)
+               "--no-compile", "--no-deps", "-r", requirements, "-r", connector_requirements, env=env)
+        invoke(root / "python/bin/python3", "-B", "-m", "pip", "check", env=env)
+        stamp_runtime(root, target, env)
         # Hermes rejects wheels because they omit source-relative assets. Keep
         # its entire source tree and generate only standard distribution metadata.
         invoke(sys.executable, "-c", "import setuptools.build_meta as b,sys;b.prepare_metadata_for_build_wheel(sys.argv[1])",
@@ -179,20 +202,21 @@ def build(output: Path, revision: str, target: str, cache: Path, hermes_source: 
         for entry in (root / "python/bin").iterdir():
             if entry.is_file() and entry.read_bytes()[:2] == b"#!":
                 entry.unlink()
-        inventory_code = '''import importlib.metadata as m,json,sys,tomllib
+        inventory_code = '''import importlib.metadata as m,json,sys,sysconfig,tomllib
 from pathlib import Path
-r=Path(sys.argv[1]); rows=[]
-for d in m.distributions(path=[str(r/'python/lib/python3.12/site-packages'),str(r/'connector')]):
+r=Path(sys.argv[1]).resolve(); rows=[]
+for d in m.distributions(path=[sysconfig.get_path('purelib'),str(r/'connector')]):
  rows.append({'name':d.metadata.get('Name'),'version':d.version,'license':d.metadata.get('License-Expression') or d.metadata.get('License'),'licenseFiles':[str(p) for p in (d.files or []) if any(s in str(p).lower() for s in ('license','copying','notice'))]})
 for p in (r/'connector/distribution-metadata').glob('*.toml'):
  d=tomllib.loads(p.read_text())['project']; rows.append({'name':d['name'],'version':d['version'],'license':d.get('license','NOASSERTION'),'licenseFiles':[]})
-(r/'licenses.json').write_text(json.dumps({'schemaVersion':1,'packages':sorted(rows,key=lambda v:v['name'].lower()),'hermesLicense':'hermes/LICENSE','pythonLicense':'python/lib/python3.12/LICENSE.txt'},sort_keys=True,indent=2)+'\\n')
+(r/'licenses.json').write_text(json.dumps({'schemaVersion':1,'packages':sorted(rows,key=lambda v:v['name'].lower()),'hermesLicense':'hermes/LICENSE','pythonLicense':str((Path(sysconfig.get_path('stdlib'))/'LICENSE.txt').relative_to(r))},sort_keys=True,indent=2)+'\\n')
 '''
         invoke(root / "python/bin/python3", "-B", "-c", inventory_code, root, env=env)
         provenance = {"schemaVersion": 1, "release": revision, "platform": target, "hermesSourceSha": PINS["hermesSourceSha"],
                       "hermesVersion": PINS["hermesVersion"], "pythonVersion": PINS["pythonVersion"],
                       "pythonArchiveSha256": PINS["python"][target]["sha256"], "uvVersion": PINS["uvVersion"],
-                      "requirementsSha256": digest(requirements), "hermesLockSha256": digest(root / "hermes/uv.lock"), "baseExtras": PINS["baseExtras"]}
+                      "requirementsSha256": digest(requirements), "connectorRequirementsSha256": digest(connector_requirements),
+                      "hermesLockSha256": digest(root / "hermes/uv.lock"), "baseExtras": PINS["baseExtras"]}
         (root / "build-provenance.json").write_text(json.dumps(provenance, sort_keys=True, indent=2) + "\n")
         relocated = stage / "relocated path with spaces" / "agent-control-runtime"
         relocated.parent.mkdir()

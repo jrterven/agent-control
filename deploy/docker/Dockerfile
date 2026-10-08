@@ -13,7 +13,7 @@ COPY packages/ui packages/ui
 COPY packages/shared-types packages/shared-types
 RUN npm run build --workspace apps/web
 
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.14.8-slim-bookworm AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache \

@@ -32,6 +32,24 @@ wgrKq0Bb1CF3ALhchphIScfFM16JmJpV/v1/JHelRXHZQs9CG4soOzSECcehegUb
 METADATA = {"runtime-manifest.json", "runtime-manifest.json.sig", "runtime-public-key.pem"}
 
 
+def data_schema_version(manifest: dict) -> int:
+    """The audited rollback boundary, not SQLite's independent schema number."""
+    from hermes_client.compatibility import HERMES_0216_SHA
+    expected = 2 if manifest.get("hermesSourceSha") == HERMES_0216_SHA else 1
+    value = manifest.get("dataSchemaVersion", 1)
+    if type(value) is not int or value != expected:
+        raise ValueError("El formato de datos del runtime no corresponde a su revisión auditada; requiere una migración del operador.")
+    return value
+
+
+def require_same_data_schema(original: dict, target: dict) -> int:
+    """Never permit an executable-only update/recovery across data migrations."""
+    old_version, new_version = data_schema_version(original), data_schema_version(target)
+    if old_version != new_version:
+        raise ValueError("Esta versión cambia el formato de datos y requiere una migración del operador con copia de seguridad; conserva la versión actual.")
+    return new_version
+
+
 def current_platform() -> str:
     machine = platform.machine()
     arch = "arm64" if machine in {"aarch64", "arm64"} else machine
@@ -64,6 +82,7 @@ def verify_runtime(root: Path, *, expected_release: str | None = None) -> dict:
     revision = manifest.get("hermesSourceSha")
     if revision not in AUDITED_REVISIONS or manifest.get("hermesVersion") != AUDITED_REVISIONS[revision][0]:
         raise ValueError("Runtime contains an unaudited Hermes revision")
+    data_schema_version(manifest)
     if expected_release and manifest.get("release") != expected_release:
         raise ValueError("Runtime does not match the selected release")
     files = manifest.get("files")

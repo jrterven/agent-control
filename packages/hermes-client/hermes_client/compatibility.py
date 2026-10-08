@@ -8,7 +8,11 @@ from dataclasses import dataclass
 
 
 HERMES_0212_SHA = "939e45c91d751fadd94dcd1b873ac3cb44846213"
+HERMES_0216_SHA = "818c13be1dc4fd28987e1e881a9408224afd4535"
 HERMES_0206_SHA = "4209d371aa1bb8840ce8447555bdd863a1a96c38"
+HERMES_CONNECTOR_REVISIONS = frozenset({HERMES_0212_SHA, HERMES_0216_SHA})
+BACKGROUND_TURN_REVISIONS = HERMES_CONNECTOR_REVISIONS
+SERVER_REQUEST_REVISIONS = frozenset({HERMES_0216_SHA})
 _SESSION_METHODS = frozenset({
     "session.create", "session.resume", "session.status", "session.history",
     "prompt.submit", "session.interrupt", "approval.respond", "clarify.respond",
@@ -25,6 +29,9 @@ class HermesContract:
     version: str
     profile_methods: frozenset[str]
     atomic_paused_cron: bool = False
+    server_requests: bool = False
+    native_background_turns: bool = False
+    default_management_server: bool = False
 
 
 CONTRACTS = {
@@ -40,6 +47,11 @@ CONTRACTS = {
     ),
     HERMES_0212_SHA: HermesContract(
         "0.21.2", _PROFILE_ARCHIVES | {"profiles.transfer"}, atomic_paused_cron=True,
+        native_background_turns=True, default_management_server=True,
+    ),
+    HERMES_0216_SHA: HermesContract(
+        "0.21.6", _PROFILE_ARCHIVES | {"profiles.transfer"}, atomic_paused_cron=True,
+        server_requests=True, native_background_turns=True, default_management_server=True,
     ),
 }
 AUDITED_REVISIONS = {
@@ -56,6 +68,7 @@ PROFILE_TRANSFER_REVISIONS = {
 PROFILE_TRANSFER_PAIRS = frozenset({
     (HERMES_0206_SHA, HERMES_0206_SHA),
     (HERMES_0212_SHA, HERMES_0212_SHA),
+    (HERMES_0216_SHA, HERMES_0216_SHA),
 })
 
 

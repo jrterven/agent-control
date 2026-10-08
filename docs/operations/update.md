@@ -65,26 +65,43 @@ both temporary archives.
 
 No Control startup, deploy or health check may execute `hermes update`.
 
-For the separately authorized 0.21.2 rollout, pin tag `v2026.9.11` to commit
-`939e45c91d751fadd94dcd1b873ac3cb44846213`. Stage its own source directory and
-virtualenv, preserving the installed optional dependencies, then run `pip check`.
+For the separately authorized October rollout, pin Hermes `0.21.6` to commit
+`818c13be1dc4fd28987e1e881a9408224afd4535` and Python `3.14.8`.
+Stage its own source directory and dependency environment from the committed
+upstream lock, preserving installed optional integrations, then run `pip check`.
 The canonical Hermes path may point to the selected release; retain the former
 checkout and virtualenv together for rollback. Restart every Hermes process
 using the upgraded checkout, including `serve` and messaging gateways, only
 after a fresh idle check. Never leave a running process with replaced sources.
 
-Hermes state schema 26 becomes 30. Before activation, use SQLite's backup API
+Hermes state schema 30 becomes 31, and its FTS storage contract changes. Before activation, use SQLite's backup API
 to snapshot every profile's `state.db`, migrate copies with the staged Hermes
 runtime and compare session/message rows plus integrity. After draining and
 stopping Hermes, retain a private complete data backup separately from the old
 code. Include `shared-state.db` when present. Control's own backup script does
-not cover Hermes data. A rollback to 0.20.6 must restore its data backup unless
+not cover Hermes data. A rollback to 0.21.2 must restore its data backup unless
 backward schema compatibility has been independently demonstrated.
 
 Update the environment-managed `HERMES_CONTROL_HERMES_SOURCE_SHA` and each
 registered gateway's encrypted trust anchor only when its installed revision is
 verified. Refresh profile capabilities after Control reconnects. Keep mixed
 profile transfers disabled throughout the transition and keep memory disabled.
+
+The managed runtime marks this boundary as `dataSchemaVersion: 2`; the previous
+channel used `1`. Ordinary automatic/interactive runtime updates and recovery
+must reject crossing that boundary. Use the reviewed operator migration in
+`deploy/managed/README.md` with the new signed runtime, a cold data/identity
+backup and a canary under maintenance. Never bypass the inventory or relabel an
+old schema as compatible. After user work resumes, restoring a prior snapshot
+requires reconciling that newer work.
+
+Hermes' upstream install stamp must identify the exact commit and external
+update ownership. Its PM manifest points to the staged Python environment;
+startup probes must not trigger downloads or mutate the active installation.
+Keep user-owned tool environments outside the signed runtime and retain their
+previous Python until their entrypoints and imports have been migrated and
+verified. Do not blindly rewrite multiplex gateway services: review the actual
+serve/gateway topology and native profile isolation on each computer.
 
 ## GPT-Live transcript history
 

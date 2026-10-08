@@ -101,7 +101,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_REVISION"
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       - uses: actions/download-artifact@v4
         with:
           name: signed-connector-inputs

@@ -29,6 +29,7 @@ class JsonRpcGenerationChanged(JsonRpcDisconnected):
 
 
 EventCallback = Callable[[NormalizedEvent], Awaitable[None]]
+ServerRequestCallback = Callable[[Mapping[str, Any], int], Awaitable[bool]]
 
 
 class JsonRpcClient:
@@ -52,6 +53,8 @@ class JsonRpcClient:
         heartbeat_interval: float = 15.0,
         inbound_deadline: float = 45.0,
         event_callback: EventCallback | None = None,
+        server_request_callback: ServerRequestCallback | None = None,
+        strict_params: bool = False,
     ) -> None:
         self.url = url
         self.gateway_id = gateway_id
@@ -63,6 +66,8 @@ class JsonRpcClient:
         self.heartbeat_interval = heartbeat_interval
         self.inbound_deadline = inbound_deadline
         self.event_callback = event_callback
+        self.server_request_callback = server_request_callback
+        self.strict_params = strict_params
         self._normalizer = EventNormalizer(gateway_id=gateway_id, profile_name=profile_name)
         self._socket: Any = None
         self._reader: asyncio.Task[None] | None = None
@@ -129,6 +134,19 @@ class JsonRpcClient:
                 self._heartbeat_loop(socket, generation),
                 name=f"hermes-heartbeat-{self.profile_name}-{generation}",
             )
+            if self.server_request_callback is not None:
+                try:
+                    # Advertise only for an audited adapter that handles the
+                    # request path, including explicit rejection of unsupported
+                    # secret/desktop prompts. Repeat on every new transport.
+                    await self._request_on_generation(
+                        socket, generation, "client.capabilities",
+                        {"server_requests": True}, timeout=self.connect_timeout,
+                    )
+                except BaseException:
+                    await self._close_generation(socket, generation,
+                        JsonRpcDisconnected("Hermes request negotiation failed"))
+                    raise
 
     async def close(self) -> None:
         async with self._lifecycle_lock:
@@ -193,11 +211,22 @@ class JsonRpcClient:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[Any] = loop.create_future()
         self._pending[request_id] = (generation, future)
+        wire_params = {**(params or {}), "profile": self.profile_name}
+        if method == "client.capabilities":
+            wire_params.pop("profile", None)
+        if self.strict_params:
+            # Contract 8 rejects unknown keys. These are legacy aliases, not
+            # independently meaningful inputs: session_id/text remain canonical.
+            if method in {"session.resume", "session.history", "session.interrupt", "prompt.submit"}:
+                wire_params.pop("stored_session_id", None)
+            if method == "prompt.submit":
+                wire_params.pop("prompt", None)
+                wire_params.pop("request_id", None)
         payload = {
             "jsonrpc": "2.0",
             "id": request_id,
             "method": method,
-            "params": {**(params or {}), "profile": self.profile_name},
+            "params": wire_params,
         }
         try:
             async with self._send_lock:
@@ -255,6 +284,16 @@ class JsonRpcClient:
                         )
                     else:
                         future.set_result(raw.get("result"))
+                elif "id" in raw and "method" in raw:
+                    # Server requests are not telemetry events. Never render
+                    # arbitrary methods as UI or silently leave Hermes waiting.
+                    identifier = raw["id"]
+                    if not isinstance(identifier, str) or not 0 < len(identifier) <= 200:
+                        raise ValueError("Invalid Hermes server request identity")
+                    handled = bool(self.server_request_callback is not None and
+                                   await self.server_request_callback(raw, generation))
+                    if not handled:
+                        await self.reject_server_request(identifier, expected_generation=generation)
                 elif self.event_callback is not None:
                     await self.event_callback(self._normalizer.normalize(raw))
         except asyncio.CancelledError:
@@ -263,6 +302,23 @@ class JsonRpcClient:
             disconnect_error = JsonRpcDisconnected(str(exc))
         finally:
             await self._close_generation(socket, generation, disconnect_error)
+
+    async def reject_server_request(self, identifier: str, *, expected_generation: int) -> None:
+        """Decline an unsupported live or replayed request without granting an action."""
+        if not isinstance(identifier, str) or not 0 < len(identifier) <= 200:
+            raise ValueError("Invalid Hermes server request identity")
+        socket = self._socket
+        async with self._send_lock:
+            if socket is None or not self._owns(socket, expected_generation):
+                raise JsonRpcGenerationChanged("Hermes request transport changed")
+            try:
+                await socket.send(json.dumps({"jsonrpc": "2.0", "id": identifier,
+                    "error": {"code": -32601, "message": "Request unsupported by Agent Control"}},
+                    separators=(",", ":")))
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                raise
+            except Exception as exc:
+                raise JsonRpcDisconnected("Hermes disconnected while declining request") from exc
 
     async def _heartbeat_loop(self, socket: Any, generation: int) -> None:
         try:

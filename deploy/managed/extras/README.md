@@ -33,7 +33,7 @@ descriptor or archive.
 ## Native build and certification
 
 Run on a clean native Linux x86_64 or ARM64 host as an unprivileged user. Use
-Python 3.12 and a full committed source SHA. No local Hermes profile is needed.
+Python 3.14 and a full committed source SHA. No local Hermes profile is needed.
 
 ```sh
 python3 deploy/managed/extras/build.py \

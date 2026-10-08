@@ -11,7 +11,7 @@ from weakref import WeakValueDictionary
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
-from hermes_client.compatibility import HERMES_0212_SHA
+from hermes_client.compatibility import HERMES_CONNECTOR_REVISIONS
 
 from .admin_service import AdminResourceService
 from .auth import aware
@@ -201,7 +201,7 @@ class MailService:
             try:
                 profile, gateway = self.route(db, actor.id, agent.profile_id)
                 connection = await GatewayService(self.services).connection(db, gateway.id, profile.profile_name)
-                if connection.trusted_source_sha != HERMES_0212_SHA and self.settings.provider_mode != "mock":
+                if (connection.trusted_source_sha or "").casefold() not in HERMES_CONNECTOR_REVISIONS and self.settings.provider_mode != "mock":
                     agent.state = "unsupported"
                     db.commit()
                     return

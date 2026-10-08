@@ -47,7 +47,9 @@ def cloud_transfer(cloud):
         async def capabilities(self):
             capabilities = await super().capabilities()
             if transfer_fault.get("audited_version"):
-                capabilities = replace(capabilities, version="0.21.2")
+                capabilities = replace(capabilities, version=transfer_fault.get("versions", {}).get(
+                    self.connection.gateway_id, transfer_fault.get("version", "0.21.2")),
+                    source_sha=self.connection.trusted_source_sha)
             if self.connection.gateway_id in older_connectors:
                 return capabilities
             if self.connection.gateway_id in legacy_v2_connectors:
@@ -73,6 +75,8 @@ def cloud_transfer(cloud):
         async def delete_profile(self, name):
             native_calls.append(("delete", self.connection.gateway_id, name))
             await super().delete_profile(name)
+            if transfer_fault.get("identity_settlement_pending"):
+                return {"identity_settlement_pending": True}
 
     def factory(connection):
         key = (connection.gateway_id, connection.profile_name)
@@ -316,6 +320,52 @@ def test_cloud_non_admin_can_move_own_agent_and_replay_preserves_route_and_owner
     foreign = move(fixture, csrf=fixture.bob[5])
     assert foreign.status_code == 404, foreign.text
     assert fixture.native_calls == calls
+
+
+@pytest.mark.parametrize("source_sha,destination_sha,source_version,destination_version,allowed", [
+    ("818c13be1dc4fd28987e1e881a9408224afd4535", "818c13be1dc4fd28987e1e881a9408224afd4535", "0.21.6", "0.21.6", True),
+    (HERMES_SHA, "818c13be1dc4fd28987e1e881a9408224afd4535", "0.21.2", "0.21.6", False),
+    ("818c13be1dc4fd28987e1e881a9408224afd4535", HERMES_SHA, "0.21.6", "0.21.2", False),
+])
+def test_cloud_transfer_accepts_new_audited_pair_but_not_mixed_schemas(
+    cloud_transfer, source_sha, destination_sha, source_version, destination_version, allowed,
+):
+    fixture = cloud_transfer
+    fixture.settings.provider_mode = "real"
+    fixture.transfer_fault["audited_version"] = True
+    fixture.transfer_fault["versions"] = {
+        fixture.alice[1]: source_version, fixture.destination_id: destination_version,
+    }
+    revisions = {fixture.alice[1]: source_sha, fixture.destination_id: destination_sha}
+    with fixture.app.state.session_factory() as db:
+        for gateway_id, sha in revisions.items():
+            credential = db.scalar(select(GatewayCredential).where(GatewayCredential.gateway_id == gateway_id))
+            credential.trusted_source_sha_ciphertext = fixture.app.state.services.vault.encrypt(
+                sha, aad=f"gateway:{gateway_id}:source-sha")
+        db.commit()
+    for (gateway_id, _), provider in fixture.providers.items():
+        if gateway_id in revisions:
+            provider.connection = replace(provider.connection, trusted_source_sha=revisions[gateway_id])
+    response = move(fixture)
+    assert response.status_code == (200 if allowed else 409), response.text
+    with fixture.app.state.session_factory() as db:
+        assert db.get(ProfileRef, fixture.alice[2]).gateway_id == (
+            fixture.destination_id if allowed else fixture.alice[1])
+    if not allowed:
+        assert fixture.native_calls == []
+
+
+def test_cloud_move_keeps_verified_destination_when_deleted_source_identity_is_pending(cloud_transfer):
+    fixture = cloud_transfer
+    fixture.transfer_fault["identity_settlement_pending"] = True
+    response = move(fixture)
+    assert response.status_code == 200, response.text
+    assert any("remote identity" in warning for warning in response.json()["warnings"])
+    assert [call[0] for call in fixture.native_calls] == ["transfer", "delete"]
+    with fixture.app.state.session_factory() as db:
+        assert db.get(ProfileRef, fixture.alice[2]).gateway_id == fixture.destination_id
+    assert move(fixture).json() == response.json()
+    assert [call[0] for call in fixture.native_calls] == ["transfer", "delete"]
 
 
 @pytest.mark.parametrize("foreign", ["source", "destination"])

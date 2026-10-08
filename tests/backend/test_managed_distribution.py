@@ -34,7 +34,8 @@ def signing_key(tmp_path, monkeypatch):
 
 
 def runtime(path: Path, platform="linux-arm64"):
-    for name in ("python/bin/python3", "hermes/pyproject.toml", "hermes/uv.lock", "bin/agent-control-setup", "licenses.json", "connector/engine.py"):
+    for name in ("python/bin/python3", "hermes/pyproject.toml", "hermes/uv.lock", "hermes/install-stamp.json",
+                 "manifest.json", "bin/agent-control-setup", "licenses.json", "connector/engine.py"):
         target = path / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("test runtime fixture\n")
@@ -42,6 +43,9 @@ def runtime(path: Path, platform="linux-arm64"):
     (path / "bin/agent-control-setup").chmod(0o755)
     (path / "build-provenance.json").write_text(json.dumps({"release": REVISION, "platform": platform,
         "hermesSourceSha": manifest.PINS["hermesSourceSha"], "pythonVersion": manifest.PINS["pythonVersion"]}))
+    (path / "hermes/install-stamp.json").write_text(json.dumps({"commit": manifest.PINS["hermesSourceSha"],
+        "baseVersion": manifest.PINS["hermesVersion"], "updateMechanism": "external", "payload": "runtime", "dirty": False}))
+    (path / "manifest.json").write_text(json.dumps({"repo": "hermes", "venv": "python", "store": "pm-store"}))
     return path
 
 
@@ -51,12 +55,35 @@ def test_signed_inventory_covers_every_shipped_code_file_and_rejects_stale_signi
     signature = manifest.sign_manifest(root, signing_key)
     value = json.loads((root / "runtime-manifest.json").read_text())
     assert set(value["files"]) == {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()} - manifest.EXCLUDED
-    assert value["hermesSourceSha"] == "939e45c91d751fadd94dcd1b873ac3cb44846213"
+    assert value["hermesSourceSha"] == "818c13be1dc4fd28987e1e881a9408224afd4535"
+    assert value["dataSchemaVersion"] == 2
     subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(root / "runtime-public-key.pem"),
                     "-signature", str(signature), str(root / "runtime-manifest.json")], check=True, capture_output=True)
     (root / "connector/engine.py").write_text("unexpected code")
     with pytest.raises(ValueError, match="changed after"):
         manifest.sign_manifest(root, signing_key)
+
+
+@pytest.mark.parametrize("version", [None, 1, True, "2", 3])
+def test_native_runtime_rejects_false_data_compatibility_for_new_hermes(version):
+    from agent_control_connector.managed_manifest import data_schema_version
+    value = {"hermesSourceSha": manifest.PINS["hermesSourceSha"]}
+    if version is not None:
+        value["dataSchemaVersion"] = version
+    with pytest.raises(ValueError, match="formato.*revisión"):
+        data_schema_version(value)
+
+
+def test_data_schema_boundary_allows_same_generation_only():
+    from agent_control_connector.managed_manifest import require_same_data_schema
+    from hermes_client.compatibility import HERMES_0212_SHA, HERMES_0216_SHA
+    old = {"hermesSourceSha": HERMES_0212_SHA}  # Legacy manifests omitted the optional field.
+    new = {"hermesSourceSha": HERMES_0216_SHA, "dataSchemaVersion": 2}
+    assert require_same_data_schema(old, old) == 1
+    assert require_same_data_schema(new, new) == 2
+    for source, target in ((old, new), (new, old)):
+        with pytest.raises(ValueError, match="migración"):
+            require_same_data_schema(source, target)
 
 
 @pytest.mark.parametrize("kind", ["link", "fifo"])
@@ -80,6 +107,28 @@ def test_manifest_refuses_unrelated_source_revision(tmp_path):
         manifest.create_manifest(root, REVISION, "linux-arm64")
 
 
+@pytest.mark.parametrize("field,value", [("commit", "b" * 40), ("baseVersion", "0.21.2"),
+                                       ("updateMechanism", "self"), ("payload", "bootstrap"), ("dirty", True)])
+def test_manifest_refuses_unknown_or_self_updating_hermes_payload(tmp_path, field, value):
+    root = runtime(tmp_path / "runtime")
+    path = root / "hermes/install-stamp.json"
+    stamp = json.loads(path.read_text())
+    stamp[field] = value
+    path.write_text(json.dumps(stamp))
+    with pytest.raises(ValueError, match="runtime identity or update ownership"):
+        manifest.create_manifest(root, REVISION, "linux-arm64")
+
+
+def test_manifest_refuses_dependency_environment_outside_payload(tmp_path):
+    root = runtime(tmp_path / "runtime")
+    path = root / "manifest.json"
+    layout = json.loads(path.read_text())
+    layout["venv"] = "../foreign-environment"
+    path.write_text(json.dumps(layout))
+    with pytest.raises(ValueError, match="dependency layout"):
+        manifest.create_manifest(root, REVISION, "linux-arm64")
+
+
 def test_manifest_rejects_even_an_empty_non_object_extra_catalog(tmp_path):
     root = runtime(tmp_path / "runtime")
     with pytest.raises(ValueError, match="extra catalog"):
@@ -100,13 +149,13 @@ def test_extra_catalog_is_bound_to_platform_release_and_bounded_archive(tmp_path
 def test_python_materialization_preserves_internal_links_as_regular_files(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
-    (source / "python3.12").write_bytes(b"native interpreter")
-    (source / "python3.12").chmod(0o755)
-    (source / "python3").symlink_to("python3.12")
+    (source / "python3.14").write_bytes(b"native interpreter")
+    (source / "python3.14").chmod(0o755)
+    (source / "python3").symlink_to("python3.14")
     result = tmp_path / "result"
     build.regular_copy(source, result, source.resolve())
     assert not (result / "python3").is_symlink()
-    assert (result / "python3").read_bytes() == (source / "python3.12").read_bytes()
+    assert (result / "python3").read_bytes() == (source / "python3.14").read_bytes()
     assert (result / "python3").stat().st_mode & 0o111
 
 

@@ -263,6 +263,30 @@ def test_interrupted_upgrade_requires_explicit_rollback_and_restores_previous_re
     assert_preserved(item, history, receipts)
 
 
+@pytest.mark.parametrize("signed_target_changed", [False, True])
+def test_interrupted_recovery_rechecks_data_boundary_before_stopping(installation, monkeypatch, signed_target_changed):
+    from hermes_client.compatibility import HERMES_0216_SHA
+    item = installation
+    interrupted_transaction(item)
+    transaction_path = item.engine.directory / "linux-update.json"
+    tx = read_json(transaction_path)
+    tx["dataSchemaVersion"] = 2
+    atomic_json(transaction_path, tx)
+    if signed_target_changed:
+        verify = service.verify_runtime
+        def revised(root, **kwargs):
+            value = verify(root, **kwargs)
+            return {**value, "hermesSourceSha": HERMES_0216_SHA, "dataSchemaVersion": 2} if Path(root) == item.new else value
+        monkeypatch.setattr(service, "verify_runtime", revised)
+    history, receipts = (item.home / "history.json").read_bytes(), receipt_rows(item.engine)
+    with pytest.raises(ValueError, match="migración"):
+        service.lifecycle(item.engine, "rollback", {})
+    assert item.host.commands == []
+    assert transaction_path.exists()
+    assert (item.engine.directory / "current").resolve() == item.new
+    assert_preserved(item, history, receipts)
+
+
 def test_interrupted_rollback_does_not_stop_a_live_unresponsive_supervisor(installation):
     item = installation
     interrupted_transaction(item)

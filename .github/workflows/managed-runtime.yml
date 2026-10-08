@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       - name: Install pinned build tools
         run: python -m pip --isolated install --index-url https://pypi.org/simple uv==0.12.15 setuptools==83.0.0 wheel==0.45.1
       - name: Build, lock dependencies and test relocation
@@ -37,6 +37,33 @@ jobs:
           name: managed-${{ matrix.platform }}
           path: dist/managed/*
           if-no-files-found: error
+
+  native-gateway:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            platform: linux-x86_64
+          - runner: ubuntu-22.04-arm
+            platform: linux-arm64
+          - runner: macos-15
+            platform: macos-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: managed-${{ matrix.platform }}
+          path: dist/managed
+      - name: Certify native chat, questions, reconnect, approvals and cron offline
+        run: |
+          mkdir -p "$RUNNER_TEMP/native gateway"
+          tar -xzf 'dist/managed/agent-control-runtime-${{ matrix.platform }}.tar.gz' -C "$RUNNER_TEMP/native gateway"
+          runtime="$RUNNER_TEMP/native gateway/agent-control-runtime"
+          "$runtime/python/bin/python3" -s -B scripts/verify_native_gateway.py --runtime-root "$runtime"
+          "$runtime/python/bin/python3" -s -B deploy/managed/verify_state_migration.py --runtime-root "$runtime"
 
   linux-acceptance:
     needs: build

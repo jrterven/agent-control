@@ -96,7 +96,7 @@ token in a Control URL, application log, audit event or persistent browser store
    and will not create its directory below root-owned `/var/backups`.
 4. Build the React bundle on the Mac/CI and copy `apps/web/dist/` into
    `apps/api/static/` in the immutable release; the production host does not
-   require Node. Create a Python 3.12 virtualenv and install the API plus Hermes client.
+   require Node. Create a Python 3.14.8 virtualenv and install the API plus Hermes client.
 5. Copy `deploy/systemd/control.env.example` to
    `/etc/hermes-control/control.env`, replace every placeholder outside Git and
    set `root:hermes-control 0640`.

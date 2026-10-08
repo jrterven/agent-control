@@ -106,10 +106,13 @@ def smoke_runtime(runtime: Path, home: Path) -> None:
     """Run only help/import diagnostics, with an isolated disposable home."""
     runtime, home = runtime.resolve(), home.resolve()
     home.mkdir(mode=0o700)
+    certificate = subprocess.run([str(runtime / "python/bin/python3"), "-I", "-B", "-c",
+                                  "import certifi; print(certifi.where())"],
+                                 check=True, capture_output=True, text=True, timeout=30).stdout.strip()
     env = {"HOME": str(home), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
            "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1",
            "HERMES_HOME": str(home / ".hermes"),
-           "SSL_CERT_FILE": str(runtime / "python/lib/python3.12/site-packages/certifi/cacert.pem"),
+           "SSL_CERT_FILE": certificate,
            "PYTHONPATH": str(runtime / "connector") + ":" + str(runtime / "hermes")}
     for args in (["-m", "agent_control_connector.setup_engine", "--help"],
                  ["-c", "import hermes_cli.main, ssl, sqlite3, anthropic, httpx, websockets, fastapi, uvicorn; print('signed runtime imports passed')"]):

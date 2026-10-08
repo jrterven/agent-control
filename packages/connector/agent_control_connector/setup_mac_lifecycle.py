@@ -20,7 +20,7 @@ import sqlite3
 import tempfile
 import time
 
-from .managed_manifest import verify_runtime, verify_signature
+from .managed_manifest import data_schema_version, require_same_data_schema, verify_runtime, verify_signature
 from .manage import drain, management_lock
 from .storage import atomic_json, private_dir, read_json
 
@@ -160,8 +160,7 @@ def lifecycle(engine, method: str, params: dict) -> dict:
                 # swap: retain the current app and refuse before draining.
                 raise ValueError("Esta instalación tiene una función opcional vinculada a su versión actual. Conserva esta versión; la actualización de funciones opcionales en Mac todavía no está disponible.")
             original_manifest = verify_runtime(Path(engine.state["releaseRoot"]))
-            if target_manifest.get("dataSchemaVersion", 1) != original_manifest.get("dataSchemaVersion", 1):
-                raise ValueError("Esta actualización cambia el formato de datos. Conserva la versión actual.")
+            require_same_data_schema(original_manifest, target_manifest)
             paired = (engine.connector_dir / "config.json").exists()
             maintenance_id = None
             try:
@@ -179,6 +178,7 @@ def lifecycle(engine, method: str, params: dict) -> dict:
                       "phase": "prepared", "maintenanceId": maintenance_id, "oldState": dict(engine.state),
                       "oldConfig": read_json(engine.connector_dir / "config.json") if paired else None,
                       "oldRelease": original_manifest["release"], "targetRelease": target_manifest["release"],
+                      "oldDataSchemaVersion": data_schema_version(original_manifest),
                       "targetRoot": str(target),
                       "preservedExtras": preserved_extras,
                       "targetManifest": {"hermesSourceSha": target_manifest["hermesSourceSha"], "hermesVersion": target_manifest["hermesVersion"],
@@ -196,6 +196,11 @@ def lifecycle(engine, method: str, params: dict) -> dict:
         if phase == "inspect":
             return {"transactionId": tx["transactionId"], "phase": tx["phase"], "oldRelease": tx["oldRelease"],
                     "targetRelease": tx["targetRelease"], "targetRoot": tx["targetRoot"], "expired": time.time() - tx["createdAt"] > MAX_AGE}
+        # Older journals predate the second data boundary and therefore mean
+        # schema 1. A recovery may not silently start an older executable on a
+        # migrated home, even when the transaction was interrupted mid-swap.
+        if tx.get("oldDataSchemaVersion", 1) != data_schema_version(tx["targetManifest"]):
+            raise ValueError("La recuperación cambia el formato de datos y requiere una migración del operador con restauración de la copia de seguridad.")
         if phase == "recovery-check":
             _ledger_idle(engine)
             if engine.status().get("localReady"):
@@ -259,8 +264,7 @@ def lifecycle(engine, method: str, params: dict) -> dict:
         if phase == "abort":
             _stopped(engine)
             old_manifest = verify_runtime(app_path() / "Contents/Resources/runtime", expected_release=tx["oldRelease"])
-            if old_manifest.get("dataSchemaVersion", 1) != tx["targetManifest"]["dataSchemaVersion"]:
-                raise ValueError("No es seguro restaurar esta versión por su formato de datos.")
+            require_same_data_schema(old_manifest, tx["targetManifest"])
             engine.state = tx["oldState"]
             engine.save()
             if tx["oldConfig"]:

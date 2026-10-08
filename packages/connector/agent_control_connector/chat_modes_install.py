@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 import yaml
-from hermes_client.compatibility import HERMES_0212_SHA
+from hermes_client.compatibility import HERMES_0212_SHA, HERMES_CONNECTOR_REVISIONS
 from .hermes_chat_policy import PLUGIN_NAME, PLUGIN_VERSION
 from .media_install import _read, _write
 from .visual_media import profile_home
@@ -17,7 +17,9 @@ def plugin_source():
     return Path(__file__).with_name("hermes_chat_policy.py").read_bytes()
 
 
-def install_profile(home: Path):
+def install_profile(home: Path, source_sha=HERMES_0212_SHA):
+    if source_sha not in HERMES_CONNECTOR_REVISIONS:
+        raise ValueError("Unsupported chat policy runtime")
     path = home / "config.yaml"
     original = _read(path) if path.exists() else b"{}"
     config = yaml.safe_load(original) or {}
@@ -46,7 +48,7 @@ def install_profile(home: Path):
         enabled.insert(0, PLUGIN_NAME)
     for file, value in (
         (entry, source),
-        (manifest, json.dumps({"version": PLUGIN_VERSION, "sha256": hashlib.sha256(source).hexdigest(), "sourceSha": HERMES_0212_SHA}).encode()),
+        (manifest, json.dumps({"version": PLUGIN_VERSION, "sha256": hashlib.sha256(source).hexdigest(), "sourceSha": source_sha}).encode()),
         (target / "plugin.yaml", f'name: {PLUGIN_NAME}\nversion: "{PLUGIN_VERSION}"\ndescription: "Per-conversation memory and temporary history policies"\nhooks:\n  - pre_llm_call\n'.encode()),
     ):
         if not file.exists() or _read(file) != value:
@@ -62,13 +64,13 @@ def install_profile(home: Path):
 
 
 def chat_mode_profiles(config: dict, *, install=False):
-    if config.get("sourceSha") != HERMES_0212_SHA:
+    if config.get("sourceSha") not in HERMES_CONNECTOR_REVISIONS:
         return {}
     result = {}
     for profile in config["profiles"]:
         try:
             if install:
-                result[profile] = install_profile(profile_home(Path(config["hermesHome"]), profile))
+                result[profile] = install_profile(profile_home(Path(config["hermesHome"]), profile), config["sourceSha"])
         except (OSError, ValueError, yaml.YAMLError):
             result[profile] = {"state": "installationFailed"}
     return result

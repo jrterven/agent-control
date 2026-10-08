@@ -35,8 +35,9 @@ external tool providers retain their own applicable data policies.
 ## Native activation
 
 The connector installs `agent-control-chat-modes` only on a completely idle,
-audited Hermes 0.21.2 source revision
-`939e45c91d751fadd94dcd1b873ac3cb44846213`. The copied adapter validates hashes of
+audited Hermes 0.21.2 and 0.21.6 source revisions
+`939e45c91d751fadd94dcd1b873ac3cb44846213` and
+`818c13be1dc4fd28987e1e881a9408224afd4535`. The copied adapter validates hashes of
 the native modules it wraps. Removing the plugin from the enabled list or
 explicitly disabling it is respected. Installations preserve configuration
 backups and other plugins. The existing supervised command

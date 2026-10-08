@@ -467,3 +467,22 @@ def test_explicit_install_cleans_only_its_own_maintenance_request(tmp_path, monk
     monkeypatch.setattr(install, "background_profiles", install_then_changed)
     assert main(["install-background", "--data-dir", str(tmp_path)]) == 0
     assert marker.read_text() == "different request"
+
+
+def test_new_native_delivery_receipt_requires_matching_runtime_and_no_old_shim(tmp_path, monkeypatch):
+    from hermes_client.compatibility import HERMES_0216_SHA
+    install.install_profile(tmp_path, HERMES_0216_SHA)
+    receipt = json.loads((tmp_path / "plugins" / PLUGIN_NAME / "installation.json").read_text())
+    assert receipt["sourceSha"] == HERMES_0216_SHA
+    marker = tmp_path / ".agent-control/background/runtime.json"
+    marker.parent.mkdir(parents=True)
+    value = {**receipt, "pid": 100, "processIdentity": "started", "delegationAvailable": True,
+             "profileDeliveryMode": "native-tui", "profileDeliveryShim": None}
+    monkeypatch.setattr(install.os, "kill", lambda *_: None)
+    monkeypatch.setattr(install, "process_identity", lambda _: "started")
+    marker.write_text(json.dumps(value))
+    assert install.probe_profile(tmp_path, HERMES_0216_SHA)["state"] == "ready"
+    assert install.probe_profile(tmp_path, HERMES_0212_SHA)["state"] == "updateRequired"
+    value["profileDeliveryShim"] = install.DELIVERY_SHIM
+    marker.write_text(json.dumps(value))
+    assert install.probe_profile(tmp_path, HERMES_0216_SHA)["state"] == "pendingActivation"

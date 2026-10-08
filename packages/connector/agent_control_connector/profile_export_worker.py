@@ -101,6 +101,11 @@ def export(request):
     home = Path(request["home"])
     output = Path(request["output"])
     sys.path.insert(0, str(source))
+    if request.get("activateDependencies"):
+        # Activation leases an already committed generation; unlike importing
+        # hermes_bootstrap it never runs update completion or package installs.
+        from pm.environments import activate_dependencies
+        activate_dependencies(source)
     from hermes_cli import profiles
 
     name, directory = profiles._existing_profile_dir(request["name"])

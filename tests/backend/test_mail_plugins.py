@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
@@ -201,6 +202,41 @@ def test_provision_uses_native_mcp_and_preserves_existing_servers(mail, app):
             assert len(listing.data["servers"]) == 2
             assert any(row["name"] == "existing" for row in listing.data["servers"])
             assert agent.state == "ready"
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("sha,expected", [
+    ("939e45c91d751fadd94dcd1b873ac3cb44846213", "ready"),
+    ("818c13be1dc4fd28987e1e881a9408224afd4535", "ready"),
+    ("a" * 40, "unsupported"),
+    (None, "unsupported"),
+])
+def test_mail_provision_accepts_only_reviewed_native_revisions(mail, app, monkeypatch, sha, expected):
+    from hermes_control_api.services import GatewayService
+    from hermes_client import InMemoryHermesProvider
+
+    account = connect(mail)
+    grant(mail, app, account)
+    original_connection = GatewayService.connection
+    original_capabilities = InMemoryHermesProvider.capabilities
+
+    async def connection(self, db, gateway_id, profile_name):
+        return replace(await original_connection(self, db, gateway_id, profile_name), trusted_source_sha=sha)
+
+    monkeypatch.setattr(GatewayService, "connection", connection)
+    async def capabilities(self):
+        return replace(await original_capabilities(self), source_sha=sha,
+                       version="0.21.6" if sha == "818c13be1dc4fd28987e1e881a9408224afd4535" else "0.21.2")
+    monkeypatch.setattr(InMemoryHermesProvider, "capabilities", capabilities)
+    app.state.settings.provider_mode = "real"
+    app.state.settings.hermes_source_sha = sha
+    app.state.services.provider_pool.factory = InMemoryHermesProvider
+
+    async def exercise():
+        with app.state.session_factory() as db:
+            agent = db.scalar(select(MailAgent))
+            await app.state.mail_service.provision(db, agent)
+            assert agent.state == expected
     asyncio.run(exercise())
 
 

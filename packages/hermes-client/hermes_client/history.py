@@ -43,6 +43,18 @@ def project_history_turn_origins(messages: list[dict[str, Any]]) -> list[dict[st
 def project_history_message(message: Any) -> Any:
     if not isinstance(message, dict):
         return message
+    if message.get("display_kind") == "hidden":
+        # Keep a positional boundary for reconciliation without publishing
+        # hidden model scaffolding, tool arguments, attachments or sidecars.
+        return {**{key: message[key] for key in ("id", "message_id", "timestamp", "created_at")
+                   if isinstance(message.get(key), (str, int, float)) and not isinstance(message.get(key), bool)},
+                "role": "system", "content": ""}
+    if message.get("role") == "user" and message.get("display_kind") == "process_complete":
+        # Native terminal completion injects captured process output as model
+        # input. The public row represents a notification, not a user message.
+        return {**{key: message[key] for key in ("id", "message_id", "timestamp", "created_at")
+                   if isinstance(message.get(key), (str, int, float)) and not isinstance(message.get(key), bool)},
+                "role": "system", "content": "Finalizó un proceso en segundo plano."}
     if origin := _background_origin(message):
         # The role=user row is an internal notification prompt containing child
         # results/instructions. Keep its position, never its model input.
@@ -57,6 +69,17 @@ def project_history_message(message: Any) -> Any:
     # in the public transcript: these extensions can also contain analysis.
     items = result.pop("codex_message_items", None)
     result.pop("codex_reasoning_items", None)
+    result.pop("display_reasoning", None)
+    result.pop("display_commentary", None)
+    # Hermes keeps original model content for replay/export and publishes a
+    # separately sanitized display copy. Never prefer the retained raw input
+    # over that copy (including an intentionally empty public projection).
+    if "display_content" in result:
+        content = result.pop("display_content")
+        field = "content" if "content" in result else "text"
+        result.pop("text" if field == "content" else "content", None)
+        result[field] = content if isinstance(content, str) and len(content) <= 100_000 else ""
+        return result
     if result.get("role") != "assistant" or any(
         isinstance(result.get(key), str) and result[key].strip()
         for key in ("content", "text")

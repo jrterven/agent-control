@@ -13,6 +13,7 @@ import time
 
 import pytest
 import uvicorn
+from hermes_client.compatibility import HERMES_CONNECTOR_REVISIONS
 
 from .test_mail_plugins import mail, connect, grant
 
@@ -21,7 +22,7 @@ from .test_mail_plugins import mail, connect, grant
 def test_pinned_native_hermes_discovery_profile_isolation_and_existing_mcp(mail, app, tmp_path):
     runtime = Path(os.environ["HERMES_MAIL_TEST_RUNTIME"]).resolve()
     provenance = json.loads((runtime / "build-provenance.json").read_text())
-    assert "939e45c91d751fadd94dcd1b873ac3cb44846213" in json.dumps(provenance)
+    assert provenance["hermesSourceSha"] in HERMES_CONNECTOR_REVISIONS
     first = connect(mail)
     second = connect(mail, "two@example.com")
     tokens = [grant(mail, app, first), grant(mail, app, second, 1)]
@@ -76,7 +77,7 @@ async def exercise():
         assert [s['name'] for s in (await list_mcp_servers(profile=profile))['servers']] == ['existing']
         assert (home / 'skills/existing.md').read_text() == 'existing skill'
         assert 'EXISTING_SECRET=untouched' in (home / '.env').read_text()
-    print('Native Hermes 0.21.2: discovery, tool call, profile isolation, preservation passed')
+    print('Native audited Hermes: discovery, tool call, profile isolation, preservation passed')
 asyncio.run(exercise())
 '''
     try:

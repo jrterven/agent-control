@@ -418,9 +418,14 @@ def lifecycle(engine, method, params):
         with management_lock(engine.directory):
             transaction = read_json(transaction_path)
             original = transaction["oldState"]
-            verify_runtime(Path(original["releaseRoot"]))
-            # Both releases were checked for the same data schema before cutover.
-            # Refuse a recovery if user work could have resumed in the meantime.
+            from .managed_manifest import require_same_data_schema
+            original_manifest = verify_runtime(Path(original["releaseRoot"]))
+            target_manifest = verify_runtime(Path(transaction["targetRoot"]))
+            schema = require_same_data_schema(original_manifest, target_manifest)
+            if transaction.get("dataSchemaVersion", 1) != schema:
+                raise ValueError("La recuperación requiere una migración de datos del operador; no se iniciará la versión anterior.")
+            # Recheck signed schema identity even for a journal from an older
+            # updater. Refuse recovery if work could have resumed meanwhile.
             ledger_idle(engine)
             if engine.status()["localReady"]:
                 asyncio.run(all_profiles_idle(engine))
@@ -446,8 +451,8 @@ def lifecycle(engine, method, params):
     manifest = verify_runtime(target)
     old_root = Path(engine.state["releaseRoot"])
     old_manifest = verify_runtime(old_root)
-    if manifest.get("dataSchemaVersion", 1) != old_manifest.get("dataSchemaVersion", 1):
-        raise ValueError("Esta versión requiere una migración de datos; conserva la versión actual.")
+    from .managed_manifest import require_same_data_schema
+    require_same_data_schema(old_manifest, manifest)
     if old_root == target:
         return {"status": "current", "message": "Ya tienes esta versión."}
     from .setup_extras import validate_extra_transition

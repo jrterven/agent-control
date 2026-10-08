@@ -37,7 +37,7 @@ from hermes_client import (
 )
 from hermes_client.history import project_history_message, project_history_turn_origins
 from hermes_client.compatibility import (
-    HERMES_0212_SHA,
+    HERMES_CONNECTOR_REVISIONS,
     PROFILE_TRANSFER_REVISIONS as _AUDITED_PROFILE_TRANSFER_REVISIONS,
     PROFILE_TRANSFER_PAIRS as _AUDITED_PROFILE_TRANSFER_PAIRS,
     profile_contract_supports,
@@ -1641,11 +1641,12 @@ class ProfileService:
 
     async def _delete_upstream_once(
         self, provider: Any, profile_name: str
-    ) -> None:
+    ) -> bool:
+        """Confirm logical deletion; report only a known pending identity settlement."""
         if not await self._profile_is_present(provider, profile_name):
-            return
+            return False
         try:
-            await provider.delete_profile(profile_name)
+            result = await provider.delete_profile(profile_name)
         except ProfileManagementServerRequired as exc:
             raise ConflictError(str(exc)) from exc
         except BackgroundTasksBusyError:
@@ -1673,7 +1674,7 @@ class ProfileService:
                 raise UpstreamUnavailableError(
                     "Hermes did not confirm that the agent was deleted"
                 ) from exc
-            return
+            return False
         try:
             still_present = await self._profile_is_present(provider, profile_name)
         except BaseException as exc:
@@ -1684,6 +1685,7 @@ class ProfileService:
             raise UpstreamUnavailableError(
                 "Hermes still lists the agent after deletion"
             )
+        return isinstance(result, dict) and result.get("identity_settlement_pending") is True
 
     async def _purge_profile_runtime(
         self, gateway_id: str, profile_name: str
@@ -1980,8 +1982,11 @@ class ProfileService:
             automation_ids = [item.id for item in automations]
             session_ids = [item.id for item in sessions]
 
+            identity_settlement_pending = False
+
             async def commit_delete() -> bool:
-                await self._delete_upstream_once(manager, technical_name)
+                nonlocal identity_settlement_pending
+                identity_settlement_pending = await self._delete_upstream_once(manager, technical_name)
                 last_commit_error: BaseException | None = None
                 for attempt in range(3):
                     try:
@@ -2019,6 +2024,7 @@ class ProfileService:
                                 "automationRuns": counts.automation_runs,
                                 "idempotencyOperations": counts.idempotency_operations,
                                 "localCommitRetry": attempt,
+                                "identitySettlementPending": identity_settlement_pending,
                             },
                         )
                         db.commit()
@@ -2040,6 +2046,8 @@ class ProfileService:
             warnings = await self._purge_profile_runtime(
                 source_gateway_id, technical_name
             )
+            if identity_settlement_pending:
+                warnings.append("The agent was deleted locally; Hermes is still settling its remote identity.")
             if recovered_local_commit:
                 warnings.append(
                     "Agent Control recovered a transient local cleanup commit failure."
@@ -2186,7 +2194,7 @@ class ProfileService:
                 in _AUDITED_PROFILE_TRANSFER_PAIRS
                 and (
                     self.services.settings.deployment_mode != "cloud"
-                    or source_sha == destination_sha == HERMES_0212_SHA
+                    or source_sha == destination_sha and source_sha in HERMES_CONNECTOR_REVISIONS
                 )
                 and source_capabilities.version
                 == _AUDITED_PROFILE_TRANSFER_REVISIONS.get(source_sha)
@@ -2543,11 +2551,13 @@ class ProfileService:
 
                 async def commit_cutover() -> list[str]:
                     nonlocal source_deleted
-                    await self._delete_upstream_once(
+                    identity_settlement_pending = await self._delete_upstream_once(
                         source_manager, target.profile_name
                     )
                     source_deleted = True
                     cutover_warnings: list[str] = []
+                    if identity_settlement_pending:
+                        cutover_warnings.append("The source agent was deleted locally; Hermes is still settling its remote identity.")
                     destination_inventory = paused_inventory
                     if enabled_automation_ids:
                         try:

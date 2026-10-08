@@ -200,6 +200,10 @@ class EventNormalizer:
                 private_email_references.extend(
                     reference.private_payload() for reference in references[:8]
                 )
+        elif event_type == "request.cancel":
+            # Transport-only identity; the provider translates an owned open
+            # request to its neutral expire event. No arbitrary payload crosses.
+            safe = self._project(payload, {"id", "method"})
         elif event_type.startswith(("approval.", "clarify.")):
             safe = self._project_interaction(event_type, payload)
         elif event_type == "session.usage":

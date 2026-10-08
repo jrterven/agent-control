@@ -21,8 +21,9 @@ import types
 from uuid import uuid4
 
 PLUGIN_NAME = "agent-control-background"
-PLUGIN_VERSION = "1.0.3"
+PLUGIN_VERSION = "1.1.0"
 AUDITED_SOURCE_SHA = "939e45c91d751fadd94dcd1b873ac3cb44846213"
+NATIVE_SCOPED_SOURCE_SHA = "818c13be1dc4fd28987e1e881a9408224afd4535"
 DELIVERY_SHIM = "profile-delivery-939e-v1"
 DELIVERY_SOURCE_HASHES = {
     "tui_gateway/session_notifications.py": "f71b9dac8722e74cbf2fda89fd49263a1ef89df468f13ef4dbc79888b7f25cfa",
@@ -39,6 +40,27 @@ GATEWAY_BOOTSTRAP_HASHES = {
     "hermes_cli/plugins.py": "9903d8d5a2f44c9f4772b28632d012b443c9fbe24a5d57df17b5ac62c33210d2",
     "gateway/run.py": "649b0e431d5b29ef2fba9c4a0c679300dc4977f1a3f2ecdc1700359ae2fdfef8",
 }
+
+NATIVE_SCOPED_HASHES = {'DELIVERY_SOURCE_HASHES': {'tui_gateway/model_switch.py': '7f3cb0dc7afcf6b3469acb7ede218c74f8c4744cf47d1c2d2e97120eeeeeae97',
+                            'tui_gateway/session_notifications.py': '2823afc052e44072bc8f3c7e326579ae4422fa07ad382ca96544d33a131a6fe2',
+                            'tools/async_delegation.py': '5dadd04c99e474e007a7072ee8108747764b26452d417b5ccbd764d29438bc21',
+                            'hermes_constants.py': '5d43e6102c69748a2e64fc91623a49e1b0d76623416ce4ec37f23f216c3ce91f'},
+ 'DELIVERY_BOOTSTRAP_HASHES': {'hermes_cli/main.py': '1491ff17d20b54c024c052003d394798cb2e673c8b9565b4a8be4c1fd6b21dae',
+                               'hermes_cli/plugins.py': 'b0f09d0004890ff0b2c07d17ee7c5688709162da4fd43d404cabbe13f1d9f59d',
+                               'hermes_cli/plugins_loader.py': '072fe348e2c2a5cfbda59ea09620a68b53a1a0b3c43ac74229a500a9b5c696d1',
+                               'tui_gateway/server.py': '56a7b9ff796add6788f1632ca80d611e1d4253465c56984dabad1cb736943df2'},
+ 'GATEWAY_BOOTSTRAP_HASHES': {'hermes_cli/main.py': '1491ff17d20b54c024c052003d394798cb2e673c8b9565b4a8be4c1fd6b21dae',
+                              'hermes_cli/gateway.py': 'e2577154bba2d188fb8c16c8f3465cae9b25596a0c444f0e104ed86a0d32e663',
+                              'hermes_cli/plugins.py': 'b0f09d0004890ff0b2c07d17ee7c5688709162da4fd43d404cabbe13f1d9f59d',
+                              'gateway/run.py': 'a3f05d3b91ed23fdab2946c050619cce822b8c483e6f5dde75cf17c11e8a5ffe'}}
+
+def _source_hashes(source_sha, group):
+    if source_sha == NATIVE_SCOPED_SOURCE_SHA:
+        return NATIVE_SCOPED_HASHES[group]
+    if source_sha == AUDITED_SOURCE_SHA:
+        return globals()[group]
+    raise ValueError("Unsupported native background delivery revision")
+
 INTERACTIVE_PLATFORMS = frozenset({"tui", "desktop", "cli"})
 INSTRUCTIONS = """Agent Control conversational multitasking: keep this conversation available while independent, time-consuming tasks run. When native delegate_task is available and the task can be completed independently with the information and permissions already given, delegate it with a clear goal, relevant context and output language. Give only the context the worker needs. Use the native tool; do not build a background executor or change schedules. After a confirmed background dispatch, briefly say what is running and END YOUR TURN promptly so the user can keep chatting. Do not wait, poll transcripts, or repeatedly call list to await completion. Hermes delivers the result to this same conversation between turns; report the result once when it arrives, distinguishing success, failure and uncertain outcomes. If dispatch falls back to synchronous execution, do not claim the chat has been freed. Keep immediate answers and tasks needing clarification in the main conversation. Workers inherit existing permissions: delegation does not authorize sending messages, deleting data or other actions beyond the user's request. Avoid concurrent changes to the same resource; pass relevant constraints to the worker. Never retry an uncertain external action automatically, or treat a worker's self-report as independently verified. A user asking about progress is not cancelling the work. Use native list/steer/stop only when needed to answer, redirect or cancel. For visual work, ask the worker to return local file paths or HTTPS image URLs with alt text and provenance, without publishing images from its child session. Publish those images yourself with publish_images in this parent conversation before inserting the returned Markdown. Do not reuse ac-media references published in a child conversation; media access is conversation-scoped. Running subagents do not survive stopping/resetting their session or exiting Hermes; do not promise restart durability. Cron and other finite runs retain their native behavior."""
 
@@ -115,7 +137,7 @@ def _verify_native_sources(root, hashes):
             raise ValueError("Unsupported native background delivery source")
 
 
-def _delivery_server():
+def _delivery_server(source_sha=AUDITED_SOURCE_SHA):
     server = sys.modules.get("tui_gateway.server")
     if server is not None:
         return server
@@ -123,7 +145,10 @@ def _delivery_server():
     # This exact audited startup frame proves that loading the server now is
     # part of Serve startup. Merely seeing "serve" in argv is not authority to
     # import it in CLI, gateway, cron or another plugin's registration.
-    frame = sys._getframe(1)
+    # 0.21.6 runs each registration in a bounded loader worker. Its caller
+    # remains blocked in canonical startup on the main thread until we return.
+    frame = (sys._current_frames().get(threading.main_thread().ident)
+             if source_sha == NATIVE_SCOPED_SOURCE_SHA else sys._getframe(1))
     try:
         for _ in range(64):
             if frame is None:
@@ -139,7 +164,7 @@ def _delivery_server():
                 root = Path(frame.f_globals["__file__"]).resolve().parent.parent
                 if Path(frame.f_code.co_filename).resolve() != root / "hermes_cli/main.py":
                     raise ValueError("Unsupported native background startup handler")
-                _verify_native_sources(root, {**DELIVERY_SOURCE_HASHES, **DELIVERY_BOOTSTRAP_HASHES})
+                _verify_native_sources(root, {**_source_hashes(source_sha, "DELIVERY_SOURCE_HASHES"), **_source_hashes(source_sha, "DELIVERY_BOOTSTRAP_HASHES")})
                 server = importlib.import_module("tui_gateway.server")
                 if Path(server.__file__).resolve().parent.parent != root:
                     raise ValueError("Native background startup source mismatch")
@@ -150,15 +175,15 @@ def _delivery_server():
         del frame
 
 
-def _verified_delivery_dispatch(server):
+def _verified_delivery_dispatch(server, source_sha=AUDITED_SOURCE_SHA):
     """Only wrap the reviewed native body, never another plugin's replacement."""
     dispatch = getattr(server, "_notif_dispatch_event", None)
-    if getattr(dispatch, "_agent_control_delivery_shim", None) == DELIVERY_SHIM:
+    if source_sha == AUDITED_SOURCE_SHA and getattr(dispatch, "_agent_control_delivery_shim", None) == DELIVERY_SHIM:
         return dispatch
     if not isinstance(dispatch, types.FunctionType) or dispatch.__globals__ is not vars(server):
         raise ValueError("Unsupported native background delivery handler")
     root = Path(server.__file__).resolve().parent.parent
-    _verify_native_sources(root, DELIVERY_SOURCE_HASHES)
+    _verify_native_sources(root, _source_hashes(source_sha, "DELIVERY_SOURCE_HASHES"))
     native_path = root / "tui_gateway/session_notifications.py"
     if (Path(dispatch.__code__.co_filename).resolve() != native_path
             or dispatch.__code__.co_name != "_notif_dispatch_event"
@@ -176,12 +201,22 @@ def install_delivery_profile_scope(source_sha: str) -> bool:
     turn correctly persists the result in the session profile. No event is
     replayed, acknowledged early, or changed by this shim.
     """
-    if source_sha != AUDITED_SOURCE_SHA:
+    if source_sha not in {AUDITED_SOURCE_SHA, NATIVE_SCOPED_SOURCE_SHA}:
         raise ValueError("Unsupported native background delivery revision")
-    server = _delivery_server()
+    server = _delivery_server(source_sha)
     if server is None:
         return False  # CLI needs no TUI shim; it cannot prove Serve activation.
-    original = _verified_delivery_dispatch(server)
+    original = _verified_delivery_dispatch(server, source_sha)
+    if source_sha == NATIVE_SCOPED_SOURCE_SHA:
+        # 0.21.6 binds the whole notification poller to its native profile scope,
+        # including claims, recovery sweeps and acknowledgements. Keep it intact.
+        poller = getattr(server, "_notification_poller_loop", None)
+        if (not isinstance(poller, types.FunctionType) or poller.__globals__ is not vars(server)
+                or Path(poller.__code__.co_filename).resolve() != Path(server.__file__).resolve().parent / "session_notifications.py"
+                or poller.__code__.co_name != "_notification_poller_loop"
+                or poller.__code__.co_argcount != 3 or poller.__closure__):
+            raise ValueError("Unsupported native background poller")
+        return True
     if getattr(original, "_agent_control_delivery_shim", None) == DELIVERY_SHIM:
         return True
     from hermes_constants import set_hermes_home_override, reset_hermes_home_override
@@ -209,7 +244,7 @@ def install_delivery_profile_scope(source_sha: str) -> bool:
     return True
 
 
-def _canonical_gateway_startup() -> bool:
+def _canonical_gateway_startup(source_sha=AUDITED_SOURCE_SHA) -> bool:
     """Recognize native Gateway startup even from its early discovery thread.
 
     The audited CLI starts daemon plugin discovery before importing gateway.run.
@@ -245,7 +280,7 @@ def _canonical_gateway_startup() -> bool:
                         or handler.__globals__ is not frame.f_globals
                         or Path(handler.__code__.co_filename).resolve() != expected_path):
                     return False
-                _verify_native_sources(root, GATEWAY_BOOTSTRAP_HASHES)
+                _verify_native_sources(root, _source_hashes(source_sha, "GATEWAY_BOOTSTRAP_HASHES"))
                 for imported_name in ("hermes_cli.main", "hermes_cli.gateway", "gateway.run"):
                     imported = sys.modules.get(imported_name)
                     if imported is not None and Path(imported.__file__).resolve() != (
@@ -258,14 +293,14 @@ def _canonical_gateway_startup() -> bool:
         del frame
 
 
-def delivery_runtime_mode(delivery_scoped: bool) -> str | None:
+def delivery_runtime_mode(delivery_scoped: bool, source_sha=AUDITED_SOURCE_SHA) -> str | None:
     if delivery_scoped:
-        return "tui-scoped"
+        return "native-tui" if source_sha == NATIVE_SCOPED_SOURCE_SHA else "tui-scoped"
     # A separate profile gateway uses native gateway delivery, not the TUI
     # poller. Do not confuse it with Serve importing late/partially initialized.
     if "tui_gateway.server" in sys.modules or "tui_gateway.entry" in sys.modules:
         return None
-    if _canonical_gateway_startup():
+    if _canonical_gateway_startup(source_sha):
         return "native-gateway"
     return None  # An unrelated CLI invocation cannot certify Control activation.
 
@@ -276,7 +311,8 @@ def register(ctx):
     home = get_hermes_home().resolve()
     receipt_path = home / "plugins" / PLUGIN_NAME / "installation.json"
     receipt = json.loads(receipt_path.read_text())
-    delivery_scoped = install_delivery_profile_scope(receipt.get("sourceSha", ""))
+    source_sha = receipt.get("sourceSha", "")
+    delivery_scoped = install_delivery_profile_scope(source_sha)
 
     def context(platform="", parent_session_id="", **_):
         if platform not in INTERACTIVE_PLATFORMS or parent_session_id:
@@ -313,8 +349,8 @@ def register(ctx):
             json.dump({"pid": os.getpid(), "processIdentity": process_identity(os.getpid()),
                 "version": PLUGIN_VERSION, "sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 "installationId": receipt["installationId"], "loadedAt": time.time(),
-                "profileDeliveryMode": delivery_runtime_mode(delivery_scoped),
-                "profileDeliveryShim": DELIVERY_SHIM if delivery_scoped else None,
+                "profileDeliveryMode": delivery_runtime_mode(delivery_scoped, source_sha),
+                "profileDeliveryShim": DELIVERY_SHIM if delivery_scoped and source_sha == AUDITED_SOURCE_SHA else None,
                 "delegationAvailable": runtime_available(load_config())}, output)
             output.flush()
             os.fsync(output.fileno())

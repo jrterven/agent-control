@@ -150,3 +150,35 @@ async def test_export_refusals_do_not_trigger_local_snapshot(runtimes, monkeypat
     source.providers["manager"].export_profile_archive_to = AsyncMock(side_effect=httpx.HTTPStatusError("private", request=httpx.Request("POST", "http://127.0.0.1/export"), response=httpx.Response(status)))
     monkeypatch.setattr(transfer, "export_snapshot", lambda *_: pytest.fail("must not bypass a refusal"))
     assert "error" in await source.execute(message("profile_export", "control-dev", uuid4().hex))
+
+
+def test_pm_interpreter_selection_is_readonly_and_wins_over_old_venv(tmp_path, monkeypatch):
+    from hermes_client.compatibility import HERMES_0216_SHA
+    from agent_control_connector import cli
+    home, source = tmp_path / "home", tmp_path / "source"
+    (home / "profiles/jarvis").mkdir(parents=True)
+    legacy, selected = source / "venv/bin/python", tmp_path / "committed-python/bin/python3"
+    for executable in (legacy, selected):
+        executable.parent.mkdir(parents=True)
+        executable.write_text("fixture")
+        executable.chmod(0o700)
+    output = tmp_path / "snapshot.tar.gz"
+    monkeypatch.setattr(cli, "detect_revision", lambda *_: (HERMES_0216_SHA, source))
+    monkeypatch.setenv("HERMES_RUNTIME_DIR", "/foreign/ambient/runtime")
+    calls = []
+    def run(args, **kwargs):
+        calls.append(args)
+        assert "HERMES_RUNTIME_DIR" not in kwargs["env"]
+        assert kwargs["env"]["HERMES_DISABLE_LAZY_INSTALLS"] == "1"
+        if len(calls) == 1:
+            assert "resolve_store_python(source, publication=True)" in args[-1]
+            assert "import hermes_bootstrap" not in args[-1]
+            return types.SimpleNamespace(returncode=0, stdout=json.dumps(str(selected)).encode())
+        assert args[0] == str(selected)
+        request = json.loads(kwargs["input"])
+        assert request["activateDependencies"] is True
+        output.write_bytes(b"archive")
+        return types.SimpleNamespace(returncode=0)
+    monkeypatch.setattr(profile_export.subprocess, "run", run)
+    profile_export.export_snapshot({"hermesHome": str(home), "hermesSource": str(source), "sourceSha": HERMES_0216_SHA}, "jarvis", output)
+    assert len(calls) == 2

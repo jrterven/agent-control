@@ -1,6 +1,6 @@
 # Matriz de compatibilidad Hermes
 
-Updated on 2026-09-13 against exact upstream sources and isolated native
+Updated on 2026-10-08 against exact upstream sources and isolated native
 gateways. This is a protocol allowlist, not a promise that every future Hermes
 build exposes the same surface.
 
@@ -10,11 +10,56 @@ build exposes the same surface.
 | Official line | `0.20.6`, `9978706e9303dbf990d90e744b131361449d73b9` | Development compatibility target |
 | Mac Turing gateway | `0.20.6`, `4209d371aa1bb8840ce8447555bdd863a1a96c38` | Descendant audited on 2026-08-29; existing Control contract unchanged |
 | September release target | `0.21.2`, `939e45c91d751fadd94dcd1b873ac3cb44846213` | Native isolated chat/interrupt/history/cron and profile-transfer checks passed |
+| October release target | `0.21.6`, `818c13be1dc4fd28987e1e881a9408224afd4535` | Native Python 3.14.8 chat, human requests/reconnect, interrupt, cron, privacy, mail and two-home lifecycle checks |
 
 Exact contracts now live in `hermes_client/compatibility.py`, shared by the
 provider, lifecycle service and public capability projection. Keep both old and
 new gateway contracts during rollout. Never accept a moving branch or semver
 range as an operator trust anchor.
+
+## October 0.21.6 contract
+
+Control negotiates `client.capabilities` with `server_requests: true` on the
+audited October revision. Approval and clarification use `server_request`,
+`request.answer`, `request.cancel`, `clarify.lock` and snapshot `open_requests`.
+Legacy `clarify.respond` is not sent to this revision. Unsupported request kinds
+receive an explicit JSON-RPC method-not-found response without forwarding their
+private payloads. Answers are bound to the owned session, profile and connection
+generation. Snapshot reconciliation must not erase newer live requests or
+resurrect answered requests; tests cover both races and partial clarification
+across a WebSocket reconnect.
+
+New strict RPC parameter models reject legacy aliases. The October path sends
+only each method's documented fields, omitting `profile` from client/session
+methods and the old `stored_session_id`, `prompt` and `request_id` aliases where
+unsupported. Earlier audited revisions retain their existing wire contract.
+History uses public `display_content`, drops `display_kind: hidden` and removes
+reasoning/internal sidecars before indexing or presenting it.
+
+Connector policy, media, mail and background adapters accept only the two exact
+September/October connector revisions. The new plugin loader registers from a
+worker thread; policy activation verifies the audited loader and the live serve
+context. October uses the upstream profile-scoped background poller rather than
+the September shim. Isolated native checks exercise plugin activation during
+canonical startup, temporary history in RAM, attachment cleanup, read-only
+memory, and exactly-once delivery across different profile databases.
+
+October adds only `818c13be… → 818c13be…` to the transfer allowlist. Mixed
+September/October transfers remain disabled because Hermes state moves from
+schema 30 to 31. Native tests verify configuration normalization and corruption
+handling, socket-free export, credential exclusion, import/delete replay and
+preservation of SOUL, memory and the default profile. If deletion succeeds locally
+but returns the boolean `identity_settlement_pending`, Control finishes the
+operation with a warning; it does not delete the verified destination of a move.
+
+The new profile-aware memory API and unrelated administration features remain
+disabled pending their own feature contracts. A Hermes upgrade does not enable
+them implicitly. Managed packaging pins portable Python 3.14.8, the upstream
+dependency lock and an external-owner installation stamp; see the managed build
+and migration runbooks. Schema 31 must not be rolled back by switching code alone.
+
+The older protocol tables below describe the legacy path; the October contract
+above overrides its human-request and strict-parameter behavior.
 
 The 0.21.2 contract preserves the dashboard RPC/REST methods below. It adds
 atomic paused cron creation (`paused: true`); 0.20.6 retains the staged-future
@@ -31,7 +76,7 @@ disabled. New session-control/plugin UI is not part of this compatibility change
 Native 0.21.2 validation used two separate temporary Hermes homes with a local
 deterministic LLM transport. It preserved session history, SOUL and paused cron
 through export/import and verified deletion after 70 seconds. Supported transfer
-pairs are `4209d371… → 4209d371…` and `939e45c9… → 939e45c9…` only. Mixed-version
+pairs additionally include `4209d371… → 4209d371…` and `939e45c9… → 939e45c9…`. Mixed-version
 transfers remain disabled because Hermes' state schema advances from 26 to 30.
 
 Primary references: [programmatic integration](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/programmatic-integration.md),
@@ -114,7 +159,7 @@ Important response contracts:
   session inventory/history structure, SOUL and paused cron inventory before
   source deletion. Source and destination must both have a safe native delete
   contract because rollback can delete the imported copy. The current audited
-  real pairs are the two same-revision pairs listed above; mock mode has a separate synthetic
+  real pairs are the three same-revision pairs listed above; mock mode has a separate synthetic
   contract. No retry follows an ambiguous mutation. On that upstream revision,
   importing a technical name that was previously deleted on the destination
   can remain hidden by Hermes' `.deleted-profiles` tombstone. Control treats

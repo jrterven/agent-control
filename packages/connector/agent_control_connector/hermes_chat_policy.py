@@ -21,13 +21,14 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
+import types
 from uuid import uuid4
 
 MODES = ("memory_read_write", "memory_read_only", "temporary")
 LEASE_SECONDS = 300
 POLICY_VERSION = 1
 PLUGIN_NAME = "agent-control-chat-modes"
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.1.0"
 _current = ContextVar("agent_control_chat_policy", default=None)
 
 
@@ -527,6 +528,17 @@ class NativePolicyRuntime:
         def scoped_acquire(*args, **kwargs):
             return runtime.private_database() or acquire(*args, **kwargs)
         registry.acquire = scoped_acquire
+        # Native notification/recovery and lifecycle threads bind a profile before
+        # reading their stores. Bind the conversation policy at that same boundary
+        # so 0.21.6 orphan sweeps cannot route a temporary task to durable state.db.
+        profile_scope = self.server._session_profile_runtime_scope
+        @contextlib.contextmanager
+        def scoped_profile(session, *args, **kwargs):
+            policy = runtime.policy((session or {}).get("session_key"))
+            with policy_scope(policy or current_policy()):
+                with profile_scope(session, *args, **kwargs):
+                    yield
+        self.server._session_profile_runtime_scope = scoped_profile
         get_db = self.server._get_db
         self.server._get_db = lambda: runtime.private_database() or get_db()
 
@@ -728,12 +740,21 @@ def register(ctx):
     import importlib
     server = sys.modules.get("tui_gateway.server")
     if server is None:
-        frame = sys._getframe(1)
+        # Registration moved into a deadline worker in 0.21.6; verify the
+        # live canonical startup frame that is waiting for that worker.
+        frame = sys._current_frames().get(threading.main_thread().ident)
         try:
             while frame is not None:
-                if frame.f_code.co_name == "_dashboard_prepare_runtime" and frame.f_globals.get("__name__") in {"hermes_cli.main", "__main__"}:
+                prepare = frame.f_globals.get("_dashboard_prepare_runtime")
+                if (frame.f_globals.get("__name__") in {"hermes_cli.main", "__main__"}
+                        and isinstance(prepare, types.FunctionType) and frame.f_code is prepare.__code__
+                        and prepare.__globals__ is frame.f_globals):
                     root = Path(frame.f_globals["__file__"]).resolve().parent.parent
-                    if hashlib.sha256((root / "tui_gateway/server.py").read_bytes()).hexdigest() != AUDITED_HASHES["tui_gateway/server.py"]:
+                    hashes = audited_source_hashes(root)
+                    if (Path(frame.f_code.co_filename).resolve() != root / "hermes_cli/main.py"
+                            or any(hashlib.sha256((root / name).read_bytes()).hexdigest() != hashes[name]
+                                for name in ("hermes_cli/main.py", "hermes_cli/plugins.py", "hermes_cli/plugins_loader.py")
+                                if name in hashes)):
                         raise ValueError("Unsupported chat policy runtime")
                     server = importlib.import_module("tui_gateway.server")
                     break
@@ -743,7 +764,8 @@ def register(ctx):
     if server is None:
         return  # CLI/cron do not use Control's chat modes.
     root = Path(server.__file__).resolve().parent.parent
-    for relative, digest in AUDITED_HASHES.items():
+    hashes = audited_source_hashes(root)
+    for relative, digest in hashes.items():
         if hashlib.sha256((root / relative).read_bytes()).hexdigest() != digest:
             raise ValueError("Unsupported chat policy runtime")
     runtime = getattr(server, "_agent_control_chat_policy", None)
@@ -785,3 +807,45 @@ AUDITED_HASHES = {'tui_gateway/server.py': 'ba5e2ee2271acc9cd50aa7aeb0244d9b9f3d
  'tui_gateway/compute_host_bridge.py': 'ac6ea7195f6fb84add1ea1cf7cbae5d68a0025144b454787cda13a067d932b27',
  'tools/thread_context.py': '3d9e921fed5fedf8f6cccbd7e8ef9b12659b4c8f6872fcda27ddf81632ee1d12',
  'tools/debug_helpers.py': '63c650faca9745527dd0ca0bd89b599225401cecdd7d8e45901b075353a00f50'}
+
+
+AUDITED_0216_HASHES = {'tui_gateway/server.py': '56a7b9ff796add6788f1632ca80d611e1d4253465c56984dabad1cb736943df2',
+ 'hermes_cli/plugins.py': 'b0f09d0004890ff0b2c07d17ee7c5688709162da4fd43d404cabbe13f1d9f59d',
+ 'hermes_cli/plugins_loader.py': '072fe348e2c2a5cfbda59ea09620a68b53a1a0b3c43ac74229a500a9b5c696d1',
+ 'tui_gateway/methods_session.py': '14fb98938c0782e003fbd2277f672d108299cac46c351258c145a5d42b121a1c',
+ 'tui_gateway/session_workdir.py': '8a3e8ea9382f69105d3b58d265e226544372e5b6672a0c9f105f22b77f54ebd1',
+ 'tui_gateway/session_lifecycle.py': '22ba865ee54b569be7285439075bdb604dffa915b827844558b1bc1261e9d776',
+ 'tui_gateway/session_notifications.py': '2823afc052e44072bc8f3c7e326579ae4422fa07ad382ca96544d33a131a6fe2',
+ 'hermes_state.py': '968cd869f077d490a59b5f624958375fe455d6024e67cbc96b4ecf49981f3828',
+ 'hermes_state_sessions.py': 'f1bfa82b4010b054001a8344f1b00a6b25694ae4cd439f8c8355f8a74f0fe084',
+ 'hermes_state_registry.py': '9b906dbb53f34aa8bfee71c929d34534fa7f6bd34ad912056858fce3244417ba',
+ 'run_agent.py': '73efa221f42be96a41a6b8a1ee144caf47041e06f5c7d32b3bbd898d8dc250b2',
+ 'agent/agent_init.py': '6e10efdbedc52a9204538a66eeacd320efb6add23a784a45f28fb70e5a5aa8f3',
+ 'agent/session_persistence.py': '9c6f6bb2e0e785ee53499cbb0997a0e628f91991abd4c2cfb0d51a3afe5d2f4e',
+ 'agent/conversation_compression.py': 'd604d8fa50044c54822812d9c124911500dff60d720582ea309d0bfacb8a5fc6',
+ 'tools/async_delegation.py': '5dadd04c99e474e007a7072ee8108747764b26452d417b5ccbd764d29438bc21',
+ 'tools/memory_tool_store.py': '24106f7191447aa140376b03393890c7b0424c815a829d8baf3ebf9471d50145',
+ 'hermes_cli/main.py': '1491ff17d20b54c024c052003d394798cb2e673c8b9565b4a8be4c1fd6b21dae',
+ 'hermes_state_schema.py': '971211b571207767d72a09a495960bb366e2d63eb51a076732239e77eeb1491a',
+ 'tui_gateway/prompt_turn.py': '11cdd2bd0eaae1e044582c25ef56ee74982c851c5a8cadde0d5cb3961ffa5865',
+ 'tui_gateway/prompt_attachments.py': '79b8dd4ee5b9460b5ca2de072e1c74fc826a6636bc26a1f27842feaf9e29cc20',
+ 'tui_gateway/methods_prompt.py': '97fdb44c92d793ea419119bb93ea9818d8b91813a3f2e5965966d98fb024faf9',
+ 'tui_gateway/session_compression.py': '90aaa5d9fde830113c07ecea42f65770fede64cba5f5f6b224c5a6236b8b6f3f',
+ 'tui_gateway/compute_host_bridge.py': '859d3be1744330b31b3aead6a62c2d56ebf06434952c04b974dd8c73783e337b',
+ 'tools/thread_context.py': '3d9e921fed5fedf8f6cccbd7e8ef9b12659b4c8f6872fcda27ddf81632ee1d12',
+ 'tools/debug_helpers.py': '63c650faca9745527dd0ca0bd89b599225401cecdd7d8e45901b075353a00f50',
+ 'tui_gateway/model_switch.py': '7f3cb0dc7afcf6b3469acb7ede218c74f8c4744cf47d1c2d2e97120eeeeeae97',
+ 'hermes_state_compression.py': 'd42c383abfb252b0065bc1fe861fdedb51d235db6dc72a449b20179c61674013',
+ 'hermes_state_messages.py': '52d4f334ac3ee649c7780274161889fabe463137f34309ee3f3ad1b4cbaf8c1e',
+ 'hermes_state_readpool.py': '191aed84a6bad0102b8b5f829f74a21d32027c7a26f7a9bd91ca86c359e623b6',
+ 'hermes_state_dbfile.py': 'd1cd1b0fcf40375599e69fdcdcd3bb1257f659d0948ca168afa3747871130a9e',
+ 'tools/process_registry.py': '4dacd3f6753d7b81e4ab338f7612624ec1f11c074cc969db49024a967a3b625e',
+ 'tools/process_registry_notifications.py': 'fa7219e7df360e95170cf1be6e132beb61b61f94a32da50d79a2bcf51e672799'}
+
+def audited_source_hashes(root):
+    import hashlib
+    digest = hashlib.sha256((root / "tui_gateway/server.py").read_bytes()).hexdigest()
+    for hashes in (AUDITED_HASHES, AUDITED_0216_HASHES):
+        if hashes["tui_gateway/server.py"] == digest:
+            return hashes
+    raise ValueError("Unsupported chat policy runtime")

@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import yaml
-from hermes_client.compatibility import HERMES_0212_SHA
+from hermes_client.compatibility import HERMES_CONNECTOR_REVISIONS
 
 from .hermes_media_plugin import PLUGIN_NAME, PLUGIN_VERSION
 from .visual_media import profile_home
@@ -198,7 +198,7 @@ def probe_profile(home: Path) -> dict:
 
 
 def media_profiles(config: dict, *, install=False) -> dict:
-    if config.get("sourceSha") != HERMES_0212_SHA:
+    if config.get("sourceSha") not in HERMES_CONNECTOR_REVISIONS:
         return {profile: {"state": "unsupportedRuntime"} for profile in config["profiles"]}
     result = {}
     for profile in config["profiles"]:

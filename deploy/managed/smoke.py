@@ -18,6 +18,32 @@ import urllib.request
 
 
 def exercise(root: Path, work: Path) -> None:
+    import certifi
+    import importlib.metadata
+    import tomllib
+    from packaging.requirements import Requirement
+    from hermes_cli.version_info import _stamp_version_info
+    from hermes_cli.venv_sync import _is_sealed
+    from pm.environments import payload_venv
+
+    provenance = json.loads((root / "build-provenance.json").read_text())
+    stamp = json.loads((root / "hermes/install-stamp.json").read_text())
+    identity = _stamp_version_info()
+    assert identity is not None and identity.commit == provenance["hermesSourceSha"]
+    assert identity.base_version == provenance["hermesVersion"]
+    assert stamp["updateMechanism"] == "external" and stamp["payload"] == "runtime"
+    assert _is_sealed(root / "hermes") and payload_venv(root / "hermes") == root / "python"
+    projects = [tomllib.loads(path.read_text())["project"]
+                for path in (root / "connector/distribution-metadata").glob("*.toml")]
+    assert {project["name"] for project in projects} == {"agent-control-connector", "hermes-control-client"}
+    bundled_versions = {project["name"]: project["version"] for project in projects}
+    for project in projects:
+        for raw in project["dependencies"]:
+            dependency = Requirement(raw)
+            if dependency.marker and not dependency.marker.evaluate():
+                continue
+            version = bundled_versions.get(dependency.name) or importlib.metadata.version(dependency.name)
+            assert dependency.specifier.contains(version), f"Bundled dependency mismatch: {dependency} ({version})"
     from agent_control_connector.visual_media import media_self_test
     from agent_control_connector.background_install import background_self_test
     media_self_test()
@@ -63,7 +89,7 @@ def exercise(root: Path, work: Path) -> None:
                "HERMES_HOME": str(hermes_home), "HERMES_DASHBOARD_SESSION_TOKEN": token,
                "HERMES_DISABLE_LAZY_INSTALLS": "1", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1",
                "PYTHONPATH": os.pathsep.join((str(root / "connector"), str(root / "hermes"))),
-               "SSL_CERT_FILE": str(root / "python/lib/python3.12/site-packages/certifi/cacert.pem")}
+               "SSL_CERT_FILE": certifi.where()}
         command = [str(root / "python/bin/python3"), "-s", "-B", "-c", "from hermes_cli.main import main; main()",
                    "serve", "--host", "127.0.0.1", "--port", str(port), "--isolated"]
         # Discard logs: do not turn this smoke into a token or transcript logger.
@@ -96,9 +122,9 @@ def exercise(root: Path, work: Path) -> None:
                 from hermes_client import HermesGatewayProvider, ProviderConnection
                 provider = HermesGatewayProvider(ProviderConnection(gateway_id="managed-smoke", profile_name="default",
                     rest_url=url, ws_url=url.replace("http", "ws", 1) + "/api/ws", dashboard_token=token,
-                    trusted_source_sha="939e45c91d751fadd94dcd1b873ac3cb44846213"))
+                    trusted_source_sha=provenance["hermesSourceSha"]))
                 try:
-                    assert (await provider.capabilities()).version == "0.21.2"
+                    assert (await provider.capabilities()).version == provenance["hermesVersion"]
                     assert "default" in [p.name for p in await provider.list_profiles()]
                 finally:
                     await provider.close()

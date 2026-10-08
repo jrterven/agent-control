@@ -162,6 +162,27 @@ def test_schema_mismatch_refuses_before_drain(installation, monkeypatch):
     assert not (engine.connector_dir / "maintenance.request").exists()
 
 
+@pytest.mark.parametrize("phase_name", ["recovery-check", "abort", "resume"])
+def test_mac_recovery_journal_cannot_bypass_data_schema_boundary(installation, monkeypatch, phase_name):
+    from hermes_client.compatibility import HERMES_0216_SHA
+    engine, _, _ = installation
+    nonce = prepare(installation)
+    tx = read_json(engine.directory / mac.TRANSACTION)
+    tx.pop("oldDataSchemaVersion")  # Interrupted journal from the schema-1 updater.
+    tx["targetManifest"].update(hermesSourceSha=HERMES_0216_SHA, dataSchemaVersion=2)
+    atomic_json(engine.directory / mac.TRANSACTION, tx)
+    original_state = read_json(engine.directory / "setup.json")
+    def must_not_start(_):
+        pytest.fail("Recovery cannot start the old executable on migrated data")
+    monkeypatch.setattr(setup_service, "ensure_service", must_not_start)
+    with pytest.raises(ValueError, match="migración.*copia de seguridad"):
+        phase(engine, nonce, phase_name)
+    assert read_json(engine.directory / "setup.json") == original_state
+    assert read_json(engine.directory / mac.TRANSACTION) == tx
+    assert (engine.connector_dir / "maintenance.request").exists()
+    assert (engine.directory / "hermes-home/history.txt").read_text() == "existing history"
+
+
 def test_mac_extra_trust_root_is_preserved_by_refusing_before_drain(installation, monkeypatch):
     engine, target, _ = installation
     origin = engine.state["releaseRoot"]

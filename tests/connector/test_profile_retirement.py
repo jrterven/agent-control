@@ -194,3 +194,24 @@ async def test_retired_absent_native_directory_does_not_reopen_provider_or_block
     retired.list_sessions.assert_not_awaited()
     from pathlib import Path
     assert not (Path(runtime.config["hermesHome"]) / "profiles/control-dev").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("settlement", [True, False, "true", 1])
+async def test_confirmed_native_delete_preserves_only_boolean_settlement_warning(runtime, settlement):
+    from hermes_client.compatibility import HERMES_0216_SHA
+    runtime.config["sourceSha"] = HERMES_0216_SHA
+    manager = runtime.providers["default"]
+    delete = manager.delete_profile.side_effect
+    async def pending_delete(name):
+        await delete(name)
+        return {"identity_settlement_pending": settlement, "upstream_detail": "private identity and host path"}
+    manager.delete_profile = AsyncMock(side_effect=pending_delete)
+    command = request()
+    response = await runtime.execute(command)
+    assert "error" not in response
+    assert response["result"] == ({"identity_settlement_pending": True} if settlement is True else None)
+    assert "private identity" not in str(response)
+    assert "control-dev" not in runtime.providers
+    assert (await runtime.execute(command))["result"] == response["result"]
+    manager.delete_profile.assert_awaited_once()
