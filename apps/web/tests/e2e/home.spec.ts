@@ -45,3 +45,16 @@ test('Home personaliza, persiste y fija paneles sin desbordar la pantalla', asyn
   if (page.viewportSize()!.width >= 1200) await expect(page.getByRole('complementary', { name: 'Tus paneles' })).toBeVisible();
   else await expect(page.getByRole('complementary', { name: 'Tus paneles' })).toBeHidden();
 });
+
+
+test('preguntar sobre un panel prepara texto sin enviar ni crear una conversación', async ({ page }) => {
+  const home = data();
+  let writes = 0;
+  await page.route('**/api/v1/home', (route) => route.fulfill({ json: home }));
+  page.on('request', (request) => { if (request.method() === 'POST' && /\/sessions(?:$|\/[^/]+\/prompts$)/.test(new URL(request.url()).pathname)) writes++; });
+  await page.goto('/home');
+  await page.getByRole('article', { name: 'Trabajando en segundo plano' }).getByRole('button', { name: 'Preguntar sobre este panel' }).click();
+  await expect(page).toHaveURL(/\/chats$/);
+  await expect(page.getByRole('textbox', { name: 'Mensaje a Newton…' })).toHaveValue(/Investigación semanal/);
+  expect(writes).toBe(0);
+});

@@ -1,5 +1,6 @@
+import { useHomeChatContext } from "../lib/home";
 import { BookOpen, Brain, Camera, EyeSlash, PaperPlaneTilt, Paperclip, Waveform, X } from "@phosphor-icons/react";
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { IconButton } from "@hermes-control/ui";
 import type { ChatMode, Profile } from "../types";
@@ -31,7 +32,15 @@ export function NewChatSetup({ profile, disabled, voiceAvailable, onStart }: { p
   const { t } = useTranslation();
   const group = useId();
   const [mode, setMode] = useState<ChatMode>("memory_read_write");
-  const [text, setText] = useState("");
+  const owner = useAppStore((state) => state.userId);
+  const [text, setText] = useState(() => {
+    const pending = useHomeChatContext.getState();
+    return pending.ownerId === owner ? pending.text : "";
+  });
+  useEffect(() => {
+    const pending = useHomeChatContext.getState();
+    if (pending.ownerId === owner) pending.set("", "");
+  }, [owner]);
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
