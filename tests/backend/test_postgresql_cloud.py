@@ -16,6 +16,8 @@ from threading import Barrier
 from uuid import uuid4
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.engine import make_url
@@ -125,7 +127,7 @@ def test_postgresql_upgrade_preserves_private_resources_and_assigns_owner(pg_url
         assert db.execute(text("SELECT owner_id,transport_kind FROM gateways WHERE id='gateway'")).one() == ("admin", "direct")
         assert db.execute(text("SELECT id,title,last_sequence FROM session_links")).one() == ("session","Keep this title",91)
         assert db.execute(text("SELECT profile_name FROM profile_refs")).scalar_one() == "personal"
-        assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0032_connector_updates"
+        assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == ScriptDirectory.from_config(Config(str(REPO / "apps/api/alembic.ini"))).get_current_head()
         assert db.execute(text("SELECT chat_mode FROM session_links")).scalar_one() == "memory_read_write"
     migrate(pg_url, "0021_live_transcripts", action="downgrade")
     migrate(pg_url)

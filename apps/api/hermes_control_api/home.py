@@ -147,7 +147,7 @@ def home_view(db, owner, services):
             "updatedAt": row.updated_at, "unread": bool(row.last_notified_at and (not row.seen_at or utc(row.last_notified_at) > utc(row.seen_at)))})
     preference = db.get(HomePreference, owner)
     reviews = list(db.scalars(select(HomeReview).where(HomeReview.owner_id == owner).order_by(HomeReview.started_at.desc()).limit(5)))
-    return {"features": {"customPanels": True, "proactive": False}, "layout": layout.model_dump(by_alias=True), "snapshots": snapshots, "suggestions": suggestions[:5],
+    return {"features": {"customPanels": False, "proactive": False}, "layout": layout.model_dump(by_alias=True), "snapshots": snapshots, "suggestions": suggestions[:5],
         "sources": source_choices(resources), "review": {"model": "gpt-6-luna", "intervalMinutes": 60,
             "lastCheckedAt": preference.last_checked_at if preference else None,
             "lastAnalysisAt": preference.last_analysis_at if preference else None,

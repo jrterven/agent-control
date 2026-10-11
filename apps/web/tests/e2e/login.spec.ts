@@ -24,7 +24,7 @@ test("autentica al administrador sin persistir la contraseña en almacenamiento 
   await page.getByLabel("Contraseña").fill("correcta-e2e-segura");
   await page.getByRole("button", { name: "Entrar a Agent Control" }).click();
 
-  await expect(page).toHaveURL(/\/chats$/);
+  await expect(page).toHaveURL(/\/home$/);
   await expect(page.getByRole("button", { name: "Elegir espacio de trabajo: Operación móvil", exact: true })).toBeVisible();
   const storage = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }));
   expect(storage).not.toContain("correcta-e2e-segura");
