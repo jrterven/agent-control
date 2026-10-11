@@ -264,7 +264,7 @@ def test_oidc_rejects_stolen_state_without_browser_cookie(cloud):
 
 @pytest.mark.parametrize("target", ["https://evil.test", "//evil.test", "/%2fevil.test", "/\\evil.test", "/\r\nevil", "/api/v1/auth/logout"])
 def test_oidc_return_to_rejects_external_redirects(target):
-    assert safe_return_to(target) == "/chats"
+    assert safe_return_to(target) == "/home"
 
 
 def test_google_id_token_verifies_signature_audience_nonce_and_expiry(cloud):

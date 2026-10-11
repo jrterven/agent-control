@@ -27,6 +27,7 @@ from .api.connector_routes import router as connector_router
 from .api.vision_routes import router as vision_router
 from .api.mail_routes import router as mail_router
 from .api.mail_mcp import router as mail_mcp_router
+from .api.home_routes import router as home_router
 from .mail_service import MailService
 from .mail_providers import MailError
 from .remote_provider import BackgroundTasksBusyError, ConnectorRegistry
@@ -546,6 +547,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         attachment_max_bytes=settings.prompt_attachment_request_max_bytes,
     )
     app.include_router(router)
+    app.include_router(home_router)
     app.include_router(cloud_auth_router)
     app.include_router(connector_router)
     app.include_router(vision_router)

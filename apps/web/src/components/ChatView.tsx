@@ -1,3 +1,4 @@
+import { useHomeChatContext } from "../lib/home";
 import { useTemporaryChat } from "../lib/temporaryChat";
 import { useSessionMedia } from "../lib/useSessionMedia";
 import { CaretDown, Check, Checks, CircleNotch, File, Image, Lightning, Microphone, MicrophoneSlash, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle, Waveform, Wrench, X } from "@phosphor-icons/react";
@@ -737,9 +738,20 @@ function Composer({ agentName, sessionId, canInterrupt, offline = false, speechA
     setAttachments([]);
     setAttachmentMenuOpen(false);
     setAttachmentIssue(undefined);
-    void draft.load().then((loaded) => { if (active) setValue(loaded); });
+    void draft.load().then((loaded) => {
+      if (!active || useAppStore.getState().userId !== composerOwnerId) return;
+      const pending = useHomeChatContext.getState();
+      if (!sessionId && pending.text && pending.ownerId === composerOwnerId) {
+        const next = [loaded, pending.text].filter(Boolean).join("\n\n");
+        setValue(next);
+        draft.save(next);
+        pending.set("", "");
+      } else {
+        setValue(loaded);
+      }
+    });
     return () => { active = false; };
-  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionId, composerOwnerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const previewSelection = dictationSelectionRef.current ?? { start: value.length, end: value.length };
   const displayedValue = dictation.partial

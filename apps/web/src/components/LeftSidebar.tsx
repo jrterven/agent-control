@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Archive, CaretDown, ChatTeardropText, CheckSquareOffset, DotsThree, DotsThreeVertical, FolderSimple, GearSix, Lightning, MagnifyingGlass, PencilSimple, Plus, PushPinSimple, PushPinSimpleSlash, Robot, Trash, WarningCircle, X } from "@phosphor-icons/react";
+import { Archive, CaretDown, ChatTeardropText, CheckSquareOffset, DotsThree, DotsThreeVertical, FolderSimple, House, GearSix, Lightning, MagnifyingGlass, PencilSimple, Plus, PushPinSimple, PushPinSimpleSlash, Robot, Trash, WarningCircle, X } from "@phosphor-icons/react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { Badge, Button, IconButton, StatusDot, cx } from "@hermes-control/ui";
 import { useTranslation } from "react-i18next";
@@ -60,6 +60,7 @@ export function LeftSidebar() {
   const [workspaceDescription, setWorkspaceDescription] = useState("");
   const [workspaceError, setWorkspaceError] = useState("");
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [historyExpanded, setHistoryExpanded] = useState(true);
   const [workspacesExpanded, setWorkspacesExpanded] = useState(true);
   const [sessionMenuId, setSessionMenuId] = useState("");
   const [pinBusyId, setPinBusyId] = useState("");
@@ -457,9 +458,8 @@ export function LeftSidebar() {
           <MagnifyingGlass size={17} /><span>{t("sidebar.searchAll")}</span><kbd>⌘ K</kbd>
         </button>
 
-        <nav className="sidebar-main-nav" aria-label={t("sidebar.mainSections")}>
+        <nav className="sidebar-main-nav" aria-label={t("sidebar.mainSections")}><Link to="/home" className={pathname === "/home" ? "is-active" : ""}><House /><span>{t("home.title")}</span></Link>
           <Link to="/chats" className={pathname === "/chats" ? "is-active" : ""}><ChatTeardropText /><span>{t("nav.chats")}</span></Link>
-          <Link to="/agents" className={pathname === "/agents" ? "is-active" : ""}><Robot /><span>{t("nav.agents")}</span></Link>
           <Link to="/automations" className={pathname === "/automations" ? "is-active" : ""}><Lightning /><span>{t("nav.automationsShort")}</span></Link>
           <Link to="/more" className={pathname === "/more" ? "is-active" : ""}><DotsThree /><span>{t("nav.more")}</span></Link>
         </nav>
@@ -512,13 +512,13 @@ export function LeftSidebar() {
           </div> : null}
 
           <div className="sidebar-section sidebar-section--sessions">
-            <div className="sidebar-section__heading"><span>{t("sidebar.conversations")}</span>{!mutationsDisabled ? <button type="button" ref={selectionTriggerRef} className="hc-icon-button" aria-label={t("sidebar.selectConversations")} title={t("sidebar.selectConversations")} aria-pressed={bulkSelection.active} disabled={bulkSelection.busy || (!pinnedSessions.length && !visibleSessions.length && !bulkSelection.active)} onClick={() => {
+            <div className="sidebar-section__heading"><button type="button" className={cx("sidebar-section__toggle", !historyExpanded && "is-collapsed")} aria-expanded={historyExpanded} aria-controls="sidebar-chat-history" onClick={() => setHistoryExpanded((v) => !v)}><CaretDown size={14} /><span>{t("sidebar.conversations")}</span></button>{!mutationsDisabled ? <button type="button" ref={selectionTriggerRef} className="hc-icon-button" aria-label={t("sidebar.selectConversations")} title={t("sidebar.selectConversations")} aria-pressed={bulkSelection.active} disabled={bulkSelection.busy || (!pinnedSessions.length && !visibleSessions.length && !bulkSelection.active)} onClick={() => {
               closeSessionMenu();
               setSessionAnnouncement("");
               if (bulkSelection.active) exitSelection();
               else bulkSelection.enter();
             }}><CheckSquareOffset size={17} /></button> : null}</div>
-            <div className="session-list">
+            <div className="session-list" id="sidebar-chat-history" hidden={!historyExpanded}>
               {visibleSessions.map((session) => renderSessionRow(session))}
             </div>
           </div>

@@ -56,7 +56,7 @@ describe("hosted sign-in", () => {
     expect(screen.getByText(/No invitation is required/)).toBeInTheDocument();
     expect(screen.getByText(/20 places in total/)).toBeInTheDocument();
     expect(screen.queryByText("Invitation-only beta")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Continue with Google" })).toHaveAttribute("href", "/api/v1/auth/google/start?returnTo=%2Fchats");
+    expect(screen.getByRole("link", { name: "Continue with Google" })).toHaveAttribute("href", "/api/v1/auth/google/start?returnTo=%2Fhome");
   });
 
   it.each([
@@ -87,8 +87,8 @@ describe("hosted sign-in", () => {
   });
 
   it("does not turn a return URL into an external redirect", () => {
-    expect(googleLoginUrl("?returnTo=https://attacker.test/")).toBe("/api/v1/auth/google/start?returnTo=%2Fchats");
-    expect(googleLoginUrl("?returnTo=//attacker.test/")).toBe("/api/v1/auth/google/start?returnTo=%2Fchats");
+    expect(googleLoginUrl("?returnTo=https://attacker.test/")).toBe("/api/v1/auth/google/start?returnTo=%2Fhome");
+    expect(googleLoginUrl("?returnTo=//attacker.test/")).toBe("/api/v1/auth/google/start?returnTo=%2Fhome");
     expect(googleLoginUrl("?returnTo=%2Fconnect%3Fcode%3DA%26returnTo%3Dhttps%3A%2F%2Fattacker.test")).toBe("/api/v1/auth/google/start?returnTo=%2Fconnect%3Fcode%3DA");
   });
 

@@ -12,6 +12,8 @@ import { NotificationMenu } from "./NotificationMenu";
 import { TopBar } from "./TopBar";
 import { PwaInstallInvitation } from "./PwaInstallInvitation";
 import { PanelResizeHandle, useDesktopPanelResize } from "./DesktopPanelResize";
+import { HomeAppearance, HomePinnedPanels } from "./Home";
+import { useHome } from "../lib/home";
 
 export function AppShell({ children, conversation = false }: { children: ReactNode; conversation?: boolean }) {
   const { t } = useTranslation();
@@ -22,7 +24,10 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
   const setUpdateBlocker = usePwaUpdateStore((state) => state.setBlocker);
   const desktopContextOpen = useAppStore((state) => state.desktopContextOpen);
   const desktopSidebarOpen = useAppStore((state) => state.desktopSidebarOpen);
-  const panels = useDesktopPanelResize(desktopSidebarOpen, desktopContextOpen);
+  const home = useHome();
+  const showPins = conversation && !desktopContextOpen && Boolean(home.data?.layout.panels.some((p) => p.pinned));
+  const rightOpen = desktopContextOpen || showPins;
+  const panels = useDesktopPanelResize(desktopSidebarOpen, rightOpen);
 
   useEffect(() => {
     setUpdateBlocker("streaming", hasStreamingResponse);
@@ -36,7 +41,8 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
   }, [updateBlockers, updateDeferred, updateStatus]);
 
   return (
-    <div ref={panels.shellRef} style={panels.style} className={cx("app-shell", !desktopContextOpen && "is-context-collapsed", !desktopSidebarOpen && "is-sidebar-collapsed", panels.resizing && "is-panel-resizing")}>
+    <div ref={panels.shellRef} style={panels.style} className={cx("app-shell", !rightOpen && "is-context-collapsed", showPins && "has-home-pins", !desktopSidebarOpen && "is-sidebar-collapsed", panels.resizing && "is-panel-resizing")}>
+      <HomeAppearance />
       <a className="skip-link" href="#main-content">{t("nav.skipToContent")}</a>
       <LeftSidebar />
       <div className="app-center">
@@ -45,6 +51,7 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
         <main id="main-content" className={conversation ? "main-content main-content--conversation" : "main-content"}>{children}</main>
       </div>
       <ActivityPanel />
+      {showPins && <HomePinnedPanels />}
       <PanelResizeHandle {...panels.handle("left")} />
       <PanelResizeHandle {...panels.handle("right")} />
       <NotificationMenu />

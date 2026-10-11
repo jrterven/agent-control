@@ -1215,6 +1215,7 @@ export function MoreScreen() {
   const { t } = useTranslation();
   const cloud = useCloudConfigurationStore((state) => state.methods?.mode === "cloud");
   const moreItems = [
+    { to: "/agents", title: t("nav.agents"), description: t("agentsPage.description"), icon: Robot },
     { to: "/search", title: t("morePage.search"), description: t("morePage.searchDescription"), icon: MagnifyingGlass },
     { to: cloud ? "/computers" : "/gateways", title: t(cloud ? "cloud.title" : "morePage.gateways"), description: t(cloud ? "cloud.description" : "morePage.gatewaysDescription"), icon: HardDrives },
     { to: "/config", title: t("morePage.config"), description: t("morePage.configDescription"), icon: GearSix },

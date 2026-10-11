@@ -1,4 +1,5 @@
 export * from "./vision";
+export * from "./home";
 
 export type ConnectionState = "connected" | "connecting" | "reconnecting" | "degraded" | "offline";
 

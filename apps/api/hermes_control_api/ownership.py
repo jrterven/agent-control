@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, with_loader_criteria
 from . import models as m
 from .connector_models import Connector
 from .mail_models import MailAccount, MailAgent, MailOAuthFlow, MailSendOperation
+from .home_models import HomePreference, HomePanelSnapshot, HomeSuggestion, HomeReview
 
 
 def active_gateway_filter(gateway_column, *, cloud: bool, owner_id: str):
@@ -49,7 +50,7 @@ def scope_cloud_session(db: Session, owner_id: str) -> None:
                   m.VisualMedia, m.VisualMediaRouteTombstone):
         if hasattr(model, "owner_id"):
             policy.append(with_loader_criteria(model, model.owner_id == owner_id, include_aliases=True))
-    for model in (MailAccount, MailAgent, MailOAuthFlow, MailSendOperation):
+    for model in (MailAccount, MailAgent, MailOAuthFlow, MailSendOperation, HomePreference, HomePanelSnapshot, HomeSuggestion, HomeReview):
         policy.append(with_loader_criteria(model, model.owner_id == owner_id, include_aliases=True))
 
     def restrict(statement):

@@ -58,6 +58,8 @@ test.describe("shell responsive con estado autenticado determinista", () => {
       expect(box!.width).toBeLessThanOrEqual(361);
       expect(box!.x + box!.width).toBeGreaterThanOrEqual(viewport.width - 2);
     } else {
+      await expect(activity).toBeHidden();
+      await page.getByRole("button", { name: "Mostrar contexto" }).click();
       await expect(activity).toBeVisible();
       await expect(activity.getByRole("heading", { name: "Detalles de sesión" })).toBeVisible();
       const columns = await page.locator(".app-shell").evaluate((element) => getComputedStyle(element).gridTemplateColumns);
@@ -103,7 +105,7 @@ test.describe("shell responsive con estado autenticado determinista", () => {
     await expect.poll(async () => (await main.boundingBox())!.width).toBeLessThan(initialWidth + 2);
 
     if (page.viewportSize()!.width >= 1200) {
-      await page.getByRole("button", { name: "Ocultar contexto" }).click();
+      await expect(page.locator("#activity-panel")).toBeHidden();
       await page.getByRole("button", { name: "Ocultar barra lateral" }).click();
       await expect(sidebar).toBeHidden();
       await expect(page.locator("#activity-panel")).toBeHidden();

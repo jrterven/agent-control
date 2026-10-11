@@ -24,6 +24,7 @@ import { pluginResources } from "./locales/plugins";
 import { semanticSearchResources } from "./locales/semanticSearch";
 import { speakerRecognitionResources } from "./locales/speakerRecognition";
 import { connectorUpdateResources } from "./locales/connectorUpdates";
+import { homeResources } from "./locales/home";
 
 export const SUPPORTED_LANGUAGES = ["en", "es", "fr", "de", "pt"] as const;
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
@@ -66,6 +67,7 @@ const i18nInitialization = i18n.use(initReactI18next).init({
     SUPPORTED_LANGUAGES.map((language) => [language, { translation: Object.assign(
       {},
       asResource(baseTranslations[language]),
+      asResource(homeResources[language]),
       asResource(adminResources[language]),
       asResource(navigationResources[language]),
       asResource(notificationResources[language]),

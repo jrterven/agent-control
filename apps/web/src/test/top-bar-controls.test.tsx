@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import axe from "axe-core";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -131,7 +132,7 @@ describe("desktop top bar controls", () => {
 
   it("collapses and restores the docked context panel", async () => {
     const user = userEvent.setup();
-    const { container } = render(<AppShell><div>Contenido del chat</div></AppShell>);
+    const { container } = render(<QueryClientProvider client={new QueryClient()}><AppShell><div>Contenido del chat</div></AppShell></QueryClientProvider>);
     const shell = container.querySelector(".app-shell");
     const panel = container.querySelector("#activity-panel");
 
@@ -152,7 +153,7 @@ describe("desktop top bar controls", () => {
 
   it("hides and restores desktop navigation independently from context and remembers the preference", async () => {
     const user = userEvent.setup();
-    const { container } = render(<AppShell><div>Contenido del chat</div></AppShell>);
+    const { container } = render(<QueryClientProvider client={new QueryClient()}><AppShell><div>Contenido del chat</div></AppShell></QueryClientProvider>);
     const shell = container.querySelector(".app-shell");
     const sidebar = container.querySelector("#left-sidebar");
 

@@ -42,7 +42,7 @@ const session: SessionSummary = {
 describe("session usage panel", () => {
   beforeEach(() => {
     useAppStore.getState().resetPrivateState();
-    useAppStore.setState({
+    useAppStore.setState({ desktopContextOpen: true,
       authState: "authenticated",
       activityOpen: true,
       demoMode: false,

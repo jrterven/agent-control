@@ -44,7 +44,7 @@ export function pairingCodeFromReturnTo(returnTo: string | null): string | undef
 
 export function googleLoginUrl(search: string): string {
   const code = pairingCodeFromReturnTo(new URLSearchParams(search).get("returnTo"));
-  const returnTo = code ? `/connect?${new URLSearchParams({ code })}` : "/chats";
+  const returnTo = code ? `/connect?${new URLSearchParams({ code })}` : "/home";
   return `/api/v1/auth/google/start?${new URLSearchParams({ returnTo })}`;
 }
 

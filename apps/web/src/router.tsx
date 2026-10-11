@@ -3,6 +3,7 @@ import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@hermes-control/ui";
 import { AppShell } from "./components/AppShell";
+import { HomeScreen } from "./components/Home";
 import { ChatView } from "./components/ChatView";
 import { useAuthBootstrap, useBootstrapData, useOfflineTranscriptCache, useRealtimeConnection, useSessionHistory, useThemePreference } from "./hooks";
 import {
@@ -40,14 +41,14 @@ function RootLayout() {
   const pairingCode = pairingCodeFromReturnTo(new URLSearchParams(searchStr).get("returnTo"));
   if (authState === "checking") return <main className="boot-screen"><BrandMark size="lg" label="Agent Control" /><p>Preparando tu centro de control…</p></main>;
   if (authState === "unauthenticated" && pathname !== "/login") return <><Navigate to="/login" search={{ returnTo: pathname === "/connect" ? `${pathname}${searchStr}` : undefined }} replace /><main className="boot-screen"><BrandMark size="lg" label="Agent Control" /><p>Abriendo el acceso seguro…</p></main></>;
-  if ((authState === "authenticated" || authState === "offline") && pathname === "/login") return <>{pairingCode ? <Navigate to="/connect" search={{ code: pairingCode }} replace /> : <Navigate to="/chats" replace />}<main className="boot-screen"><BrandMark size="lg" label="Agent Control" /><p>Abriendo tus conversaciones…</p></main></>;
+  if ((authState === "authenticated" || authState === "offline") && pathname === "/login") return <>{pairingCode ? <Navigate to="/connect" search={{ code: pairingCode }} replace /> : <Navigate to="/home" replace />}<main className="boot-screen"><BrandMark size="lg" label="Agent Control" /><p>Abriendo tus conversaciones…</p></main></>;
   if (authState === "authenticated" && !configuration.methods) return <main className="boot-screen"><BrandMark size="lg" label="Agent Control" /><p role={configuration.error ? "alert" : "status"}>{t(configuration.error ? "cloud.unavailable" : "cloud.loading")}</p>{configuration.error ? <Button onClick={() => void configuration.load()}>{t("cloud.retry")}</Button> : null}</main>;
   if (authState === "authenticated" && !bootstrapLoaded) return <main className="boot-screen" aria-live="polite"><BrandMark size="lg" label="Agent Control" /><p>Conectando con tus agentes…</p></main>;
   return <Outlet />;
 }
 
 const rootRoute = createRootRoute({ component: RootLayout });
-const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: () => <Navigate to="/chats" replace /> });
+const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: () => <Navigate to="/home" replace /> });
 const loginRoute = createRoute({ getParentRoute: () => rootRoute, path: "/login", validateSearch: (search: Record<string, unknown>): { returnTo?: string; error?: string } => ({ returnTo: typeof search.returnTo === "string" ? search.returnTo : undefined, error: typeof search.error === "string" ? search.error : undefined }), component: LoginScreen });
 
 function shell(component: React.ReactNode, conversation = false) {
@@ -55,6 +56,7 @@ function shell(component: React.ReactNode, conversation = false) {
 }
 
 const chatRoute = createRoute({ getParentRoute: () => rootRoute, path: "/chats", component: () => shell(<ChatView />, true) });
+const homeRoute = createRoute({ getParentRoute: () => rootRoute, path: "/home", component: () => shell(<HomeScreen />) });
 const agentsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/agents", component: () => shell(<AgentsScreen />) });
 const automationsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/automations", component: () => shell(<AutomationsScreen />) });
 const moreRoute = createRoute({ getParentRoute: () => rootRoute, path: "/more", component: () => shell(<MoreScreen />) });
@@ -67,7 +69,7 @@ const diagnosticsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: () => shell(<SettingsScreen />) });
 const adminRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin", component: () => shell(<AdminScreen />) });
 
-const routeTree = rootRoute.addChildren([indexRoute, loginRoute, chatRoute, agentsRoute, automationsRoute, moreRoute, searchRoute, gatewaysRoute, computersRoute, connectRoute, configRoute, diagnosticsRoute, settingsRoute, adminRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, loginRoute, homeRoute, chatRoute, agentsRoute, automationsRoute, moreRoute, searchRoute, gatewaysRoute, computersRoute, connectRoute, configRoute, diagnosticsRoute, settingsRoute, adminRoute]);
 
 export const router = createRouter({ routeTree, defaultPreload: "intent", scrollRestoration: true });
 

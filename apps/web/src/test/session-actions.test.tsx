@@ -70,7 +70,7 @@ describe("session actions", () => {
 
   function prepare(mutable: boolean, methods: string[]) {
     const fixture = stateForSession(mutable, methods);
-    useAppStore.setState({
+    useAppStore.setState({ desktopContextOpen: true,
       authState: "authenticated",
       csrfToken: "csrf-memory-only",
       demoMode: false,

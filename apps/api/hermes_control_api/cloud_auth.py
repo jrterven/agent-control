@@ -38,7 +38,7 @@ def safe_return_to(value: str | None) -> str:
         and not any(ord(c) < 32 or ord(c) == 127 for c in decoded)
         and not decoded.startswith("/api/")):
         return value
-    return "/chats"
+    return "/home"
 
 
 def normalized_email(value: str) -> str:
