@@ -55,8 +55,6 @@ def validate_sources(sources: HomeSources, resources):
 
 
 def save_layout(db, owner, layout, cloud):
-    if layout.proactive.enabled:
-        raise HTTPException(409, "HOME_FEATURE_PENDING")
     resources = owned_resources(db, owner, cloud)
     profiles = {row.id for row in resources["profiles"]}
     validate_sources(layout.proactive.sources, resources)
@@ -81,7 +79,7 @@ def save_layout(db, owner, layout, cloud):
             result = db.execute(update(HomePreference).where(HomePreference.owner_id == owner,
                 HomePreference.revision == layout.revision).values(layout=values, revision=layout.revision + 1,
                 # Configuration changes invalidate in-flight publication, not the hourly cost gate.
-                source_digest=None, last_error=None))
+                source_digest=None if row.layout.get("proactive") != values["proactive"] else row.source_digest, last_error=None if row.layout.get("proactive") != values["proactive"] else row.last_error))
             if result.rowcount != 1:
                 raise HTTPException(409, "HOME_LAYOUT_CHANGED")
         panel_ids = [p.id for p in layout.panels]
@@ -103,6 +101,21 @@ def source_choices(resources):
     }
 
 
+def suggestion_selected(source_key, layout, resources):
+    selection = layout.proactive.sources
+    parts = source_key.split(":", 2)
+    if len(parts) < 2:
+        return False
+    kind, identifier = parts[:2]
+    if kind == "mail":
+        return identifier in selection.mail_account_ids and identifier in {m.id for m in resources["mailAccounts"]}
+    if kind == "automation":
+        return identifier in selection.automation_ids and identifier in {a.id for a in resources["automations"]}
+    if kind == "chat":
+        return any(s.id == identifier and (s.id in selection.session_ids or s.workspace_id in selection.workspace_ids) for s in resources["sessions"])
+    return False
+
+
 def home_view(db, owner, services):
     layout = layout_for(db, owner)
     resources = owned_resources(db, owner, services.settings.deployment_mode == "cloud")
@@ -112,18 +125,22 @@ def home_view(db, owner, services):
         status = "ready"
         stamp = None
         if panel.kind == "automations":
-            items = [{"id": a.id, "title": a.name, "detail": a.schedule, "status": "enabled" if a.enabled else "paused", "url": "/automations"} for a in resources["automations"]]
+            items = [{"id": a.id, "title": a.name, "detail": a.schedule, "status": "enabled" if a.enabled else "paused", "url": "/automations", "observedAt": a.updated_at} for a in resources["automations"]]
         elif panel.kind == "pinned":
-            items = [{"id": s.id, "title": s.display_title or s.title or "Chat", "sessionId": s.id} for s in resources["sessions"] if s.pinned_at]
+            items = [{"id": s.id, "title": s.display_title or s.title or "Chat", "sessionId": s.id, "observedAt": s.updated_at} for s in resources["sessions"] if s.pinned_at]
         elif panel.kind == "background":
             for s in resources["sessions"]:
                 snapshot = s.background_tasks or {}
                 observed = snapshot.get("observedAt")
+                try:
+                    fresh = bool(observed and (datetime.now(timezone.utc) - utc(datetime.fromisoformat(observed.replace("Z", "+00:00")))).total_seconds() < 300)
+                except (ValueError, TypeError):
+                    fresh = False
                 for task in snapshot.get("items", []):
                     if task.get("state") not in {"queued", "running", "failed", "unknown"}:
                         continue
                     items.append({"id": task["id"], "title": s.display_title or s.title or "Chat", "sessionId": s.id,
-                        "status": task.get("state", "unknown"), "observedAt": observed})
+                        "status": task.get("state", "unknown") if fresh else "unknown", "observedAt": observed})
         elif panel.kind == "reports":
             ids = [a.id for a in resources["automations"]]
             runs = list(db.scalars(select(AutomationRun).where(AutomationRun.automation_id.in_(ids)).order_by(AutomationRun.created_at.desc()).limit(10)))
@@ -132,7 +149,7 @@ def home_view(db, owner, services):
                       "status": r.status, "observedAt": r.finished_at} for r in runs]
         elif panel.kind == "mail":
             # Mail contents are read only by the explicit source-selection worker.
-            items = [{"id": m.id, "title": m.label or m.address, "status": m.status, "url": "/settings"} for m in resources["mailAccounts"]]
+            items = [{"id": m.id, "title": m.label or m.address, "status": m.status, "url": "/settings", "observedAt": m.updated_at} for m in resources["mailAccounts"]]
         elif panel.kind == "custom":
             row = db.scalar(select(HomePanelSnapshot).where(HomePanelSnapshot.owner_id == owner, HomePanelSnapshot.panel_id == panel.id))
             if row and row.definition_digest == panel_digest(panel):
@@ -140,19 +157,25 @@ def home_view(db, owner, services):
                 snapshots[panel.id] = {**payload, "status": "stale" if row.error_code else "ready", "errorCode": row.error_code, "updatedAt": row.updated_at}
                 continue
             status = "pending"
-        snapshots[panel.id] = {"items": items[:20], "status": status, "updatedAt": stamp}
+        references = [{"title": item["title"], "sessionId": item["sessionId"]} for item in items if item.get("sessionId")]
+        stamps = [item.get("observedAt") for item in items if item.get("observedAt")]
+        stamp = max(str(v) for v in stamps) if stamps else None
+        snapshots[panel.id] = {"items": items[:20], "status": status, "updatedAt": stamp, "sources": references[:20]}
     suggestions = []
     now = datetime.now(timezone.utc)
     for row in db.scalars(select(HomeSuggestion).where(HomeSuggestion.owner_id == owner,
             HomeSuggestion.status == "open").order_by(HomeSuggestion.priority.desc(), HomeSuggestion.updated_at.desc()).limit(100)):
+        if not suggestion_selected(row.source_key, layout, resources):
+            continue
         if row.snoozed_until and utc(row.snoozed_until) > now:
             continue
         payload = json.loads(services.vault.decrypt(row.content_ciphertext, aad=f"home-suggestion:{owner}:{row.identity_key}"))
+        payload.pop("noticePending", None)
         suggestions.append({**payload, "id": row.id, "status": row.status, "dueAt": row.due_at,
             "updatedAt": row.updated_at, "unread": bool(row.last_notified_at and (not row.seen_at or utc(row.last_notified_at) > utc(row.seen_at)))})
     preference = db.get(HomePreference, owner)
     reviews = list(db.scalars(select(HomeReview).where(HomeReview.owner_id == owner).order_by(HomeReview.started_at.desc()).limit(5)))
-    return {"features": {"customPanels": True, "proactive": False}, "layout": layout.model_dump(by_alias=True), "snapshots": snapshots, "suggestions": suggestions[:5],
+    return {"features": {"customPanels": True, "proactive": True}, "layout": layout.model_dump(by_alias=True), "snapshots": snapshots, "suggestions": suggestions[:5],
         "sources": source_choices(resources), "review": {"model": "gpt-6-luna", "intervalMinutes": 60,
             "lastCheckedAt": preference.last_checked_at if preference else None,
             "lastAnalysisAt": preference.last_analysis_at if preference else None,

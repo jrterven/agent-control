@@ -44,7 +44,7 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
     <div ref={panels.shellRef} style={panels.style} className={cx("app-shell", !rightOpen && "is-context-collapsed", showPins && "has-home-pins", !desktopSidebarOpen && "is-sidebar-collapsed", panels.resizing && "is-panel-resizing")}>
       <HomeAppearance />
       <a className="skip-link" href="#main-content">{t("nav.skipToContent")}</a>
-      <LeftSidebar />
+      <LeftSidebar homeUnread={home.data?.suggestions.filter((s) => s.unread).length ?? 0} />
       <div className="app-center">
         <TopBar />
         <ConnectionBanner />
@@ -55,7 +55,7 @@ export function AppShell({ children, conversation = false }: { children: ReactNo
       <PanelResizeHandle {...panels.handle("left")} />
       <PanelResizeHandle {...panels.handle("right")} />
       <NotificationMenu />
-      <BottomNav />
+      <BottomNav homeUnread={home.data?.suggestions.filter((s) => s.unread).length ?? 0} />
       <CommandPalette />
       <PwaInstallInvitation />
     </div>

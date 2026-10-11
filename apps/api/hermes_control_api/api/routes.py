@@ -442,7 +442,7 @@ def readiness(request: Request) -> Any:
     now = datetime.now(timezone.utc)
     if request.app.state.services.settings.deployment_mode == "cloud":
         supervisors = {}
-        for public_name, state_name in (("automationRoutes", "automation_route_health"), ("capabilityRefresh", "capability_refresh_health")):
+        for public_name, state_name in (("automationRoutes", "automation_route_health"), ("capabilityRefresh", "capability_refresh_health"), ("homeReview", "home_review_health")):
             watcher = getattr(request.app.state, state_name, None)
             supervisors[public_name] = str(watcher.snapshot(at=now)["status"]) if watcher is not None else "unknown"
         healthy = all(status in {"healthy", "starting"} for status in supervisors.values())

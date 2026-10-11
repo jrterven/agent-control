@@ -1,4 +1,7 @@
 const en = {
+  theme: "Theme", themes: { device: "Current device preference", light: "Light", dark: "Dark", auto: "Automatic" }, unread: "New Home suggestions",
+  pauseAll: "Pause all automatic Home analysis", panelsActive: "Your panels refresh automatically",
+  errors: { HOME_MODEL_UNAVAILABLE: "Luna is unavailable. Analysis is suspended; retry after checking your agent's provider.", HOME_CONNECTOR_UPDATE_REQUIRED: "Update your computer's connector to enable restricted analysis.", HOME_SOURCE_UNAVAILABLE: "A selected source is unavailable. Previous results are preserved; checking again on reconnection." },
   title: "Home", greeting: "A little more space for what matters.", subtitle: "Your work, your panels, your next step.",
   customize: "Customize", done: "Done", add: "Add panel", describe: "Describe a panel", save: "Save", cancel: "Cancel", close: "Close",
   loading: "Getting your Home ready…", error: "Home could not be loaded. Your conversations are still available.", retry: "Try again",
@@ -7,7 +10,7 @@ const en = {
   pin: "Pin beside chat", unpin: "Unpin", remove: "Remove panel", up: "Move up", down: "Move down", ask: "Ask about this panel", pinned: "Your panels",
   kinds: { pending: "Needs your attention", prepared: "Prepared for you", background: "Working in the background", automations: "Automations", pinned: "Pinned chats", mail: "Mail to review", reports: "Recurring reports", custom: "Your panel" },
   hints: { pending: "Suggestions grounded in the sources you choose.", prepared: "Summaries and drafts, ready for your review.", background: "Keep an eye on work already in progress.", automations: "Your recurring work, in one place.", pinned: "Pick up the conversations that matter.", mail: "Connected accounts and suggested replies.", reports: "The latest results from your automations." },
-  enable: "Review my selected sources every hour", reviewHint: "GPT-6 Luna reviews changes and prepares drafts. Nothing is sent or changed in other services. Model usage is billed through your agent's provider.",
+  enable: "Review my selected sources every hour", reviewHint: "GPT-6 Luna reviews changes and prepares drafts. Nothing is sent or changed in other services. Model usage consumes your agent provider's quota.",
   agent: "Agent", chooseAgent: "Choose an agent", updateAgent: "This agent needs a connector update for restricted analysis.",
   sessions: "Chats", workspaces: "Projects", automations: "Automations", mailAccounts: "Mail accounts", sources: "Sources", timezone: "Timezone", quiet: "Quiet hours", quietStart: "From", quietEnd: "Until", quietHint: "Both times are optional; reviews continue quietly during these hours.",
   reviewed: "Last checked", next: "Next review", never: "Not checked yet", paused: "Review paused", hourly: "Checks every hour · only analyzes changes", unavailable: "Review unavailable. Check the selected agent and sources.",
@@ -21,6 +24,9 @@ const en = {
   chatPrompt: "Help me with this panel. Here is the current information and its sources:",
 };
 const es: typeof en = {
+  theme: "Tema", themes: { device: "Preferencia de este dispositivo", light: "Claro", dark: "Oscuro", auto: "Automático" }, unread: "Sugerencias nuevas en Home",
+  pauseAll: "Pausar todos los análisis automáticos de Home", panelsActive: "Tus paneles se actualizan automáticamente",
+  errors: { HOME_MODEL_UNAVAILABLE: "Luna no está disponible. El análisis está suspendido; reintenta después de revisar el proveedor de tu agente.", HOME_CONNECTOR_UPDATE_REQUIRED: "Actualiza el conector de tu equipo para activar el análisis restringido.", HOME_SOURCE_UNAVAILABLE: "Una fuente no está disponible. Conservamos los resultados y revisaremos al reconectar." },
   title: "Home", greeting: "Más espacio para lo que importa.", subtitle: "Tu trabajo, tus paneles, tu siguiente paso.",
   customize: "Personalizar", done: "Listo", add: "Agregar panel", describe: "Describe un panel", save: "Guardar", cancel: "Cancelar", close: "Cerrar",
   loading: "Preparando tu Home…", error: "No se pudo cargar Home. Tus conversaciones siguen disponibles.", retry: "Reintentar",
@@ -29,7 +35,7 @@ const es: typeof en = {
   pin: "Fijar junto al chat", unpin: "Desfijar", remove: "Quitar panel", up: "Subir", down: "Bajar", ask: "Preguntar sobre este panel", pinned: "Tus paneles",
   kinds: { pending: "Requiere tu atención", prepared: "Preparado para ti", background: "Trabajando en segundo plano", automations: "Automatizaciones", pinned: "Chats fijados", mail: "Correo por revisar", reports: "Informes recurrentes", custom: "Tu panel" },
   hints: { pending: "Sugerencias basadas en las fuentes que elijas.", prepared: "Resúmenes y borradores, listos para revisar.", background: "Consulta el trabajo que ya está en marcha.", automations: "Tu trabajo recurrente, en un solo lugar.", pinned: "Retoma las conversaciones que importan.", mail: "Cuentas conectadas y respuestas sugeridas.", reports: "Los resultados recientes de tus automatizaciones." },
-  enable: "Revisar mis fuentes seleccionadas cada hora", reviewHint: "GPT-6 Luna analiza cambios y prepara borradores. No envía ni modifica otros servicios. El uso del modelo se factura mediante el proveedor de tu agente.",
+  enable: "Revisar mis fuentes seleccionadas cada hora", reviewHint: "GPT-6 Luna analiza cambios y prepara borradores. No envía ni modifica otros servicios. El análisis consume la cuota del proveedor de tu agente.",
   agent: "Agente", chooseAgent: "Elige un agente", updateAgent: "Este agente necesita actualizar su conector para el análisis restringido.",
   sessions: "Chats", workspaces: "Proyectos", automations: "Automatizaciones", mailAccounts: "Cuentas de correo", sources: "Fuentes", timezone: "Zona horaria", quiet: "Horario silencioso", quietStart: "Desde", quietEnd: "Hasta", quietHint: "Ambas horas son opcionales; las revisiones continúan sin avisos durante ese horario.",
   reviewed: "Última revisión", next: "Próxima revisión", never: "Sin revisiones todavía", paused: "Revisión pausada", hourly: "Revisa cada hora · analiza solo cambios", unavailable: "Revisión no disponible. Revisa el agente y las fuentes seleccionadas.",

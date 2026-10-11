@@ -7,7 +7,7 @@ function data(): HomeData {
   const sources = { sessionIds: [], workspaceIds: [], automationIds: [], mailAccountIds: [], urls: [] };
   return {
     features: { customPanels: false, proactive: false },
-    layout: { revision: 0, background: 'mist', reduceTransparency: false,
+    layout: { paused: false, theme: null, revision: 0, background: 'mist', reduceTransparency: false,
       panels: ['pending', 'prepared', 'background', 'automations'].map((kind) => ({ id: kind, kind, title: '', description: '', size: 'compact', pinned: false, sources, profileId: null, refreshMinutes: 1440, display: 'summary' } as PanelDefinition)),
       proactive: { enabled: false, profileId: null, sources, timezone: 'America/Mexico_City', language: 'es', quietStart: null, quietEnd: null } },
     snapshots: { background: { status: 'ready', updatedAt: null, items: [{ id: 'task', title: 'Investigación semanal', status: 'running', sessionId: 'session-e2e' }] } }, suggestions: [],
@@ -32,6 +32,7 @@ test('Home personaliza, persiste y fija paneles sin desbordar la pantalla', asyn
   await panel.getByRole('combobox').selectOption('wide');
   await panel.getByRole('button', { name: 'Subir', exact: true }).click();
   await page.getByLabel('Fondo', { exact: true }).selectOption('dusk');
+  await page.getByLabel('Tema', { exact: true }).selectOption('dark');
   await page.getByLabel('Reducir transparencias').check();
   await page.getByRole('button', { name: 'Listo', exact: true }).click();
   await page.reload();
@@ -39,6 +40,7 @@ test('Home personaliza, persiste y fija paneles sin desbordar la pantalla', asyn
   await expect(page.locator('html')).toHaveAttribute('data-reduce-transparency', 'true');
   expect(home.layout.panels[1].id).toBe('background');
   expect(home.layout.panels[1].pinned).toBe(true);
+  expect(home.layout.theme).toBe('dark');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `test-results/home-${test.info().project.name}.png`, fullPage: true });
   await page.goto('/chats');
@@ -85,4 +87,33 @@ test('describe un panel, revisa la vista previa y guarda componentes seguros', a
   await page.reload();
   await expect(page.getByRole('article', { name: 'Investigación' })).toBeVisible();
   expect(await page.evaluate(() => 'panelExecuted' in window)).toBe(false);
+});
+
+
+test('la revisión horaria conserva fuentes, silencio y pausa global', async ({ page }) => {
+  let home = data();
+  home.features.proactive = true;
+  home.sources.profiles = [{ id: 'profile-newton-e2e', label: 'Newton', available: true }];
+  home.sources.workspaces = [{ id: 'project-research', label: 'Investigación' }];
+  await page.route('**/api/v1/home**', async (route) => {
+    if (route.request().method() === 'PUT') home = { ...home, layout: { ...route.request().postDataJSON(), revision: home.layout.revision + 1 } };
+    await route.fulfill({ json: home });
+  });
+  await page.goto('/home');
+  await page.getByRole('button', { name: /Revisión pausada/ }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Revisar mis fuentes seleccionadas cada hora').check();
+  await dialog.getByRole('combobox', { name: /^Agente/ }).selectOption('profile-newton-e2e');
+  await dialog.locator('summary').filter({ hasText: 'Proyectos' }).click();
+  await dialog.getByLabel('Investigación', { exact: true }).check();
+  await dialog.getByLabel('Desde', { exact: true }).fill('22:00');
+  await dialog.getByLabel('Hasta', { exact: true }).fill('07:00');
+  await dialog.getByLabel('Pausar todos los análisis automáticos de Home').check();
+  await dialog.getByRole('button', { name: 'Guardar', exact: true }).click();
+  await page.reload();
+  expect(home.layout.proactive.sources.workspaceIds).toEqual(['project-research']);
+  expect(home.layout.proactive.quietStart).toBe('22:00');
+  expect(home.layout.paused).toBe(true);
+  await page.getByRole('button', { name: /Revisión pausada/ }).click();
+  await expect(page.getByLabel('Pausar todos los análisis automáticos de Home')).toBeChecked();
 });

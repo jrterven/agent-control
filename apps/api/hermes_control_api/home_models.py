@@ -14,6 +14,7 @@ class HomePreference(Base, Timestamped):
     next_review_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_analysis_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_proactive_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     source_digest: Mapped[str | None] = mapped_column(String(64))
     last_error: Mapped[str | None] = mapped_column(String(80))
     lease_id: Mapped[str | None] = mapped_column(String(36))
@@ -30,6 +31,7 @@ class HomePanelSnapshot(Base, Timestamped):
     source_digest: Mapped[str] = mapped_column(String(64))
     content_ciphertext: Mapped[str] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String(80))
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class HomeSuggestion(Base, Timestamped):

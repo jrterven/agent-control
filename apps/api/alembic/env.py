@@ -9,6 +9,7 @@ from hermes_control_api.config import get_settings
 from hermes_control_api.database import Base
 from hermes_control_api import models  # noqa: F401
 from hermes_control_api import mail_models  # noqa: F401
+from hermes_control_api import home_jobs_models
 from hermes_control_api import home_models  # noqa: F401
 
 

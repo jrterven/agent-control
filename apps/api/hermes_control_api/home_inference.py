@@ -3,7 +3,7 @@ import asyncio
 import json
 from typing import Literal
 
-from pydantic import Field, FiniteFloat
+from pydantic import Field, FiniteFloat, model_validator
 from sqlalchemy import select
 from .home import owned_resources
 from .home_sources import HomeUnavailable, provider_for
@@ -51,6 +51,12 @@ class InsightResult(ApiModel):
     panels: list[GeneratedPanel] = Field(default_factory=list, max_length=20)
     suggestions: list[GeneratedSuggestion] = Field(default_factory=list, max_length=5)
 
+    @model_validator(mode='after')
+    def unique_sources(self):
+        if len({s.source_key for s in self.suggestions}) != len(self.suggestions):
+            raise ValueError('Group follow-up actions for the same source into one card')
+        return self
+
 
 async def analyze(db, services, owner, profile_id, context, operation_id):
     resources = owned_resources(db, owner, services.settings.deployment_mode == 'cloud')
@@ -61,6 +67,16 @@ async def analyze(db, services, owner, profile_id, context, operation_id):
     capability = await provider.capabilities()
     if 'insights.generate' not in capability.methods or not callable(getattr(provider, 'generate_insight', None)):
         raise HomeUnavailable('HOME_CONNECTOR_UPDATE_REQUIRED')
+    # Fixed input budget, including multi-byte text and reused drafts. Preserve
+    # every source identity and shorten only evidence excerpts when necessary.
+    context = json.loads(json.dumps(context))
+    for _ in range(6):
+        if len(json.dumps(context).encode()) <= 60000:
+            break
+        for source in context.get('sources', []):
+            source['text'] = source.get('text', '')[:len(source.get('text', '')) // 2]
+        for previous in context.get('previous', []):
+            previous['draft'] = previous.get('draft', '')[:len(previous.get('draft', '')) // 2]
     if len(json.dumps(context).encode()) > 64000:
         raise HomeUnavailable('HOME_INPUT_TOO_LARGE')
     result = await asyncio.wait_for(provider.generate_insight(context, operation_id=operation_id), 160)

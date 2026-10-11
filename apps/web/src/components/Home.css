@@ -132,3 +132,5 @@
 .home-review-strip:disabled { cursor: default; }
 .session-list[hidden] { display: none; }
 [data-reduce-transparency="true"] .composer-wrap { backdrop-filter: none; }
+
+.home-nav-unread { display: inline-grid; place-items: center; min-width: 14px; height: 14px; margin-left: 4px; border-radius: 50%; background: var(--accent); color: var(--bg); font-size: 9px; font-weight: 700; }

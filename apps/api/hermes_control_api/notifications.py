@@ -46,6 +46,13 @@ class ChatCompletionNotification:
     occurred_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class HomeNotification:
+    owner_id: str
+    notices: list[dict]
+    occurred_at: str
+
+
 def completion_for_session(
     db,
     session: SessionLink,
@@ -164,10 +171,17 @@ def decrypted_subscription(
 
 
 def _localized_payload(
-    completion: ChatCompletionNotification,
+    completion: ChatCompletionNotification | HomeNotification,
     locale: str,
 ) -> dict[str, object]:
     language = locale if locale in _SUPPORTED_LOCALES else "en"
+    if isinstance(completion, HomeNotification):
+        title = {"es": "Preparado para ti", "en": "Prepared for you", "fr": "Préparé pour vous", "de": "Für dich vorbereitet", "pt": "Preparado para você"}[language]
+        body = {"es": "Hay novedades para revisar en Home.", "en": "There is new work to review in Home.", "fr": "De nouveaux éléments sont à consulter dans Accueil.", "de": "Neue Ergebnisse warten auf der Startseite.", "pt": "Há novidades para revisar no Início."}[language]
+        urgent = next((n for n in completion.notices if n['kind'] == 'urgent'), None)
+        if urgent:
+            body = {"es": "Vencimiento en las próximas dos horas: ", "en": "Due within two hours: ", "fr": "Échéance dans les deux heures : ", "de": "Innerhalb von zwei Stunden fällig: ", "pt": "Prazo nas próximas duas horas: "}[language] + str(urgent['dueAt'])
+        return {"title": title, "body": body, "tag": "agent-control-home", "data": {"url": "/home", "occurredAt": completion.occurred_at}}
     labels = {
         "de": {
             "completed": "Aufgabe abgeschlossen",
@@ -252,7 +266,10 @@ class PushNotificationService:
             except Exception:
                 pass
 
-    async def send_completion(self, completion: ChatCompletionNotification) -> None:
+    async def send_home(self, owner: str, notices: list[dict], language: str) -> None:
+        await self.send_completion(HomeNotification(owner, notices, datetime.now(timezone.utc).isoformat()))
+
+    async def send_completion(self, completion: ChatCompletionNotification | HomeNotification) -> None:
         with self.session_factory() as db:
             rows = list(
                 db.scalars(

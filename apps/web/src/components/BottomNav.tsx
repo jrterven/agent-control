@@ -9,14 +9,14 @@ const nav = [
   { to: "/more", labelKey: "nav.more", icon: DotsThreeCircle },
 ] as const;
 
-export function BottomNav() {
+export function BottomNav({ homeUnread = 0 }: { homeUnread?: number } = {}) {
   const { t } = useTranslation();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   return (
     <nav className="bottom-nav" aria-label={t("nav.mainNavigation")}>
       {nav.map(({ to, labelKey, icon: Icon }) => {
         const active = pathname === to || (to === "/more" && !["/home", "/chats", "/automations"].includes(pathname));
-        return <Link key={to} to={to} className={active ? "is-active" : ""}><Icon size={24} weight={active ? "fill" : "regular"} /><span>{t(labelKey)}</span></Link>;
+        return <Link key={to} to={to} className={active ? "is-active" : ""}><Icon size={24} weight={active ? "fill" : "regular"} /><span>{t(labelKey)}{to === "/home" && homeUnread > 0 && <span className="home-nav-unread" aria-label={t("home.unread")}>{homeUnread}</span>}</span></Link>;
       })}
     </nav>
   );

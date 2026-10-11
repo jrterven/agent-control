@@ -97,7 +97,7 @@ async def collect_sources(db, services, owner, sources):
                 'text': '\n'.join(str(message.get(k) or '') for k in ('subject', 'senderAddress', 'receivedAt', 'snippet', 'bodyText'))[:1800],
                 'action': 'reply', 'url': message.get('sourceUrl')})
     for url in sources.urls:
-        rows.append({'key': f'url:{url}', 'title': url, 'url': url,
+        rows.append({'key': f'url:{digest(url)}', 'title': url, 'url': url,
             'text': await asyncio.to_thread(public_text, url), 'action': 'review'})
     # Bind every citation to a source we actually retrieved; never take links from a model.
     result = []

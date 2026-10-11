@@ -90,6 +90,8 @@ class ProactivePreference(ApiModel):
 
 
 class HomeLayout(ApiModel):
+    paused: bool = False
+    theme: Literal["light", "dark", "auto"] | None = None
     revision: int = Field(default=0, ge=0)
     background: Literal["mist", "dusk", "plain"] = "mist"
     reduce_transparency: bool = False

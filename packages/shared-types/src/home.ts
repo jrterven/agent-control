@@ -10,6 +10,7 @@ export interface ProactivePreference {
   language: "en" | "es" | "fr" | "de" | "pt"; quietStart: string | null; quietEnd: string | null;
 }
 export interface HomeLayout {
+  paused: boolean; theme: "light" | "dark" | "auto" | null;
   revision: number; background: "mist" | "dusk" | "plain"; reduceTransparency: boolean;
   panels: PanelDefinition[]; proactive: ProactivePreference;
 }

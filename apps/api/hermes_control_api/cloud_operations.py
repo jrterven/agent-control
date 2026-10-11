@@ -106,6 +106,8 @@ async def drain(request: Request):
     state.cloud_draining = True
     try:
         registry = state.connector_registry
+        if state.home_scheduler.active:
+            raise HTTPException(409, "Home analysis is still in flight")
         if state.speaker_service.tasks:
             raise HTTPException(409, "Speaker recognition jobs are still in flight")
         if state.services.temporary_chats.entries:

@@ -14,7 +14,7 @@ import { SidebarBulkDialog, SidebarSelectionToolbar, useSidebarBulkSelection } f
 import type { SessionSummary, Workspace } from "../types";
 import { useCloudConfigurationStore } from "../lib/cloud";
 
-export function LeftSidebar() {
+export function LeftSidebar({ homeUnread = 0 }: { homeUnread?: number } = {}) {
   const { t, i18n } = useTranslation();
   const cloud = useCloudConfigurationStore((state) => state.methods?.mode === "cloud");
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -458,7 +458,7 @@ export function LeftSidebar() {
           <MagnifyingGlass size={17} /><span>{t("sidebar.searchAll")}</span><kbd>⌘ K</kbd>
         </button>
 
-        <nav className="sidebar-main-nav" aria-label={t("sidebar.mainSections")}><Link to="/home" className={pathname === "/home" ? "is-active" : ""}><House /><span>{t("home.title")}</span></Link>
+        <nav className="sidebar-main-nav" aria-label={t("sidebar.mainSections")}><Link to="/home" className={pathname === "/home" ? "is-active" : ""}><House /><span>{t("home.title")}{homeUnread > 0 && <span className="home-nav-unread" aria-label={t("home.unread")}>{homeUnread}</span>}</span></Link>
           <Link to="/chats" className={pathname === "/chats" ? "is-active" : ""}><ChatTeardropText /><span>{t("nav.chats")}</span></Link>
           <Link to="/automations" className={pathname === "/automations" ? "is-active" : ""}><Lightning /><span>{t("nav.automationsShort")}</span></Link>
           <Link to="/more" className={pathname === "/more" ? "is-active" : ""}><DotsThree /><span>{t("nav.more")}</span></Link>

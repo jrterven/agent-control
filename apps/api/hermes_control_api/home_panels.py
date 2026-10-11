@@ -49,6 +49,7 @@ def save_snapshot(db, services, owner, panel, sources, generated, *, now):
     row.content_ciphertext = services.vault.encrypt(json.dumps(payload), aad=f'home-panel:{owner}:{panel.id}')
     row.error_code = None
     row.updated_at = now
+    row.checked_at = now
     return {**payload, 'status': 'ready', 'updatedAt': now}
 
 

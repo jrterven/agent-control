@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .home_schedule import HomeScheduler
 
 import asyncio
 import contextlib
@@ -440,6 +441,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         mail_watcher = asyncio.create_task(app.state.mail_service.reconcile(app), name="mail-mcp-reconcile")
         temporary_watcher = asyncio.create_task(service_container.temporary_chats.reap(service_container), name="temporary-chat-expiry")
+        home_watcher = asyncio.create_task(supervise_periodic(app.state.home_scheduler.tick, health=app.state.home_review_health, interval_seconds=60), name="home-hourly-review")
         app.state.semantic_search.initialize()
         app.state.speaker_service.initialize()
         semantic_watcher = asyncio.create_task(app.state.semantic_search.run(), name="semantic-search-index")
@@ -447,6 +449,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             await app.state.speaker_service.close()
+            home_watcher.cancel()
             automation_watcher.cancel()
             capability_watcher.cancel()
             email_reference_cache_watcher.cancel()
@@ -454,6 +457,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             temporary_watcher.cancel()
             semantic_watcher.cancel()
             for watcher in (
+                home_watcher,
                 automation_watcher,
                 capability_watcher,
                 email_reference_cache_watcher,
@@ -486,6 +490,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.cloud_metrics = CloudMetrics()
     app.state.session_factory = session_factory
     app.state.services = service_container
+    app.state.home_review_health = SupervisorHealth(stale_after_seconds=1800)
+    app.state.home_scheduler = HomeScheduler(service_container, draining=lambda: app.state.cloud_draining)
     app.state.push_notification_service = push_notification_service
     app.state.elevenlabs_scribe_client = ElevenLabsScribeClient()
     app.state.elevenlabs_speech_client = ElevenLabsSpeechClient()
