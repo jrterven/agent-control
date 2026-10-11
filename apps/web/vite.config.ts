@@ -31,7 +31,7 @@ export default defineConfig({
         theme_color: "#071018",
         background_color: "#071018",
         display: "standalone",
-        start_url: "/chats",
+        start_url: "/home",
         scope: "/",
         icons: [
           { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },

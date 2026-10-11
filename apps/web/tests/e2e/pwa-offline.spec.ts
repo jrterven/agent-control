@@ -173,7 +173,7 @@ test("expone un manifiesto instalable, registra el service worker y no cachea AP
     name: "Agent Control",
     short_name: "Agent Control",
     display: "standalone",
-    start_url: "/chats",
+    start_url: "/home",
     scope: "/",
   });
   expect(manifest.icons).toEqual(expect.arrayContaining([
