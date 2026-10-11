@@ -26,6 +26,7 @@ from hermes_client.connector_protocol import (FrameReader, MAX_FRAME_BYTES, OPER
 from hermes_client.provider import HermesProvider, ProfileManagementServerRequired, RuntimeGenerationChanged, SessionHistoryNotFound
 from hermes_client.types import CapabilitySet, NormalizedEvent, PromptAttachment, SessionRoute
 from . import __version__
+from .insights import generate_insight
 from .media import project_media, read_media
 from .storage import OperationLedger, atomic_json
 from .tls import cloud_ssl_context
@@ -489,6 +490,9 @@ class ConnectorRuntime:
                     result["activeCount"] = (result.get("activeCount") or 0) + policy_status.get("activeTemporary", 0)
                 result["available"] = (result.get("available") is True and self.background_tasks_supported
                     and self.background_states.get(profile, {}).get("state") == "ready")
+            elif operation == "generate_insight":
+                context = args[0] if args else kwargs["context"]
+                result = await asyncio.to_thread(generate_insight, self.config, profile, context)
             elif operation == "media":
                 history = await provider.history_readonly(args[0])
                 result = read_media(history, Path(self.config["hermesHome"]), profile, args[0], args[1])
@@ -528,6 +532,8 @@ class ConnectorRuntime:
             if operation == "list_profiles":
                 result = [item for item in result if item.name in self.providers]
             if operation == "capabilities":
+                if self.config.get("sourceSha") in HERMES_CONNECTOR_REVISIONS:
+                    result = replace(result, methods=result.methods | {"insights.generate"}, features=result.features | {"connector.toolFreeInsightsV1"})
                 result = replace(result, features=result.features | {"connector.historyPageV1"})
                 if (self.profile_transfer_supported
                         and self.config.get("sourceSha") in HERMES_CONNECTOR_REVISIONS

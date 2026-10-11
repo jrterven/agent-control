@@ -33,6 +33,7 @@ def build(output: Path, revision: str) -> Path:
             "--add-data", str(REPO / "packages/connector/agent_control_connector/hermes_media_plugin.py") + ":agent_control_connector",
             "--add-data", str(REPO / "packages/connector/agent_control_connector/hermes_background_plugin.py") + ":agent_control_connector",
             "--add-data", str(REPO / "packages/connector/agent_control_connector/hermes_chat_policy.py") + ":agent_control_connector",
+            "--add-data", str(REPO / "packages/connector/agent_control_connector/insight_worker.py") + ":agent_control_connector",
             "--add-data", str(REPO / "packages/connector/agent_control_connector/profile_export_worker.py") + ":agent_control_connector",
             "--copy-metadata", "agent-control-connector",
             str(entry),

@@ -40,6 +40,8 @@ READ_OPERATIONS = frozenset({
     "profile_archive_read",
 })
 WRITE_OPERATIONS = frozenset({
+    # Inference consumes quota: durable receipts prevent replayed calls.
+    "generate_insight",
     "create_profile", "delete_profile", "create_session", "resume_session",
     "renew_temporary_session", "close_temporary_session",
     "submit_prompt", "attach_prompt_attachment", "detach_prompt_images", "interrupt",

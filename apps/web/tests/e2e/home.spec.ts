@@ -58,3 +58,31 @@ test('preguntar sobre un panel prepara texto sin enviar ni crear una conversaci�
   await expect(page.getByRole('textbox', { name: 'Mensaje a Newton…' })).toHaveValue(/Investigación semanal/);
   expect(writes).toBe(0);
 });
+
+test('describe un panel, revisa la vista previa y guarda componentes seguros', async ({ page }) => {
+  let home = data();
+  home.features.customPanels = true;
+  home.sources.profiles = [{ id: 'profile-newton-e2e', label: 'Newton', available: true }];
+  await page.route('**/api/v1/home**', async (route) => {
+    if (route.request().url().endsWith('/panels/preview')) {
+      const panel = { ...route.request().postDataJSON().panel, title: 'Investigación' };
+      const snapshot = { status: 'ready', updatedAt: '2026-10-11T12:00:00Z', blocks: [{ type: 'list', items: ['Resumen listo para revisar', '<script>window.panelExecuted=true</script>'] }] };
+      home.snapshots[panel.id] = snapshot as HomeData['snapshots'][string];
+      return route.fulfill({ json: { definition: panel, snapshot } });
+    }
+    if (route.request().method() === 'PUT') home = { ...home, layout: { ...route.request().postDataJSON(), revision: 1 } };
+    return route.fulfill({ json: home });
+  });
+  await page.goto('/home');
+  await page.getByRole('button', { name: 'Agregar panel', exact: true }).first().click();
+  await page.getByRole('button', { name: /Describe un panel/ }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('¿Qué te gustaría seguir?').fill('Resume mis hallazgos de investigación');
+  await dialog.getByRole('combobox', { name: /^Agente/ }).selectOption('profile-newton-e2e');
+  await dialog.getByRole('button', { name: 'Vista previa con Luna' }).click();
+  await expect(dialog.getByText('Resumen listo para revisar')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Agregar a Home' }).click();
+  await page.reload();
+  await expect(page.getByRole('article', { name: 'Investigación' })).toBeVisible();
+  expect(await page.evaluate(() => 'panelExecuted' in window)).toBe(false);
+});
