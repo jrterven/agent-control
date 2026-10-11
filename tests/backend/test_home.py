@@ -80,6 +80,12 @@ def test_custom_preview_is_data_only_and_preserved_on_save(authenticated, app, m
     assert saved.status_code == 200, saved.text
     assert saved.json()['snapshots']['custom-test']['blocks'] == result['snapshot']['blocks']
     assert analysis.call_count == 1
+    layout = saved.json()['layout']
+    layout['panels'][-1].update(pinned=True, size='wide')
+    pinned = client.put('/api/v1/home/layout', json=layout, headers=mutation_headers(csrf, 'pin-preview'))
+    assert pinned.status_code == 200
+    assert pinned.json()['snapshots']['custom-test']['blocks'] == result['snapshot']['blocks']
+    assert analysis.call_count == 1
     with app.state.session_factory() as db:
         stored = db.scalar(select(HomePanelSnapshot))
         assert 'No new findings' not in stored.content_ciphertext

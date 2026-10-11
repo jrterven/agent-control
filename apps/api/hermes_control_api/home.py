@@ -21,6 +21,11 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 
+def panel_digest(panel):
+    # Presentation and refresh cadence do not change the model's source data.
+    return digest(panel.model_dump(by_alias=True, exclude={"size", "pinned", "refresh_minutes", "title"}))
+
+
 def layout_for(db, owner):
     row = db.get(HomePreference, owner)
     return HomeLayout.model_validate({**row.layout, "revision": row.revision}) if row else HomeLayout()
@@ -130,7 +135,7 @@ def home_view(db, owner, services):
             items = [{"id": m.id, "title": m.label or m.address, "status": m.status, "url": "/settings"} for m in resources["mailAccounts"]]
         elif panel.kind == "custom":
             row = db.scalar(select(HomePanelSnapshot).where(HomePanelSnapshot.owner_id == owner, HomePanelSnapshot.panel_id == panel.id))
-            if row and row.definition_digest == digest(panel.model_dump(by_alias=True)):
+            if row and row.definition_digest == panel_digest(panel):
                 payload = json.loads(services.vault.decrypt(row.content_ciphertext, aad=f"home-panel:{owner}:{panel.id}"))
                 snapshots[panel.id] = {**payload, "status": "stale" if row.error_code else "ready", "errorCode": row.error_code, "updatedAt": row.updated_at}
                 continue
@@ -147,7 +152,7 @@ def home_view(db, owner, services):
             "updatedAt": row.updated_at, "unread": bool(row.last_notified_at and (not row.seen_at or utc(row.last_notified_at) > utc(row.seen_at)))})
     preference = db.get(HomePreference, owner)
     reviews = list(db.scalars(select(HomeReview).where(HomeReview.owner_id == owner).order_by(HomeReview.started_at.desc()).limit(5)))
-    return {"features": {"customPanels": False, "proactive": False}, "layout": layout.model_dump(by_alias=True), "snapshots": snapshots, "suggestions": suggestions[:5],
+    return {"features": {"customPanels": True, "proactive": False}, "layout": layout.model_dump(by_alias=True), "snapshots": snapshots, "suggestions": suggestions[:5],
         "sources": source_choices(resources), "review": {"model": "gpt-6-luna", "intervalMinutes": 60,
             "lastCheckedAt": preference.last_checked_at if preference else None,
             "lastAnalysisAt": preference.last_analysis_at if preference else None,

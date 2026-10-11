@@ -7,7 +7,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
-from .home import digest, layout_for, owned_resources, utc, validate_sources
+from .home import digest, panel_digest, layout_for, owned_resources, utc, validate_sources
 from .home_models import HomePanelSnapshot, HomePreference, HomeReview
 from .home_schemas import HomeLayout
 from .home_sources import HomeUnavailable, collect_sources
@@ -30,7 +30,7 @@ def acquire(db, owner, now, *, scheduled=False):
             or_(HomePreference.last_analysis_at.is_(None), HomePreference.last_analysis_at <= now - timedelta(hours=1))])
     else:
         conditions.append(or_(HomePreference.last_analysis_at.is_(None), HomePreference.last_analysis_at <= now - timedelta(minutes=1)))
-    result = db.execute(update(HomePreference).where(*conditions).values(lease_id=token, lease_until=now + timedelta(minutes=10)))
+    result = db.execute(update(HomePreference).where(*conditions).execution_options(synchronize_session=False).values(lease_id=token, lease_until=now + timedelta(minutes=10)))
     db.commit()
     if result.rowcount != 1:
         return None
@@ -44,7 +44,7 @@ def save_snapshot(db, services, owner, panel, sources, generated, *, now):
         row = HomePanelSnapshot(owner_id=owner, panel_id=panel.id)
         db.add(row)
     payload = panel_payload(generated, sources)
-    row.definition_digest = digest(panel.model_dump(by_alias=True))
+    row.definition_digest = panel_digest(panel)
     row.source_digest = digest(sources)
     row.content_ciphertext = services.vault.encrypt(json.dumps(payload), aad=f'home-panel:{owner}:{panel.id}')
     row.error_code = None
