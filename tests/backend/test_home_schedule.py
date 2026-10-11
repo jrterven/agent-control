@@ -192,3 +192,20 @@ async def test_suggestions_cannot_cite_invented_evidence(scheduled_home):
     await f.scheduler.tick()
     with f.app.state.session_factory() as db:
         assert list(db.scalars(select(HomeSuggestion))) == []
+
+
+@pytest.mark.asyncio
+async def test_busy_owner_does_not_hold_the_scheduler_queue(scheduled_home, monkeypatch):
+    f = scheduled_home
+    review = AsyncMock()
+    monkeypatch.setattr(f.scheduler, 'review', review)
+    with f.app.state.session_factory() as db:
+        db.get(HomePreference, f.owner).last_analysis_at = f.now[0]
+        eligible = User(username='next-home-owner', password_hash='unused')
+        db.add(eligible)
+        db.flush()
+        eligible_id = eligible.id
+        db.add(HomePreference(owner_id=eligible_id, layout=HomeLayout().model_dump(by_alias=True), next_review_at=f.now[0]))
+        db.commit()
+    await f.scheduler.tick()
+    review.assert_awaited_once_with(eligible_id)

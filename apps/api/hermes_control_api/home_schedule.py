@@ -5,7 +5,7 @@ import json
 import re
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from .home import digest, panel_digest, layout_for, owned_resources, utc, validate_sources
 from .home_inference import analyze
 from .home_jobs_models import HomeNotice
@@ -147,7 +147,9 @@ class HomeScheduler:
         now = self.clock()
         with self.services.session_factory() as db:
             owners = list(db.scalars(select(HomePreference.owner_id).join(User, User.id == HomePreference.owner_id).where(
-                User.is_active.is_(True), HomePreference.next_review_at <= now).order_by(HomePreference.next_review_at).limit(8)))
+                User.is_active.is_(True), HomePreference.next_review_at <= now,
+                or_(HomePreference.lease_until.is_(None), HomePreference.lease_until <= now),
+                or_(HomePreference.last_analysis_at.is_(None), HomePreference.last_analysis_at <= now - timedelta(hours=1))).order_by(HomePreference.next_review_at).limit(8)))
         capacity = asyncio.Semaphore(4)
         async def run(owner):
             async with capacity:
