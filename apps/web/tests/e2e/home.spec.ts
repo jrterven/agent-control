@@ -24,7 +24,7 @@ test('Home personaliza, persiste y fija paneles sin desbordar la pantalla', asyn
   });
   await page.goto('/');
   await expect(page).toHaveURL(/\/home$/);
-  await expect(page.getByRole('heading', { name: 'Más espacio para lo que importa.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Home', exact: true })).toBeVisible();
   await expect(page.getByText('Investigación semanal')).toBeVisible();
   await page.getByRole('button', { name: 'Personalizar', exact: true }).click();
   const panel = page.getByRole('article', { name: 'Trabajando en segundo plano' });
