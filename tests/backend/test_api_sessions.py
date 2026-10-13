@@ -124,6 +124,46 @@ def test_prompt_attachment_rejects_invalid_image_bytes(authenticated):
     assert history.json()["items"] == []
 
 
+def test_direct_image_question_after_live_voice_is_addressed_and_projected_once(authenticated, app, monkeypatch):
+    from hermes_control_api.input_context import DIRECT_CHAT_CONTEXT, LIVE_PREFIX, LIVE_SEPARATOR
+    from hermes_control_api.services import GatewayService
+
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "voice-to-image")
+    async def seed_voice_history():
+        with app.state.session_factory() as db:
+            row = db.get(SessionLink, session["id"])
+            connection = await GatewayService(app.state.services).connection(db, row.gateway_id, row.profile_name)
+        provider = await app.state.services.provider_pool.get(connection)
+        provider._messages[row.stored_session_id] = [{
+            "id": "voice-request", "role": "user",
+            "content": LIVE_PREFIX + "Voice input." + LIVE_SEPARATOR + "User: Only answer when I say Jarvis.",
+        }]
+    client.portal.call(seed_voice_history)
+    submitted = []
+    original = InMemoryHermesProvider.submit_prompt
+    async def capture(provider, route, prompt, **kwargs):
+        submitted.append(prompt)
+        return await original(provider, route, prompt, **kwargs)
+    monkeypatch.setattr(InMemoryHermesProvider, "submit_prompt", capture)
+    url = f"/api/v1/sessions/{session['id']}/prompts-with-attachments"
+    request = client.build_request("POST", url, data={"content": "¿Qué es este sensor?"},
+        files=[("attachments", ("sensor.png", b"\x89PNG\r\n\x1a\npreview", "image/png"))])
+    body = request.read()
+    for _ in range(2):
+        result = client.post(url, content=body,
+            headers={**mutation_headers(csrf, "direct-image-once"), "Content-Type": request.headers["Content-Type"]})
+        assert result.status_code == 202, result.text
+    assert len(submitted) == 1
+    assert DIRECT_CHAT_CONTEXT in submitted[0]
+    history = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert history.status_code == 200, history.text
+    question = [item for item in history.json()["items"] if item["role"] == "user"][-1]
+    assert question["content"] == "¿Qué es este sensor?"
+    assert question["controlAttachments"][0]["name"] == "sensor.png"
+    assert "hermes-control-text-input" not in str(question)
+
+
 def test_prompt_can_send_an_attachment_without_visible_fallback_text(authenticated):
     client, csrf = authenticated
     session = create_session(client, csrf, "control-dev", "attachment-only-session")

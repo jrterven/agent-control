@@ -2976,7 +2976,10 @@ class SearchService:
                             continue
                         safe_content = str(safe.get("content") or "")
                         from .vision_context import project_camera_prompt
-                        safe_content = project_camera_prompt(safe_content)
+                        from .input_context import project_direct_chat_prompt
+                        safe_content = project_direct_chat_prompt(project_camera_prompt(safe_content))
+                        if "hermes-control-text-input-v1" in safe_content:
+                            safe_content = ""
                         safe_content, _ = project_email_reference_prompt(safe_content)
                         if "hermes-control-email-" in safe_content.casefold():
                             safe_content = ""
@@ -3652,6 +3655,8 @@ class SessionService:
                 safe_item.pop("text" if content_key == "content" else "content", None)
                 from .vision_context import project_camera_prompt
                 projected_content, attachments = project_attachment_prompt(project_camera_prompt(raw_content))
+                from .input_context import project_direct_chat_prompt
+                projected_content = project_direct_chat_prompt(projected_content)
                 projected_content, _ = project_email_reference_prompt(projected_content)
                 if gateway is not None and gateway.transport_kind == "connector":
                     image_refs = raw_item.get("controlAttachmentMedia")
@@ -4212,6 +4217,8 @@ class SessionService:
                 control_prompt,
                 vision_context(db, self.services.vault, actor.id, row.id),
             )
+            from .input_context import with_direct_chat_context
+            control_prompt = with_direct_chat_context(control_prompt, baseline_history)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

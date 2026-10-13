@@ -29,6 +29,7 @@ from .openai_live import OpenAIIntegrationService
 from .ownership import active_gateway_filter
 from .supervision import SupervisorHealth
 from .vision_context import project_camera_prompt
+from .input_context import project_direct_chat_prompt
 
 MODEL = "text-embedding-3-small"
 DIMENSIONS = 1536
@@ -78,6 +79,7 @@ def public_text(rows: list[dict], gateway_id: str, profile: str) -> str:
         if not isinstance(text, str):
             continue
         text, _ = project_attachment_prompt(project_camera_prompt(text))
+        text = project_direct_chat_prompt(text)
         text, _ = project_email_reference_prompt(text)
         # Projection is applied per chunk: the public sanitizer deliberately
         # truncates long strings and must not silently discard old message text.
