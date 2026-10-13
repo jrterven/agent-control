@@ -1,3 +1,4 @@
+import { MessageImageGallery } from "./MessageImageGallery";
 import { useTemporaryChat } from "../lib/temporaryChat";
 import { useSessionMedia } from "../lib/useSessionMedia";
 import { CaretDown, Check, Checks, CircleNotch, File, Image, Lightning, Microphone, MicrophoneSlash, PaperPlaneTilt, Pause, Play, Plus, Question, ShieldWarning, SpeakerHigh, Stop, WarningCircle, Waveform, Wrench, X } from "@phosphor-icons/react";
@@ -61,10 +62,11 @@ function attachmentSize(size: number) {
   return `${Math.max(1, Math.round(size / 1024))} KB`;
 }
 
-function MessageAttachments({ attachments }: { attachments: MessageAttachment[] }) {
+function MessageAttachments({ sessionId, attachments }: { sessionId: string; attachments: MessageAttachment[] }) {
   const { t } = useTranslation();
   return <div className="message-attachments" aria-label={t("chat.attachments.attached")}>
-    {attachments.map((attachment, index) => <span className="message-attachment" key={`${attachment.name}-${index}`}>
+    {attachments.map((attachment, index) => attachment.kind === "image" && attachment.mediaId ?
+      <MessageImageGallery key={`${attachment.name}-${index}`} sessionId={sessionId} references={[{ id: attachment.mediaId, alt: attachment.name }]} showProvenance={false} /> : <span className="message-attachment" key={`${attachment.name}-${index}`}>
       {attachment.kind === "image" ? <Image aria-hidden="true" /> : <File aria-hidden="true" />}
       <span><strong>{attachment.name}</strong><small>{attachmentSize(attachment.size)}</small></span>
     </span>)}
@@ -533,13 +535,13 @@ function Message({ message, profile, agentName, speech, liveExplanation, automat
     const conversation = liveDelegationConversation(message.content);
     if (conversation) return <article className="live-transcript" aria-label={t("liveVoice.transcript")}>
       <header className="live-transcript__header"><Waveform aria-hidden="true" /><strong>{t("liveVoice.transcript")}</strong><time>{message.createdAt}</time><DeliveryIcon delivery={message.delivery} /></header>
-      {message.attachments?.length ? <MessageAttachments attachments={message.attachments} /> : null}
+      {message.attachments?.length ? <MessageAttachments sessionId={message.sessionId} attachments={message.attachments} /> : null}
       <LiveTranscriptRows rows={conversation} agentName={agentName} />
       {message.delivery === "ambiguous" ? <p className="delivery-warning"><WarningCircle /> {t("chat.deliveryWarning")}</p> : null}
     </article>;
     return (
       <article className="message message--user" aria-label={t(automationInstruction ? "chat.automationInstruction.title" : "chat.userMessage")}>
-        {automationInstruction ? <AutomationInstructionMessage message={message} /> : <div className="user-bubble"><span className="message-time">{message.createdAt} <DeliveryIcon delivery={message.delivery} /></span>{message.attachments?.length ? <MessageAttachments attachments={message.attachments} /> : null}{message.content ? <p>{message.content}</p> : null}</div>}
+        {automationInstruction ? <AutomationInstructionMessage message={message} /> : <div className="user-bubble"><span className="message-time">{message.createdAt} <DeliveryIcon delivery={message.delivery} /></span>{message.attachments?.length ? <MessageAttachments sessionId={message.sessionId} attachments={message.attachments} /> : null}{message.content ? <p>{message.content}</p> : null}</div>}
         {message.delivery === "ambiguous" ? <p className="delivery-warning"><WarningCircle /> {t("chat.deliveryWarning")}</p> : null}
       </article>
     );

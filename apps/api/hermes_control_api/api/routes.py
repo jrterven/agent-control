@@ -1911,13 +1911,10 @@ async def session_media_metadata(
     session_id: str, media_id: str, request: Request,
     user: User = Depends(current_user), db: Session = Depends(get_db),
 ) -> Response:
-    from ..visual_media import get_visual_media_service, public_metadata
     service = SessionService(services(request))
     row = service.owned(db, user, session_id)
-    image = get_visual_media_service(services(request), db).authorized(db, user, row, media_id)
-    if image is None:
-        raise NotFoundError("Image unavailable")
-    return JSONResponse(public_metadata(image), headers={
+    metadata = await service.image_metadata(db, user, row, media_id)
+    return JSONResponse(metadata, headers={
         "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
     })
 

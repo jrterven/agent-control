@@ -71,6 +71,7 @@ def project_history_message(message: Any) -> Any:
     result.pop("codex_reasoning_items", None)
     result.pop("display_reasoning", None)
     result.pop("display_commentary", None)
+    result.pop("api_content", None)
     # Hermes keeps original model content for replay/export and publishes a
     # separately sanitized display copy. Never prefer the retained raw input
     # over that copy (including an intentionally empty public projection).

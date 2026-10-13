@@ -313,6 +313,35 @@ class VisualMediaService:
         return db.scalar(select(VisualMedia).where(VisualMedia.id == media_id, *_route_filter(session),
                                                    VisualMedia.deleted_at.is_(None), VisualMedia.purged_at.is_(None)))
 
+    def ingest_attachment(self, db: Session, session: SessionLink, *, media_id: str,
+                          name: str, content: bytes) -> bool:
+        """Keep sent image previews in the same private, route-bound image archive."""
+        connector = db.scalar(select(Connector).where(Connector.gateway_id == session.gateway_id,
+                                                      Connector.owner_id == session.owner_id))
+        if not self.configured or not connector:
+            return False
+        try:
+            # Hermes accepts GIF uploads too; the gallery displays their first frame.
+            if content.startswith((b"GIF87a", b"GIF89a")):
+                if len(content) > self.settings.visual_media_max_bytes:
+                    return False
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error", Image.DecompressionBombWarning)
+                    with Image.open(io.BytesIO(content)) as original:
+                        if original.width * original.height > self.settings.visual_media_max_pixels:
+                            return False
+                        pixels = Image.frombytes("RGBA", original.size, original.convert("RGBA").tobytes())
+                        output = io.BytesIO()
+                        pixels.save(output, format="PNG")
+                        content = output.getvalue()
+            _, _, mime, width, height = normalize_image(content, self.settings)
+        except (MediaValidationError, OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
+            return False
+        result = self.ingest(db, connector, media_id=media_id, profile_name=session.profile_name,
+                            stored_session_id=session.stored_session_id, content=content,
+                            metadata=dict(alt=name, provenance="local", mediaType=mime, width=width, height=height))
+        return result.get("status") == "ready"
+
     def content(self, row: VisualMedia, variant: str = "full") -> tuple[bytes, str]:
         if variant not in {"thumbnail", "full"} or row.status != "ready" or row.deleted_at:
             raise MediaValidationError("media_unavailable")

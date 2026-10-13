@@ -514,10 +514,19 @@ class ClarificationResponseView(ApiModel):
     remaining: list[str] = Field(default_factory=list, max_length=50)
 
 
+class PromptAttachmentView(ApiModel):
+    kind: Literal["image", "file"]
+    name: str
+    media_type: str
+    size: int
+    media_id: str | None = None
+
+
 class OperationView(ApiModel):
     operation_id: str
     status: str
     accepted_at: datetime | None = None
+    attachments: list[PromptAttachmentView] = Field(default_factory=list)
 
 
 class AutomationCreate(ApiModel):

@@ -534,7 +534,7 @@ class ConnectorRuntime:
             if operation == "capabilities":
                 if self.config.get("sourceSha") in HERMES_CONNECTOR_REVISIONS:
                     result = replace(result, methods=result.methods | {"insights.generate"}, features=result.features | {"connector.toolFreeInsightsV1"})
-                result = replace(result, features=result.features | {"connector.historyPageV1"})
+                result = replace(result, features=result.features | {"connector.historyPageV1", "connector.promptImagePreviewV1"})
                 if (self.profile_transfer_supported
                         and self.config.get("sourceSha") in HERMES_CONNECTOR_REVISIONS
                         and profile_contract_supports(self.config.get("sourceSha"), result.version, "profiles.transfer")

@@ -8,6 +8,27 @@ session from Hermes, and returns `![description](ac-media:32_hex_id)` plus a
 Consecutive references render as galleries in their original Markdown position.
 This capability does not add a generator or rewrite earlier responses.
 
+Sent image attachments use the same private archive and image viewer. The cloud
+normalizes the uploaded pixels, generates a thumbnail, and returns an opaque image
+ID with the prompt receipt; ordinary file attachments retain their filename chip.
+The ID is also saved in the attachment's bounded display metadata so the preview
+survives history reloads and other devices. GIF attachments display their first
+frame. Preview storage failures do not resend or prevent the original prompt.
+
+Older image uploads can be recovered after the connector advertises
+`connector.promptImagePreviewV1`. Its read-only media operation derives opaque IDs
+from the selected conversation's validated attachment metadata and native image
+markers. It only reads images staged under that profile's images directory,
+rejecting traversal, symlinks and nonregular files. The first authorized metadata
+read archives the verified pixels; subsequent reads survive local file cleanup
+or connector disconnection. Missing originals remain unavailable. Temporary chats
+continue to use their existing ephemeral image store.
+
+The public transcript strips exact managed plugin-context suffixes and native
+image markers, while retaining the user's authored text and attachment metadata.
+Hermes' stored/model content is unchanged. Prompt recovery uses the same native
+suffix normalization and preserves attachment identity when matching a receipt.
+
 ## Storage and limits
 
 Provision a private R2 product bucket, for example `agent-control-media`, separate

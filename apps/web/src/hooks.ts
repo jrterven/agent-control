@@ -858,6 +858,7 @@ function attachmentsFromHistory(item: Record<string, unknown>) {
       name: attachment.name,
       mediaType: attachment.mediaType,
       size: attachment.size,
+      ...(attachment.kind === "image" && typeof attachment.mediaId === "string" && /^[0-9a-f]{32}$/.test(attachment.mediaId) ? { mediaId: attachment.mediaId } : {}),
     }];
   });
 }
@@ -1819,7 +1820,9 @@ export async function submitPrompt(content: string, attachments: File[] = []) {
       const buffered = unmatchedEvents.get(receipt.operationId) ?? [];
       unmatchedEvents.delete(receipt.operationId);
       buffered.forEach(applyRealtimeEvent);
-      state.updateMessage(userMessage.id, { delivery: receipt.status === "queued" ? "queued" : "sent" });
+      const sentAttachments = attachmentsFromHistory({ controlAttachments: receipt.attachments });
+      state.updateMessage(userMessage.id, { delivery: receipt.status === "queued" ? "queued" : "sent",
+        ...(sentAttachments.length ? { attachments: sentAttachments } : {}) });
       if (["completed", "failed", "interrupted"].includes(receipt.status)) {
         const current = useAppStore.getState().messages.find((message) => message.id === assistantId);
         state.updateMessage(assistantId, {

@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from .types import PromptAttachment, PromptAttachmentReceipt
+from .prompt_display import project_managed_context
 
 
 _META_PREFIX = "<!-- hermes-control-attachments-v1:"
@@ -27,6 +28,7 @@ def compose_attachment_prompt(
     prompt: str,
     attachments: Sequence[PromptAttachment],
     receipts: Sequence[PromptAttachmentReceipt],
+    media_ids: Sequence[str | None] = (),
 ) -> str:
     """Add bounded display metadata and private Hermes file references."""
 
@@ -36,8 +38,9 @@ def compose_attachment_prompt(
             "name": item.name,
             "mediaType": item.media_type,
             "size": len(item.content),
+            **({"mediaId": media_ids[index]} if index < len(media_ids) and media_ids[index] else {}),
         }
-        for item in attachments[:5]
+        for index, item in enumerate(attachments[:5])
     ]
     encoded = base64.urlsafe_b64encode(
         json.dumps(metadata, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -53,6 +56,7 @@ def compose_attachment_prompt(
 def project_attachment_prompt(content: str) -> tuple[str, list[dict[str, Any]]]:
     """Remove private hand-off markers and return safe attachment metadata."""
 
+    content = project_managed_context(content)
     match = _META_LINE.match(content)
     if match is None:
         return content, []
@@ -85,9 +89,65 @@ def project_attachment_prompt(content: str) -> tuple[str, list[dict[str, Any]]]:
         ):
             return content, []
         attachments.append(
-            {"kind": kind, "name": name, "mediaType": media_type, "size": size}
+            {"kind": kind, "name": name, "mediaType": media_type, "size": size,
+             **({"mediaId": row["mediaId"]} if kind == "image" and isinstance(row.get("mediaId"), str)
+                and re.fullmatch(r"[0-9a-f]{32}", row["mediaId"]) else {})}
         )
-    cleaned = _REFS_BLOCK.sub("", content[match.end() :]).strip()
+    body = content[match.end():]
+    body, _ = _image_suffix(body, sum(item["kind"] == "image" for item in attachments))
+    cleaned = _REFS_BLOCK.sub("", body).strip()
     if cleaned.startswith(f"{_EMPTY_PROMPT}\n"):
         cleaned = ""
     return cleaned, attachments
+
+
+_IMAGE_HINT = re.compile(r"\[Image attached at: ([^\n\]]{1,4096})\]")
+_IMAGE_REF = re.compile(r'@image:(`[^`\n]+`|"[^"\n]+"|\x27[^\x27\n]+\x27|\S+)')
+
+
+def _image_suffix(body: str, count: int) -> tuple[str, list[str]]:
+    """Only consume a complete trailing native image block of the expected size."""
+    if not count:
+        return body, []
+    lines = body.rstrip().split("\n")
+    placeholders = 0
+    while lines and lines[-1] in {"[screenshot]", "[image]"}:
+        lines.pop()
+        placeholders += 1
+    if placeholders not in (0, count) or len(lines) < count:
+        return body, []
+    paths = []
+    for line in lines[-count:]:
+        hint = _IMAGE_HINT.fullmatch(line)
+        reference = _IMAGE_REF.fullmatch(line)
+        if hint:
+            paths.append(hint[1])
+        elif reference:
+            value = reference[1]
+            paths.append(value[1:-1] if value[0] in ('`', '"', "'") else value)
+        else:
+            return body, []
+    return "\n".join(lines[:-count]).rstrip(), paths
+
+
+def attachment_image_paths(content: str) -> list[tuple[int, str]]:
+    """Private native paths, paired only with validated Control attachment metadata."""
+    content = project_managed_context(content)
+    match = _META_LINE.match(content)
+    _, attachments = project_attachment_prompt(content)
+    indices = [index for index, item in enumerate(attachments) if item["kind"] == "image"]
+    if match is None or not indices:
+        return []
+    _, paths = _image_suffix(content[match.end():], len(indices))
+    return list(zip(indices, paths, strict=True)) if len(paths) == len(indices) else []
+
+
+def prompt_without_native_suffix(content: str) -> str:
+    """Recover submitted bytes for reconciliation, retaining attachment identity."""
+    content = project_managed_context(content)
+    match = _META_LINE.match(content)
+    _, attachments = project_attachment_prompt(content)
+    if match is None or not attachments:
+        return content
+    body, _ = _image_suffix(content[match.end():], sum(item["kind"] == "image" for item in attachments))
+    return content[:match.end()] + body

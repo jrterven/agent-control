@@ -311,6 +311,7 @@ class HermesSessionRouter:
         idempotency_key: str,
         operation_id: str | None = None,
         attachments: list[PromptAttachment] | None = None,
+        attachment_media_ids: list[str | None] | None = None,
         before_dispatch: Callable[[str], Awaitable[None]] | None = None,
     ) -> tuple[SessionRoute, PromptReceipt]:
         self.assert_route(route, connection)
@@ -362,7 +363,7 @@ class HermesSessionRouter:
                         attachment_receipts.append(attached)
                         detach_paths.extend(attached.detach_paths)
                     submitted_prompt = (
-                        compose_attachment_prompt(prompt, selected, attachment_receipts)
+                        compose_attachment_prompt(prompt, selected, attachment_receipts, attachment_media_ids or ())
                         if selected
                         else prompt
                     )

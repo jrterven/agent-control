@@ -161,6 +161,7 @@ export type MessageAttachment = {
   name: string;
   mediaType: string;
   size: number;
+  mediaId?: string;
 };
 
 /**

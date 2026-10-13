@@ -446,3 +446,67 @@ def test_native_archive_transfer_crosses_real_connector_wire_and_persists_only_c
         assert {profile.name for profile in client.portal.call(remote_destination.list_profiles)} == {"selected", "control-dev"}
     finally:
         replacement.close()
+
+
+def test_sent_image_receipt_history_private_thumbnail_and_idempotence(attached):
+    from .test_visual_media import FakeStore, picture
+    from hermes_control_api.visual_media import VisualMediaService
+    app, client, headers, runtime, peer, credentials, _ = attached
+    store = FakeStore()
+    app.state.services.visual_media = VisualMediaService(app.state.settings, store)
+    session = create_session(client, headers)
+    base = f"/api/v1/sessions/{session['id']}"
+    request_headers = mutate(headers)
+    import httpx
+    multipart = httpx.Request('POST', 'http://test', data={'content':'¿Qué hacen A0 y D0?'},
+                             files=[('attachments',('sensor.png',picture(),'image/png'))])
+    body = multipart.read()
+    request_headers['Content-Type'] = multipart.headers['Content-Type']
+    def submit():
+        return client.post(base+'/prompts-with-attachments',content=body,headers=request_headers)
+    response = submit()
+    assert response.status_code == 202, response.text
+    media_id = response.json()['attachments'][0]['mediaId']
+    assert submit().json()['attachments'][0]['mediaId'] == media_id
+    assert store.puts == 2
+    history = client.get(base+'/messages').json()['items']
+    user = next(row for row in history if row['role']=='user')
+    assert user['content'] == '¿Qué hacen A0 y D0?'
+    assert user['controlAttachments'][0]['mediaId'] == media_id
+    assert client.get(base+f'/media/{media_id}/metadata').json()['status'] == 'ready'
+    image = client.get(base+f'/media/{media_id}?variant=thumbnail')
+    assert image.status_code == 200 and image.headers['content-type']=='image/webp'
+    assert 'no-store' in image.headers['cache-control']
+    other = create_session(client, headers)
+    assert client.get(f"/api/v1/sessions/{other['id']}/media/{media_id}/metadata").status_code == 404
+    assert client.get(f"/api/v1/sessions/{other['id']}/media/{media_id}").status_code == 404
+
+
+def test_legacy_upload_recovered_from_own_connector_and_retained_after_file_removed(attached):
+    from .test_visual_media import FakeStore, picture
+    from hermes_control_api.visual_media import VisualMediaService
+    from hermes_client.attachments import compose_attachment_prompt
+    from hermes_client.types import PromptAttachment
+    from hermes_client.prompt_display import BACKGROUND_CONTEXT
+    app, client, headers, runtime, peer, credentials, _ = attached
+    store = FakeStore()
+    app.state.services.visual_media = VisualMediaService(app.state.settings, store)
+    session = create_session(client, headers)
+    base = f"/api/v1/sessions/{session['id']}"
+    path = Path(runtime.config['hermesHome'])/'profiles/selected/images/upload.png'
+    path.parent.mkdir(parents=True)
+    path.write_bytes(picture())
+    prompt = compose_attachment_prompt('¿Qué hacen A0 y D0?', [PromptAttachment('image','sensor.png','image/png',picture())], [])
+    raw = prompt + f'\n\n[Image attached at: {path}]\n[screenshot]\n' + BACKGROUND_CONTEXT
+    runtime.providers['selected']._messages[session['storedSessionId']] = [{'role':'user','content':raw}]
+    user = client.get(base+'/messages').json()['items'][0]
+    assert user['content']=='¿Qué hacen A0 y D0?'
+    media_id = user['controlAttachments'][0]['mediaId']
+    response = client.get(base+f'/media/{media_id}/metadata')
+    assert response.status_code==200, response.text
+    assert response.json()['status']=='ready' and store.puts==2
+    path.unlink()
+    assert client.get(base+'/messages').json()['items'][0]['controlAttachments'][0]['mediaId']==media_id
+    assert client.get(base+f'/media/{media_id}?variant=thumbnail').status_code==200
+    assert client.get(base+f'/media/{media_id}').status_code==200
+    assert runtime.providers['selected']._messages[session['storedSessionId']][0]['content']==raw

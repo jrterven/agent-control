@@ -1,6 +1,6 @@
 import type { ApprovalChoice, Automation, AutomationRun, BootstrapData, EmailReferencePreview, Gateway, ImageMediaMetadata, Profile, PushNotificationConfig, RealtimeEvent, SearchResult, SessionSummary, VoiceProvider, Workspace } from "../types";
 import type { OPENAI_LIVE_VOICES } from "./openaiLiveVoices";
-import type { ChatMode } from "../types";
+import type { ChatMode, MessageAttachment } from "../types";
 import type { AuthMethods, BackgroundTaskSnapshot, ConnectorList, ConnectorPairing, ConnectorView } from "@hermes-control/shared-types";
 import { useAppStore } from "../store/appStore";
 
@@ -577,12 +577,12 @@ export const api = {
   exportSession: (sessionId: string) => requestBlob(`/sessions/${encodeURIComponent(sessionId)}/export`),
   submitPrompt: (sessionId: string, content: string, idempotencyKey: string, csrfToken?: string, attachments: File[] = []) => {
     if (!attachments.length) {
-      return request<{ operationId: string; status: string }>(`/sessions/${encodeURIComponent(sessionId)}/prompts`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey, ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) }, body: JSON.stringify({ content }) });
+      return request<{ operationId: string; status: string; attachments?: MessageAttachment[] }>(`/sessions/${encodeURIComponent(sessionId)}/prompts`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey, ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) }, body: JSON.stringify({ content }) });
     }
     const body = new FormData();
     body.append("content", content);
     attachments.forEach((file) => body.append("attachments", file, file.name));
-    return request<{ operationId: string; status: string }>(`/sessions/${encodeURIComponent(sessionId)}/prompts-with-attachments`, {
+    return request<{ operationId: string; status: string; attachments?: MessageAttachment[] }>(`/sessions/${encodeURIComponent(sessionId)}/prompts-with-attachments`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey, ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) },
       body,

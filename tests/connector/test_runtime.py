@@ -138,3 +138,30 @@ def test_audio_root_symlinks_cannot_escape_to_another_profile(tmp_path):
     (selected / "cache").symlink_to(other.parent, target_is_directory=True)
     history = [{"role":"assistant", "content":f"MEDIA:{selected / 'cache/audio/secret.mp3'}"}]
     assert "controlMedia" not in project_media(history, tmp_path, "selected", "session")[0]
+
+
+def test_sent_images_are_bound_to_history_profile_and_safe_staging_paths(tmp_path):
+    from hermes_client.attachments import compose_attachment_prompt
+    from hermes_client.prompt_display import BACKGROUND_CONTEXT
+    root = tmp_path / 'profiles/selected/images'
+    root.mkdir(parents=True)
+    path = root / 'upload.png'
+    path.write_bytes(b'image')
+    prompt = compose_attachment_prompt('Question', [PromptAttachment('image','photo.png','image/png',b'image')], [])
+    def history(target):
+        return [{'role':'user', 'content': prompt + f'\n\n[Image attached at: {target}]\n[screenshot]\n' + BACKGROUND_CONTEXT}]
+    source = history(path)
+    projected = project_media(source, tmp_path, 'selected', 'session')
+    identifier = projected[0]['controlAttachmentMedia'][0]['id']
+    assert read_media(source, tmp_path, 'selected', 'session', identifier) == {'content':b'image','media_type':'image/png'}
+    assert source[0]['content'] == projected[0]['content']
+    with pytest.raises(LookupError):
+        read_media(source, tmp_path, 'selected', 'other-session', identifier)
+    with pytest.raises(LookupError):
+        read_media(source, tmp_path, 'other-profile', 'session', identifier)
+    secret = tmp_path / 'secret.png'
+    secret.write_bytes(b'secret')
+    (root / 'alias.png').symlink_to(secret)
+    (root / 'nested').symlink_to(tmp_path, target_is_directory=True)
+    for target in [secret, root/'alias.png', root/'nested/secret.png', root/'../images/upload.png']:
+        assert not project_media(history(target), tmp_path, 'selected', 'session')[0].get('controlAttachmentMedia')

@@ -66,3 +66,47 @@ test("recupera una publicación pendiente sin bloquear el briefing", async ({ pa
   await expect(page.getByRole("region", { name: "Imágenes de la respuesta" }).getByRole("img")).toHaveCount(2);
   expect(calls.attempts()).toBe(4);
 });
+
+test("muestra la miniatura enviada, abre el original y conserva el texto al recargar", async ({ page }) => {
+  await installImages(page);
+  const question = 'En este sensor de luz, ¿qué dan los pines A0 y D0?';
+  await page.route('**/api/v1/sessions/session-e2e/messages', route => route.fulfill({json:{items:[
+    {id:'sent-photo', role:'user', content:question, controlAttachments:[{kind:'image',name:'sensor.png',mediaType:'image/png',size:8000,mediaId:first}]},
+    {id:'reply',role:'assistant',content:'A0 es una salida analógica y D0 una salida digital.'},
+  ]}}));
+  await page.goto('/chats');
+  const bubble = page.locator('.user-bubble');
+  const thumbnail = bubble.getByRole('img', {name:'sensor.png'});
+  await expect(thumbnail).toBeVisible();
+  await expect(thumbnail).toHaveJSProperty('naturalWidth', 800);
+  await expect(bubble.locator('p')).toHaveText(question);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const bounds = await thumbnail.boundingBox();
+  expect(bounds!.width).toBeGreaterThan(100);
+  expect(bounds!.width).toBeLessThanOrEqual(320);
+  await page.screenshot({path:`test-results/sent-image-${test.info().project.name}.png`});
+  const opener = bubble.getByRole('button',{name:'Ampliar imagen: sensor.png'});
+  await opener.click();
+  const viewer = page.getByRole('dialog',{name:'Visor de imágenes'});
+  await expect(viewer.getByRole('img',{name:'sensor.png'})).toHaveAttribute('src',`/api/v1/sessions/session-e2e/media/${first}?variant=full`);
+  await expect(viewer.getByRole('img',{name:'sensor.png'})).toHaveJSProperty('naturalWidth',800);
+  await viewer.getByRole('button',{name:'Cerrar visor'}).click();
+  await expect(opener).toBeFocused();
+  await page.reload();
+  await expect(thumbnail).toBeVisible();
+  await expect(bubble.locator('p')).toHaveText(question);
+});
+
+test("la imagen enviada recibe su miniatura sin esperar la respuesta del agente", async ({page}) => {
+  await installImages(page);
+  await page.route('**/api/v1/sessions/session-e2e/messages', route => route.fulfill({json:{items:[]}}));
+  await page.route('**/api/v1/sessions/session-e2e/prompts-with-attachments', route => route.fulfill({status:202,json:{
+    operationId:route.request().headers()['idempotency-key'],status:'accepted',
+    attachments:[{kind:'image',name:'sensor.png',mediaType:'image/png',size:diagram.length,mediaId:first}],
+  }}));
+  await page.goto('/chats');
+  await page.locator('input[type=file][accept="image/jpeg,image/png,image/webp,image/gif"]').setInputFiles({name:'sensor.png',mimeType:'image/png',buffer:diagram});
+  await page.getByRole('textbox',{name:'Mensaje a Newton…'}).fill('¿Qué hacen A0 y D0?');
+  await page.getByRole('button',{name:'Enviar mensaje',exact:true}).click();
+  await expect(page.locator('.user-bubble').getByRole('img',{name:'sensor.png'})).toBeVisible();
+});

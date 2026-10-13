@@ -3624,6 +3624,8 @@ class SessionService:
             safe_item.pop("emailReferences", None)
             safe_item.pop("email_references", None)
             safe_item.pop("controlMedia", None)
+            safe_item.pop("controlAttachmentMedia", None)
+            safe_item.pop("controlAttachments", None)
             if gateway is not None and gateway.transport_kind == "connector" and raw_item.get("role") == "assistant":
                 media = raw_item.get("controlMedia")
                 if isinstance(media, list):
@@ -3647,9 +3649,20 @@ class SessionService:
             if raw_item.get("role") == "user":
                 if content_key is None:
                     continue
+                safe_item.pop("text" if content_key == "content" else "content", None)
                 from .vision_context import project_camera_prompt
                 projected_content, attachments = project_attachment_prompt(project_camera_prompt(raw_content))
                 projected_content, _ = project_email_reference_prompt(projected_content)
+                if gateway is not None and gateway.transport_kind == "connector":
+                    image_refs = raw_item.get("controlAttachmentMedia")
+                    for reference in image_refs[:5] if isinstance(image_refs, list) else []:
+                        if (isinstance(reference, dict) and type(reference.get("index")) is int
+                                and 0 <= reference["index"] < len(attachments)
+                                and isinstance(reference.get("id"), str)
+                                and _SAFE_MEDIA_ID.fullmatch(reference["id"])):
+                            attachment = attachments[reference["index"]]
+                            if attachment["kind"] == "image" and "mediaId" not in attachment:
+                                attachment["mediaId"] = reference["id"]
                 safe_item[content_key] = normalizer.sanitize_data(projected_content)
                 if attachments:
                     safe_item["controlAttachments"] = normalizer.sanitize_data(attachments)
@@ -4015,6 +4028,48 @@ class SessionService:
                     return asset
         raise NotFoundError("Voice note not found")
 
+    async def image_metadata(self, db: Session, actor: User, row: SessionLink, media_id: str) -> dict:
+        from .visual_media import get_visual_media_service, public_metadata
+        from .models import VisualMedia
+        visual = get_visual_media_service(self.services, db)
+        image = visual.authorized(db, actor, row, media_id)
+        if image is not None:
+            return public_metadata(image)
+        # A mismatched/deleted durable ID must never fall through to native recovery.
+        if not _SAFE_MEDIA_ID.fullmatch(media_id) or db.get(VisualMedia, media_id) is not None or not visual.configured:
+            raise NotFoundError("Image unavailable")
+        gateway = db.get(Gateway, row.gateway_id)
+        if not gateway or gateway.transport_kind != "connector" or row.owner_id != actor.id:
+            raise NotFoundError("Image unavailable")
+        profile = db.scalar(select(ProfileRef).where(ProfileRef.gateway_id == row.gateway_id,
+                                                     ProfileRef.profile_name == row.profile_name))
+        if not profile or "connector.promptImagePreviewV1" not in (profile.capabilities or {}).get("features", []):
+            raise NotFoundError("Image unavailable")
+        # Older uploads remain in Hermes. An opaque, transcript-bound ID from an
+        # updated connector authorizes recovery; the browser never supplies a path.
+        history = self._project_history(db, row, await self._raw_history(db, row))
+        attachment = next((item for message in history if message.get("role") == "user"
+                           for item in message.get("controlAttachments", [])
+                           if item.get("kind") == "image" and item.get("mediaId") == media_id), None)
+        if attachment is None:
+            raise NotFoundError("Image unavailable")
+        connection = await self.gateways.connection(db, row.gateway_id, row.profile_name)
+        provider = await self.services.provider_pool.get(connection)
+        try:
+            result = await provider.media(row.stored_session_id, media_id)
+        except LookupError:
+            raise NotFoundError("Image unavailable") from None
+        content = result.get("content") if isinstance(result, dict) else None
+        if (not isinstance(content, bytes) or not 0 < len(content) <= 8 * 1024 * 1024
+                or result.get("media_type") not in {"image/png", "image/jpeg", "image/webp", "image/gif"}):
+            raise NotFoundError("Image unavailable")
+        ready = await asyncio.to_thread(visual.ingest_attachment, db, row, media_id=media_id,
+                                        name=attachment["name"], content=content)
+        image = visual.authorized(db, actor, row, media_id) if ready else None
+        if image is None:
+            raise NotFoundError("Image unavailable")
+        return public_metadata(image)
+
     async def submit(
         self,
         db: Session,
@@ -4182,6 +4237,25 @@ class SessionService:
                 "durable history boundary"
             ) from exc
         try:
+            from .visual_media import get_visual_media_service
+            visual = get_visual_media_service(self.services, db)
+            attachment_media_ids: list[str | None] = []
+            public_attachments: list[dict] = []
+            for index, attachment in enumerate(attachments or []):
+                media_id = None
+                if attachment.kind == "image" and visual.configured:
+                    identifier = hashlib.sha256(f"upload\0{actor.id}\0{row.id}\0{idempotency_key}\0{index}".encode()).hexdigest()[:32]
+                    if await asyncio.to_thread(visual.ingest_attachment, db, row, media_id=identifier,
+                                               name=attachment.name, content=attachment.content):
+                        media_id = identifier
+                attachment_media_ids.append(media_id)
+                public_attachments.append(dict(kind=attachment.kind, name=attachment.name,
+                                               mediaType=attachment.media_type, size=len(attachment.content),
+                                               **({"mediaId": media_id} if media_id else {})))
+            if public_attachments:
+                operation.response_json = {**dict(operation.response_json or {}), "attachments": public_attachments}
+                db.commit()
+
             async def remember_prompt_hash(submitted_prompt: str) -> None:
                 operation.response_json = {
                     **dict(operation.response_json or {}),
@@ -4203,6 +4277,7 @@ class SessionService:
                 idempotency_key=idempotency_key,
                 operation_id=idempotency_key,
                 attachments=attachments,
+                attachment_media_ids=attachment_media_ids,
                 before_dispatch=remember_prompt_hash,
             )
             # A very fast upstream can emit its terminal event before this
@@ -4228,6 +4303,7 @@ class SessionService:
                     else receipt.status
                 ),
                 "acceptedAt": receipt.accepted_at.isoformat(),
+                **({"attachments": public_attachments} if public_attachments else {}),
             }
             if not terminal_operation:
                 operation.status = receipt.status
@@ -4300,7 +4376,8 @@ class SessionService:
 
     @staticmethod
     def _prompt_digest(value: str) -> str:
-        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+        from hermes_client.attachments import prompt_without_native_suffix
+        return hashlib.sha256(prompt_without_native_suffix(value).encode("utf-8")).hexdigest()
 
     @staticmethod
     def _prompt_with_email_protocol(

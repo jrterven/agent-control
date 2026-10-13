@@ -24,7 +24,7 @@ function validMetadata(metadata: ImageMediaMetadata, id: string) {
     && (metadata.status !== "ready" || acceptedTypes.has(metadata.mediaType ?? ""));
 }
 
-export function MessageImageGallery({ sessionId, references }: { sessionId: string; references: ImageReference[] }) {
+export function MessageImageGallery({ sessionId, references, showProvenance = true }: { sessionId: string; references: ImageReference[]; showProvenance?: boolean }) {
   const { t } = useTranslation();
   const generation = useAppStore((state) => state.authGeneration);
   const owner = useAppStore((state) => state.userId);
@@ -67,7 +67,7 @@ export function MessageImageGallery({ sessionId, references }: { sessionId: stri
 
   const markFailed = (id: string) => setState((current) => ({ identity, images: { ...current.images, [id]: { ...current.images[id], failed: true } } }));
   const reset = () => setRetry((value) => value + 1);
-  return <section className={`message-image-gallery${references.length === 1 ? " is-single" : ""}`} aria-label={t("images.gallery")}>
+  return <section className={`message-image-gallery${references.length === 1 ? " is-single" : ""}`} aria-label={t(showProvenance ? "images.gallery" : "chat.attachments.attached")}>
     {references.map((reference, index) => {
       const image = images[reference.id];
       const metadata = image?.metadata;
@@ -84,7 +84,7 @@ export function MessageImageGallery({ sessionId, references }: { sessionId: stri
           <small>{alt}</small>
           <button type="button" onClick={reset}>{t("images.retry")}</button>
         </div>}
-        {metadata ? <figcaption>
+        {metadata && showProvenance ? <figcaption>
           {metadata.caption ? <span>{metadata.caption}</span> : null}
           <small>{t(`images.${metadata.provenance === "web" || metadata.provenance === "generated" ? metadata.provenance : "local"}`)}</small>
           {source ? <a href={source} target="_blank" rel="noopener noreferrer">{metadata.sourceTitle || t("images.source")} <ArrowSquareOut aria-hidden="true" /></a> : null}
@@ -93,14 +93,15 @@ export function MessageImageGallery({ sessionId, references }: { sessionId: stri
     })}
     {opened !== null && state.identity === identity ? <ImageViewer
       references={references} images={images} sessionId={sessionId} index={opened} returnFocus={openerRef.current}
-      onIndex={setOpened} onClose={() => setOpened(null)} onFailure={markFailed} onRetry={reset}
+      onIndex={setOpened} onClose={() => setOpened(null)} onFailure={markFailed} onRetry={reset} showProvenance={showProvenance}
     /> : null}
   </section>;
 }
 
-function ImageViewer({ references, images, sessionId, index, onIndex, onClose, onFailure, onRetry, returnFocus }: {
+function ImageViewer({ references, images, sessionId, index, onIndex, onClose, onFailure, onRetry, returnFocus, showProvenance }: {
   references: ImageReference[]; images: Record<string, ImageState>; sessionId: string; index: number; returnFocus: HTMLElement | null;
   onIndex: (index: number) => void; onClose: () => void; onFailure: (id: string) => void; onRetry: () => void;
+  showProvenance: boolean;
 }) {
   const { t } = useTranslation();
   const titleId = useId();
@@ -151,7 +152,7 @@ function ImageViewer({ references, images, sessionId, index, onIndex, onClose, o
         {ready ? <img src={fullUrl} alt={alt} onError={() => onFailure(reference.id)} /> : <div className="message-image__placeholder" role="status">{image?.failed ? <WarningCircle /> : <CircleNotch />}<span>{t(image?.failed ? "images.failed" : "images.pending")}</span><button type="button" onClick={onRetry}>{t("images.retry")}</button></div>}
       </div>
       <footer className="image-viewer__footer">
-        <div className="image-viewer__caption" id={descriptionId}><strong>{alt}</strong>{metadata?.caption ? <p>{metadata.caption}</p> : null}{metadata ? <small>{t(`images.${metadata.provenance === "web" || metadata.provenance === "generated" ? metadata.provenance : "local"}`)}</small> : null}</div>
+        <div className="image-viewer__caption" id={descriptionId}><strong>{alt}</strong>{metadata?.caption ? <p>{metadata.caption}</p> : null}{metadata && showProvenance ? <small>{t(`images.${metadata.provenance === "web" || metadata.provenance === "generated" ? metadata.provenance : "local"}`)}</small> : null}</div>
         <nav className="image-viewer__actions" aria-label={t("images.gallery")}>
           {source ? <a href={source} target="_blank" rel="noopener noreferrer"><ArrowSquareOut aria-hidden="true" />{metadata?.sourceTitle || t("images.source")}</a> : null}
           {ready ? <a href={fullUrl} download={`${reference.id}.${metadata.mediaType === "image/jpeg" ? "jpg" : metadata.mediaType === "image/webp" ? "webp" : "png"}`}><DownloadSimple aria-hidden="true" />{t("images.download")}</a> : null}
