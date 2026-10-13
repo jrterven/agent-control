@@ -3,6 +3,45 @@ import { expect, test } from "./fixtures";
 
 test.use({ serviceWorkers: "block" });
 
+test("recupera una respuesta invisible después de recargar y continúa solo al solicitarlo", async ({ page }) => {
+  let prompts = 0;
+  let continuation = "";
+  const messages: Record<string, unknown>[] = [
+    { id: "sensor-user", role: "user", content: "¿Qué es este sensor?" },
+    { id: "vision-call", role: "assistant", content: "", finish_reason: "tool_calls", tool_calls: [{ id: "vision", name: "vision_analyze" }] },
+    { id: "vision-result", role: "tool", tool_name: "vision_analyze", tool_call_id: "vision", content: "Image already in context" },
+    { id: "blank-answer", role: "assistant", content: "\u200b", finish_reason: "stop" },
+  ];
+  await page.route("**/api/v1/sessions/session-e2e/messages", (route) => route.fulfill({ json: {
+    items: messages, sessionStatus: "ready", activeOperation: null, activeTurnId: null,
+  } }));
+  await page.route("**/api/v1/sessions/session-e2e/prompts", (route) => {
+    prompts += 1;
+    continuation = route.request().postDataJSON().content;
+    messages.push({ id: "continue-user", role: "user", content: continuation },
+      { id: "recovered-answer", role: "assistant", content: "Es un sensor de luz.", finish_reason: "stop" });
+    return route.fulfill({ json: { operationId: route.request().headers()["idempotency-key"], status: "completed" } });
+  });
+  await page.goto("/chats");
+  const notice = page.getByText("El agente terminó sin entregar una respuesta final de texto.", { exact: true });
+  await expect(notice).toBeVisible();
+  await page.reload();
+  await expect(notice).toBeVisible();
+  expect(prompts).toBe(0);
+  const composer = page.getByRole("textbox", { name: "Mensaje a Newton…" });
+  await composer.fill("Mi siguiente pregunta todavía no está enviada");
+  await page.getByRole("button", { name: "Pedir que continúe" }).click();
+  await expect(page.getByText("Es un sensor de luz.", { exact: true })).toBeVisible();
+  await expect(notice).toHaveCount(0);
+  await expect(composer).toHaveValue("Mi siguiente pregunta todavía no está enviada");
+  expect(prompts).toBe(1);
+  expect(continuation).toContain("No repitas acciones externas ya realizadas");
+  await page.reload();
+  await expect(page.getByText("Es un sensor de luz.", { exact: true })).toBeVisible();
+  await expect(composer).toHaveValue("Mi siguiente pregunta todavía no está enviada");
+  expect(prompts).toBe(1);
+});
+
 test("no revive respuestas detenidas al recuperar el historial durante otra tarea", async ({ page }) => {
   let socket: WebSocketRoute | undefined;
   let operation: string | null = null;

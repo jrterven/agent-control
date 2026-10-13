@@ -96,6 +96,22 @@ describe("mobile-first chat", () => {
     expect((await axe.run(container)).violations).toHaveLength(0);
   });
 
+  it("offers continuation for an invisible final answer without empty speech controls", async () => {
+    useAppStore.setState({ messages: [], features: { speech: { available: true, provider: "elevenlabs", modelId: "eleven_flash_v2_5" }, dictation: { available: false, provider: "elevenlabs", modelId: "scribe_v2_realtime" } } });
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({ items: [
+      { id: "sensor-user", role: "user", content: "¿Qué es este sensor?" },
+      { id: "sensor-answer", role: "assistant", content: "\u200b", finish_reason: "stop" },
+    ], sessionStatus: "ready", activeOperation: null, activeTurnId: null });
+    await rehydrateSession("session-papers");
+    const { container } = render(<ChatView />);
+    expect(screen.getByText("El agente terminó sin entregar una respuesta final de texto.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pedir que continúe" })).toBeEnabled();
+    expect(container.querySelector(".message-speech")).not.toBeInTheDocument();
+    expect((await axe.run(container)).violations).toHaveLength(0);
+    act(() => useAppStore.setState({ authState: "offline", demoMode: false }));
+    expect(screen.getByRole("button", { name: "Pedir que continúe" })).toBeDisabled();
+  });
+
   it("shows one task response badge for the public reply and omits the projected internal notification marker", async () => {
     vi.spyOn(api, "sessionHistory").mockResolvedValue({
       items: [

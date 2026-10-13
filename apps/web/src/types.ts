@@ -235,6 +235,8 @@ export type ChatMessage = {
   attachments?: MessageAttachment[];
   emailReferences?: EmailReference[];
   streaming?: boolean;
+  /** Local notice for a settled human turn with no visible answer. */
+  responseIncomplete?: boolean;
   controlTurnId?: string;
   controlTurnOrigin?: ControlTurnOrigin;
 };

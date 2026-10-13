@@ -9,9 +9,10 @@ import { useTranslation } from "react-i18next";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { BackgroundTasks, taskResultAnchor } from "./BackgroundTasks";
 import { Badge, Button, IconButton } from "@hermes-control/ui";
-import { createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
+import { continueIncompleteResponse, createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
 import { api } from "../lib/api";
 import { conversationTimeline } from "../lib/chatTimeline";
+import { hasVisibleText } from "../lib/messageContent";
 import { liveDelegationConversation } from "../lib/liveDelegation";
 import { activeResponseId, useAppStore } from "../store/appStore";
 import { useScribeDictation } from "../hooks/useScribeDictation";
@@ -86,7 +87,7 @@ function AgentActivityDisclosure({ agentName, message }: { agentName: string; me
       status: "running",
       label: t("chat.activity.analyzing"),
     }, ...(message?.activity ?? [])];
-    if (message?.content.trim()) {
+    if (hasVisibleText(message?.content)) {
       entries.push({
         id: `${message.id}:composing`,
         kind: "composing",
@@ -529,7 +530,7 @@ function AutomationInstructionMessage({ message }: { message: ChatMessage }) {
   );
 }
 
-function Message({ message, profile, agentName, speech, liveExplanation, automationInstruction = false }: { message: ChatMessage; profile?: Profile; agentName: string; speech: MessageSpeech; liveExplanation?: MessageLiveExplanation; automationInstruction?: boolean }) {
+function Message({ message, profile, agentName, speech, liveExplanation, automationInstruction = false, canContinue = false }: { canContinue?: boolean; message: ChatMessage; profile?: Profile; agentName: string; speech: MessageSpeech; liveExplanation?: MessageLiveExplanation; automationInstruction?: boolean }) {
   const { t } = useTranslation();
   if (message.role === "user") {
     const conversation = liveDelegationConversation(message.content);
@@ -546,7 +547,7 @@ function Message({ message, profile, agentName, speech, liveExplanation, automat
       </article>
     );
   }
-  const evidence = !message.content.trim()
+  const evidence = !hasVisibleText(message.content)
     ? [
         ...(message.tools ?? []).map((tool) => ({
           id: `tool:${tool.id}`,
@@ -566,7 +567,7 @@ function Message({ message, profile, agentName, speech, liveExplanation, automat
       <div className="assistant-content">
         <header><strong>{agentName}</strong><time>{message.createdAt}</time>{message.controlTurnOrigin ? <Badge>{t(message.controlTurnOrigin.taskId ? "backgroundTasks.resultFor" : "backgroundTasks.resultLabel", { id: message.controlTurnOrigin.taskId?.slice(0, 8) })}</Badge> : null}{message.streaming ? <Badge tone="info">{t("chat.streaming")}</Badge> : null}</header>
         <div className="markdown-body">
-          {message.content.trim() ? (
+          {hasVisibleText(message.content) ? (
             <MessageMarkdown content={message.content} sessionId={message.sessionId} streaming={message.streaming} />
           ) : evidence.length ? (
             <ToolEvidenceDisclosure agentName={agentName} evidence={evidence} messageId={message.id} toolCount={message.tools?.length ?? 0} />
@@ -586,7 +587,8 @@ function Message({ message, profile, agentName, speech, liveExplanation, automat
             ))}
           </div>
         ) : null}
-        {(speech.available || liveExplanation?.available) && !message.streaming && message.content.trim() ? <div className="message-speech">
+        {message.responseIncomplete ? <Button disabled={!canContinue} onClick={() => void continueIncompleteResponse(message.id)}>{t("runtimeMessages.continueResponse")}</Button> : null}
+        {!message.responseIncomplete && (speech.available || liveExplanation?.available) && !message.streaming && hasVisibleText(message.content) ? <div className="message-speech">
           {speech.available ? <IconButton className="message-speech__button" label={t("speech.readResponse")} selected={speech.activeMessageId === message.id} icon={<SpeakerHigh weight="fill" />} onClick={() => void speech.speak(message)} /> : null}
           {liveExplanation?.available ? <IconButton className="message-speech__button" label={t("liveVoice.explainResponse")} selected={liveExplanation.activeMessageId === message.id} disabled={liveExplanation.disabled} icon={<Waveform weight="bold" />} onClick={() => liveExplanation.explain(message)} /> : null}
           {speech.available && speech.activeMessageId === message.id ? <SpeechPlayer speech={speech} /> : null}
@@ -944,11 +946,11 @@ export function ChatView() {
   const pendingStart = useRef<{ sessionId: string; action: "voice" | "camera" } | null>(null);
   const visibleMessages = useMemo(() => messages.filter((message) => (
     message.sessionId === sessionId
-    && !(message.id === pendingHumanMessageId && streamingMessageId !== pendingHumanMessageId && !message.content.trim() && !message.tools?.length && !message.activity?.length)
+    && !(message.id === pendingHumanMessageId && streamingMessageId !== pendingHumanMessageId && !hasVisibleText(message.content) && !message.tools?.length && !message.activity?.length)
     && (
       message.role !== "assistant"
       || message.streaming === true
-      || Boolean(message.content.trim())
+      || hasVisibleText(message.content)
       || Boolean(message.media?.length)
       || Boolean(message.emailReferences?.length)
       || Boolean(message.tools?.length)
@@ -1073,7 +1075,7 @@ export function ChatView() {
         <div className="message-list">
           {live.transcripts.hasMore || live.transcripts.historyError ? <div className="live-transcript__history"><Button size="sm" variant="ghost" disabled={live.transcripts.loading} onClick={() => { followLatestRef.current = false; live.transcripts.loadMore(); }}>{t(live.transcripts.historyError ? "liveVoice.transcriptLoadError" : "liveVoice.transcriptOlder")}</Button></div> : null}
           {camera.hasMore ? <div className="live-transcript__history"><Button size="sm" variant="ghost" disabled={camera.loadingObservations} onClick={() => { followLatestRef.current = false; void camera.loadMore(); }}>{visionInteractionCopy(i18n.language).older}</Button></div> : null}
-          {timeline.length ? timeline.map((item) => item.kind === "transcript" ? <LiveTranscript key={item.id} call={item.call} agentName={profile?.displayName ?? t("chat.agent")} retry={() => live.transcripts.retrySave(item.id)} /> : item.kind === "vision" ? <VisionObservationCard key={item.id} observation={item.observation} /> : <Message key={item.id} message={item.message} profile={profile} agentName={profile?.displayName ?? t("chat.agent")} automationInstruction={session?.automationGenerated === true && item.id === firstUserMessageId} liveExplanation={{ available: liveConfigured && live.available && !offline, activeMessageId: live.explainingMessageId, disabled: live.active || voiceCaptureActive || Boolean(streamingMessageId), explain: (message) => { speech.stop(); void live.explain(message); } }} speech={{ available: canUseSpeech, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : !session && canCreateSession ? null : <div className="empty-chat"><ProfileAvatar profile={profile} size="lg" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession && session ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
+          {timeline.length ? timeline.map((item) => item.kind === "transcript" ? <LiveTranscript key={item.id} call={item.call} agentName={profile?.displayName ?? t("chat.agent")} retry={() => live.transcripts.retrySave(item.id)} /> : item.kind === "vision" ? <VisionObservationCard key={item.id} observation={item.observation} /> : <Message key={item.id} canContinue={canPrompt && !streamingMessageId && !live.active && !voiceCaptureActive && item.message.id === visibleMessages.at(-1)?.id} message={item.message} profile={profile} agentName={profile?.displayName ?? t("chat.agent")} automationInstruction={session?.automationGenerated === true && item.id === firstUserMessageId} liveExplanation={{ available: liveConfigured && live.available && !offline, activeMessageId: live.explainingMessageId, disabled: live.active || voiceCaptureActive || Boolean(streamingMessageId), explain: (message) => { speech.stop(); void live.explain(message); } }} speech={{ available: canUseSpeech, activeMessageId: speech.activeMessageId, status: speech.status, rate: speech.rate, error: speech.error, speak: speech.speak, togglePause: speech.togglePause, stop: speech.stop, setRate: speech.setRate }} />) : !session && canCreateSession ? null : <div className="empty-chat"><ProfileAvatar profile={profile} size="lg" /><h2>{session ? t("chat.startWithAgent", { agent: profile?.displayName ?? t("chat.yourAgent") }) : profile?.mutable ? t("chat.createWithAgent", { agent: profile.displayName }) : t("chat.readOnlyAgent", { agent: profile?.displayName ?? t("chat.thisAgent") })}</h2><p>{t(session ? "chat.sessionIsolation" : profile?.mutable ? "chat.startInWorkspace" : "chat.readOnlyDescription")}</p>{canCreateSession && session ? <Button className="empty-chat__action" variant="primary" leadingIcon={<Plus size={19} />} disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={() => void createChat().catch(() => undefined)}>{t(creatingSession ? "chat.creating" : "chat.newChat")}</Button> : null}</div>}
           <InteractionCards approvals={approvals} clarifications={clarifications} offline={offline} canApprove={canApprove} canClarify={canClarify} />
           {streamingMessageId ? waitingForResponse
             ? <p className="typing-state typing-state--waiting" role="status"><WarningCircle /><span>{t("chat.waitingForResponse", { agent: profile?.displayName ?? "Hermes" })}</span></p>

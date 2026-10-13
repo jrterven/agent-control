@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyRealtimeEvent, rehydrateSession, respondToApproval } from "../hooks";
+import { applyRealtimeEvent, continueIncompleteResponse, rehydrateSession, respondToApproval } from "../hooks";
 import { api, ApiError } from "../lib/api";
+import * as drafts from "../lib/db";
+import { profiles, sessions } from "../data";
 import { useAppStore } from "../store/appStore";
 
 describe("PWA background operation recovery", () => {
@@ -19,6 +21,67 @@ describe("PWA background operation recovery", () => {
   });
 
   afterEach(() => vi.restoreAllMocks());
+
+  it.each(["", " \n\t", "\u200b", "\u200e\u2060\ufeff\uFE0F"])("recovers a stopped but invisible answer (%j) without replaying the prompt", async (content) => {
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      items: [
+        { id: "sensor-question", role: "user", content: "¿Qué es este sensor?", controlAttachments: [{ kind: "image", name: "sensor.jpg", mediaType: "image/jpeg", size: 128, mediaId: "a".repeat(32) }] },
+        { id: "vision-call", role: "assistant", content: "", finish_reason: "tool_calls", tool_calls: [{ id: "vision", name: "vision_analyze" }] },
+        { id: "vision-result", role: "tool", tool_name: "vision_analyze", tool_call_id: "vision", content: "Image already in context" },
+        { id: "invisible-answer", role: "assistant", content, finish_reason: "stop" },
+      ], sessionStatus: "ready", activeOperation: null, activeTurnId: null,
+    });
+    const submit = vi.spyOn(api, "submitPrompt");
+    await rehydrateSession("sensor-session");
+    await rehydrateSession("sensor-session");
+    const messages = useAppStore.getState().messages;
+    expect(messages.filter((message) => message.responseIncomplete)).toHaveLength(1);
+    expect(messages.at(-1)).toMatchObject({ responseIncomplete: true, content: expect.stringContaining("sin entregar") });
+    expect(messages.some((message) => message.id === "invisible-answer")).toBe(false);
+    expect(messages.find((message) => message.id === "sensor-question")?.attachments?.[0].mediaId).toBe("a".repeat(32));
+    expect(messages.some((message) => message.tools?.[0].name === "vision_analyze")).toBe(true);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { content: "👩‍💻", tool_calls: [] },
+    { content: "", controlMedia: [{ id: "b".repeat(32), kind: "audio", mediaType: "audio/mpeg" }] },
+    { content: "", controlMedia: [{ id: "b".repeat(32), kind: "image", mediaType: "image/jpeg" }] },
+  ])("keeps visible and media-only answers after resume: %j", async (answer) => {
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({ items: [
+      { id: "user", role: "user", content: "Responde" },
+      { id: "answer", role: "assistant", finish_reason: "stop", ...answer },
+    ], sessionStatus: "ready", activeOperation: null });
+    await rehydrateSession("visible-session");
+    expect(useAppStore.getState().messages.some((message) => message.responseIncomplete)).toBe(false);
+    expect(useAppStore.getState().messages.find((message) => message.id === "answer")).toBeDefined();
+  });
+
+  it("does not show a terminal notice while a native turn is still active", async () => {
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({ items: [
+      { id: "user", role: "user", content: "Responde" },
+      { id: "answer", role: "assistant", content: "\u200b", finish_reason: "stop" },
+    ], sessionStatus: "streaming", activeTurnId: "native-turn", activeOperation: null });
+    await rehydrateSession("active-invisible-session");
+    expect(useAppStore.getState().messages.some((message) => message.responseIncomplete)).toBe(false);
+  });
+
+  it("continues only the selected incomplete answer once, preserves the draft and does not re-upload attachments", async () => {
+    useAppStore.setState({ profiles: profiles.map((profile) => ({ ...profile, mutable: true })), sessions, selectedProfileId: "profile-newton", selectedSessionId: "session-papers", runtimeTurnBySession: {},
+      messages: [{ id: "missing-answer", sessionId: "session-papers", role: "assistant", content: "No answer", createdAt: "", responseIncomplete: true }],
+    });
+    const clearDraft = vi.spyOn(drafts, "clearDraft");
+    const submit = vi.spyOn(api, "submitPrompt").mockResolvedValue({ operationId: "continued-op", status: "accepted" });
+    const first = continueIncompleteResponse("missing-answer");
+    await continueIncompleteResponse("missing-answer");
+    await first;
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith("session-papers", expect.stringContaining("No repitas acciones externas"), expect.any(String), "csrf-background");
+    expect(clearDraft).not.toHaveBeenCalled();
+    useAppStore.setState({ selectedSessionId: "other-session" });
+    await continueIncompleteResponse("missing-answer");
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
 
   it("reconstructs an active response after process eviction and settles from history", async () => {
     const history = vi.spyOn(api, "sessionHistory");

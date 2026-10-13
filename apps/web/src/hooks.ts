@@ -2,6 +2,7 @@ import { closeTemporaryChat } from "./lib/temporaryChat";
 import { useEffect, useMemo, useRef } from "react";
 import { api, ApiError, connectRealtime } from "./lib/api";
 import { absoluteTimestamp } from "./lib/chatTimeline";
+import { hasVisibleText } from "./lib/messageContent";
 import {
   clearPrivateCache,
   bindPrivateCacheOwner,
@@ -886,7 +887,8 @@ function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index:
   const media = mediaFromHistory(item);
   const attachments = attachmentsFromHistory(item);
   const emailReferences = emailReferencesFromValue(sessionId, item.controlEmailReferences);
-  const content = typeof item.content === "string" ? item.content : typeof item.text === "string" ? item.text : "";
+  const rawContent = typeof item.content === "string" ? item.content : typeof item.text === "string" ? item.text : "";
+  const content = role === "assistant" && !hasVisibleText(rawContent) ? "" : rawContent;
   const origin = controlTurnOrigin(item.controlTurnOrigin);
   if (!content && !media.length && !attachments.length && !emailReferences.length) return null;
   return {
@@ -998,15 +1000,13 @@ function appendTerminalHistoryNotice(
   const hasFinalResponse = history.slice(lastUserIndex + 1).some((item) => {
     if (item?.role !== "assistant") return false;
     if (controlTurnOrigin(item.controlTurnOrigin)) return false;
-    if (item.tool_calls || item.toolCalls) return false;
+    if ([item.tool_calls, item.toolCalls].some((calls) => Array.isArray(calls) ? calls.length > 0 : Boolean(calls))) return false;
     const finishReason = String(item.finish_reason ?? item.finishReason ?? "").trim().toLowerCase();
     if (["tool_calls", "tool_call", "function_call"].includes(finishReason)) return false;
     const content = item.content ?? item.text;
-    const hasContent = typeof content === "string" && Boolean(content.trim());
-    const hasMedia = Array.isArray(item.controlMedia) && item.controlMedia.length > 0;
-    return hasContent
-      || hasMedia
-      || ["stop", "completed", "complete", "done", "end_turn"].includes(finishReason);
+    // A successful stop is not proof that the model delivered an answer.
+    return hasVisibleText(content) || mediaFromHistory(item).length > 0
+      || emailReferencesFromValue(sessionId, item.controlEmailReferences).length > 0;
   });
   if (hasFinalResponse) return;
   const content = sessionStatus === "interrupted"
@@ -1024,6 +1024,7 @@ function appendTerminalHistoryNotice(
     content,
     createdAt: "",
     timestamp: historyTimestamp(history.at(-1) ?? {}),
+    ...(["ready", "completed", "idle"].includes(sessionStatus) ? { responseIncomplete: true } : {}),
   });
 }
 
@@ -1790,7 +1791,17 @@ async function reconcileAmbiguousPrompt(sessionId: string, operationId: string, 
   }
 }
 
-export async function submitPrompt(content: string, attachments: File[] = []) {
+export async function continueIncompleteResponse(messageId: string) {
+  const state = useAppStore.getState();
+  const messages = state.messages.filter((message) => message.sessionId === state.selectedSessionId);
+  const last = messages.at(-1);
+  const profile = state.profiles.find((item) => item.id === state.selectedProfileId);
+  if (last?.id !== messageId || !last.responseIncomplete
+    || (!state.demoMode && (state.authState !== "authenticated" || !profile?.mutable || !profile.capabilities?.prompts))) return;
+  await submitPrompt(i18n.t("runtimeMessages.continueResponsePrompt"), [], { preserveDraft: true });
+}
+
+export async function submitPrompt(content: string, attachments: File[] = [], options: { preserveDraft?: boolean } = {}) {
   const state = useAppStore.getState();
   if (isCloudProfileOffline(state.profiles.find((profile) => profile.id === state.selectedProfileId), state.gateways, state.connection)) return;
   if ((!content.trim() && !attachments.length) || activeResponseId(state, state.selectedSessionId) || !state.selectedSessionId) return;
@@ -1804,7 +1815,7 @@ export async function submitPrompt(content: string, attachments: File[] = []) {
   state.appendMessage(userMessage);
   state.appendMessage({ id: assistantId, sessionId: state.selectedSessionId, role: "assistant", content: "", createdAt: userMessage.createdAt, timestamp: userMessage.timestamp, streaming: true });
   state.setStreamingMessageId(state.selectedSessionId, assistantId);
-  void clearDraft(state.selectedSessionId, state.userId).catch(() => undefined);
+  if (!options.preserveDraft) void clearDraft(state.selectedSessionId, state.userId).catch(() => undefined);
 
   if (!state.demoMode) {
     const idempotencyKey = crypto.randomUUID();
