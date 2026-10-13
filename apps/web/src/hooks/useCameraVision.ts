@@ -241,7 +241,7 @@ export function useCameraVision(options: CameraVisionOptions) {
     } catch (problem) { if (valid(generation, capturedScope) && !isAbort(problem)) setError("capture"); return null; }
     finally { if (valid(generation, capturedScope)) { busy.current = false; setAnalyzing(false); schedule(generation, capturedScope); } }
   }, []);
-  const onLiveRequest = useCallback(async (context: string, signal: AbortSignal): Promise<VisionIntentResult & { observation?: VisionObservation }> => {
+  const onLiveRequest = useCallback(async (context: string, signal: AbortSignal, conversationContext?: string): Promise<VisionIntentResult & { observation?: VisionObservation }> => {
     const nonvisual: VisionIntentResult = { intent: "nonvisual", question: "" };
     const unavailable: VisionIntentResult = { intent: "visual", question: context };
     if (phaseRef.current !== "active" || !controller.current || signal.aborted) return nonvisual;
@@ -268,7 +268,11 @@ export function useCameraVision(options: CameraVisionOptions) {
       if (timer.current) clearTimeout(timer.current); timer.current = null;
       if (busy.current) return { intent: "unclear", question: "" };
       ownsBusy = true; busy.current = true; setAnalyzing(true);
-      const intent = await visionApi.intent(current.current.sessionId, { requestId: crypto.randomUUID(), text: context, ...(recent.current ? { recentContext: recent.current.summary } : {}) }, current.current.csrfToken, request.signal);
+      const intent = await visionApi.intent(current.current.sessionId, {
+        requestId: crypto.randomUUID(), text: context,
+        ...(recent.current ? { recentContext: recent.current.summary } : {}),
+        ...(conversationContext ? { conversationContext: conversationContext.slice(-4000) } : {}),
+      }, current.current.csrfToken, request.signal);
       if (!valid(generation, capturedScope) || request.signal.aborted) return { intent: "unclear", question: "" };
       ownsBusy = false; busy.current = false; setAnalyzing(false);
       if (intent.intent !== "visual") return intent;
@@ -276,7 +280,9 @@ export function useCameraVision(options: CameraVisionOptions) {
       return { ...intent, ...(observation ? { observation } : {}) };
     } catch (problem) {
       if (valid(generation, capturedScope) && !request.signal.aborted && !isAbort(problem)) setError(issueFor(problem, "analysis"));
-      return { intent: "unclear", question: "" };
+      // A failed classifier is a camera error, not a request for consent. Asking
+      // again after a timeout/quota error traps affirmative replies in a loop.
+      return unavailable;
     } finally {
       cameraSignal.removeEventListener("abort", cancel); signal.removeEventListener("abort", cancel);
       if (pendingText.current === token) pendingText.current = null;

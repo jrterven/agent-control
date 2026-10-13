@@ -980,7 +980,7 @@ export function ChatView() {
   const ownerId = useAppStore((state) => state.userId);
   const visualRequestRef = useRef<CameraVisionState["onLiveRequest"] | null>(null);
   const live = useOpenAILive({ enabled: liveConfigured && canPrompt && authState === "authenticated" && Boolean(session), sessionId, profileId, csrfToken,
-    prepareVisualRequest: (text, signal) => visualRequestRef.current?.(text, signal) ?? Promise.resolve({ intent: "nonvisual", question: "" }),
+    prepareVisualRequest: (text, signal, conversationContext) => visualRequestRef.current?.(text, signal, conversationContext) ?? Promise.resolve({ intent: "nonvisual", question: "" }),
   });
   const camera = useCameraVision({ ownerId, profileId, sessionId, csrfToken, offline,
     enabled: canPrompt && authState === "authenticated" && Boolean(session),

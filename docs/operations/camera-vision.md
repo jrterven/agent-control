@@ -28,6 +28,14 @@ ask for clarification. Visual follow-up questions can compare the current and pr
 analyzed frame. The agent answers in the normal chat; on-demand observations
 remain saved as evidence without appearing as a second answer in the timeline.
 
+Spoken classification includes up to 4,000 characters of the current call's
+transcript, separately from the latest request and any historical observation.
+This lets a short reply such as “Sí, adelante” resolve the preceding camera
+clarification. Refusals and unrelated replies must not trigger a capture, and
+spoken consent never reactivates a stopped camera. Provider failures display a
+camera error instead of asking for the same permission again. This context is
+reference data, never instructions or evidence of the current scene.
+
 Live drops output audio and captions while the current camera request is checked.
 It instructs the model to wait, then measures at least 300 ms of quiet remote
 audio before sending a verified result or allowing a nonvisual answer. A provider

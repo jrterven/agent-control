@@ -107,7 +107,7 @@ export async function liveFocusMessageId(message: ChatMessage) {
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
-type VisualRequest = (text: string, signal: AbortSignal) => Promise<VisionIntentResult & { observation?: VisionObservation }>;
+type VisualRequest = (text: string, signal: AbortSignal, conversationContext?: string) => Promise<VisionIntentResult & { observation?: VisionObservation }>;
 export function useOpenAILive({ enabled, sessionId, profileId, csrfToken, prepareVisualRequest }: { enabled: boolean; sessionId: string; profileId: string; csrfToken?: string; prepareVisualRequest?: VisualRequest }) {
   const cameraSessionRef = useRef<string | null>(null);
   const visualRequestRef = useRef(prepareVisualRequest);
@@ -225,7 +225,7 @@ export function useOpenAILive({ enabled, sessionId, profileId, csrfToken, prepar
       let announcedWaiting = false;
       try {
         if (requestText && visualRequestRef.current) {
-          const visual = await visualRequestRef.current(requestText, task.controller.signal);
+          const visual = await visualRequestRef.current(requestText, task.controller.signal, context.slice(-4000));
           if (!current() || !intentRef.current || task.controller.signal.aborted) return "The request was cancelled. No new task was submitted.";
           if (visual.intent === "nonvisual" && cameraOnly) return null;
           if (visual.intent === "unclear") return "Ask the user whether they want you to look through the camera. No capture or task was submitted.";

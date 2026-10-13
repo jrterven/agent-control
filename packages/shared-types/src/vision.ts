@@ -18,6 +18,7 @@ export interface VisionIntentInput {
   requestId: string;
   text: string;
   recentContext?: string;
+  conversationContext?: string;
 }
 
 export interface VisionIntentResult {

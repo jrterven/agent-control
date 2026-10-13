@@ -123,7 +123,7 @@ describe("Live consent, task suspension and verified resumption", () => {
     const call = mocks.calls[0];
     let delegated!: Promise<string>;
     await act(async () => { delegated = call.delegate("User: Mira esto. Voice assistant: Un libro. User: ¿Y ahora?", "¿Y ahora?"); });
-    expect(prepareVisualRequest).toHaveBeenCalledWith("¿Y ahora?", expect.any(AbortSignal));
+    expect(prepareVisualRequest).toHaveBeenCalledWith("¿Y ahora?", expect.any(AbortSignal), "User: Mira esto. Voice assistant: Un libro. User: ¿Y ahora?");
     expect(submitPrompt).not.toHaveBeenCalled();
     await act(async () => { finish({ intent: "visual", question: "¿Qué ves ahora?", observation: { id: "observation" } }); });
     expect(submitPrompt).toHaveBeenCalledOnce();

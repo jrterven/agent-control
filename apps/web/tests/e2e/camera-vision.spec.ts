@@ -9,7 +9,7 @@ type SmokeState = {
   callsClosed: number; commentary: string[]; attachments: string[]; remoteAudioTracks: number; playbackMuted: boolean;
 };
 type SmokeWindow = Window & { cameraSmoke: {
-  state(): SmokeState; speak(text: string): number; delegate(question?: string): void;
+  state(): SmokeState; speak(text: string): number; reply(text: string): void; delegate(question?: string): void;
   delegateTurn(turn: number, id?: string): void; scene(value: "cup" | "notebook"): void;
 } };
 const mediaState = (page: Page) => page.evaluate(() => (window as SmokeWindow).cameraSmoke.state());
@@ -218,6 +218,8 @@ async function mockCamera(page: Page) {
         playbackMuted: playback.some((audio) => audio.muted),
       }),
       speak, delegateTurn,
+      reply: (text: string) => channels.at(-1)!.emit({ type: "session.output_transcript.delta", event_id: `camera-reply-${utterances}`,
+        delta: text, start_ms: utterances * 2000 + 1200, end_ms: utterances * 2000 + 1900 }),
       delegate: (question = "Prepara un informe detallado.") => delegateTurn(speak(question)),
       scene: (value: "cup" | "notebook") => { scene = value; renderers.forEach((draw) => draw()); },
     } });
@@ -453,6 +455,48 @@ test("a spoken visual follow-up analyzes the changed scene instead of repeating 
   await expect(page.getByText(cameraAnswer(notebookSummary), { exact: true })).toBeVisible();
   expect(mock.calls).toHaveLength(1);
 });
+
+for (const reply of ["Sí, adelante", "No, mejor no"] as const) {
+  test(`a spoken camera clarification uses the preceding exchange: ${reply}`, async ({ page }) => {
+    const mock = await mockCamera(page);
+    const requests: VisionIntentInput[] = [];
+    const clarification = "Todavía no tengo una imagen nueva para esta pregunta. ¿Quieres que mire a través de la cámara?";
+    await page.route("**/api/v1/sessions/*/vision/intent", (route) => {
+      const payload: VisionIntentInput = route.request().postDataJSON();
+      requests.push(payload);
+      // Simulate the classifier needing the actual preceding exchange to
+      // resolve a short answer. No frame is inferred from the old transcript.
+      const confirmed = payload.text === "Sí, adelante" && payload.conversationContext?.includes(clarification);
+      return route.fulfill({ json: { intent: requests.length === 1 ? "unclear" : confirmed ? "visual" : "nonvisual", question: confirmed ? "¿Qué ves ahora?" : "" } });
+    });
+    await page.clock.install();
+    await page.goto("/chats");
+    await page.getByRole("button", { name: "Conversar con GPT-Live-1" }).click();
+    await expect(page.getByText("Escuchando · ya puedes hablar")).toBeVisible();
+    await activate(page);
+    await page.evaluate(() => (window as SmokeWindow).cameraSmoke.speak("¿Qué... qué estás?"));
+    await page.clock.runFor(900);
+    await expect.poll(async () => (await mediaState(page)).commentary.join(" ")).toContain("whether they want you to look");
+    expect(mock.analyses).toHaveLength(0);
+    expect(mock.prompts).toHaveLength(0);
+    await page.evaluate((text) => (window as SmokeWindow).cameraSmoke.reply(text), clarification);
+    await page.clock.runFor(3_000);
+    const turn = await page.evaluate((text) => (window as SmokeWindow).cameraSmoke.speak(text), reply);
+    await page.clock.runFor(900);
+    await expect.poll(() => requests.length).toBe(2);
+    expect(requests[1]).toMatchObject({ text: reply });
+    expect(requests[1].conversationContext).toContain(`Voice assistant: ${clarification}`);
+    expect(requests[1].conversationContext).toContain(`User: ${reply}`);
+    if (reply === "Sí, adelante") {
+      await expect.poll(async () => (await mediaState(page)).commentary.join(" ")).toContain(cameraAnswer(cupSummary));
+      await page.evaluate((id) => (window as SmokeWindow).cameraSmoke.delegateTurn(id), turn);
+    }
+    await page.clock.runFor(3_000);
+    expect(mock.analyses).toHaveLength(reply === "Sí, adelante" ? 1 : 0);
+    expect(mock.prompts).toHaveLength(reply === "Sí, adelante" ? 1 : 0);
+    expect(requests).toHaveLength(2);
+  });
+}
 
 test("early and late provider delegations share the already processed spoken visual turn", async ({ page }) => {
   const mock = await mockCamera(page);

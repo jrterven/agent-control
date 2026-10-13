@@ -98,6 +98,45 @@ describe("camera permission and analysis lifecycle", () => {
     expect(capture.captureCameraFrame).toHaveBeenCalledTimes(2);
   });
 
+  it("passes bounded conversation separately from the current reply and historical observation", async () => {
+    const { result } = renderHook(() => useCameraVision(options)); await tick();
+    await act(async () => { await result.current.start("on_demand"); await result.current.analyze(); });
+    const exchange = "User: ¿Qué estás viendo?\nVoice assistant: ¿Quieres que mire por la cámara?\nUser: Sí, adelante";
+    await act(async () => { await result.current.onLiveRequest("Sí, adelante", new AbortController().signal, "old ".repeat(2000) + exchange); });
+    const payload = vi.mocked(visionApi.intent).mock.calls[0][1];
+    expect(payload.text).toBe("Sí, adelante");
+    expect(payload.recentContext).toBe("Una taza roja");
+    expect(payload.conversationContext).toHaveLength(4000);
+    expect(payload.conversationContext).toContain(exchange);
+    expect(payload).not.toHaveProperty("image");
+    expect(capture.captureCameraFrame).toHaveBeenCalledOnce();
+  });
+
+  it.each(["VISION_PROVIDER_LIMIT", "VISION_PROVIDER_TIMEOUT"])("reports %s as a camera failure instead of requesting consent again", async (code) => {
+    vi.mocked(visionApi.intent).mockRejectedValueOnce({ code });
+    const { result } = renderHook(() => useCameraVision(options)); await tick();
+    await act(async () => { await result.current.start("on_demand"); });
+    await act(async () => {
+      expect(await result.current.onLiveRequest("Sí, adelante", new AbortController().signal)).toEqual({ intent: "visual", question: "Sí, adelante" });
+    });
+    expect(result.current.error).toBe(code === "VISION_PROVIDER_LIMIT" ? "quota" : "timeout");
+    expect(capture.captureCameraFrame).not.toHaveBeenCalled();
+    await tick(60_000);
+    expect(visionApi.intent).toHaveBeenCalledOnce();
+  });
+
+  it("does not activate the camera for a spoken confirmation after it was stopped", async () => {
+    const { result } = renderHook(() => useCameraVision(options)); await tick();
+    await act(async () => { await result.current.start("on_demand"); });
+    act(() => result.current.stop());
+    await act(async () => {
+      expect(await result.current.onLiveRequest("Sí, adelante", new AbortController().signal, "Voice assistant: ¿Miro por la cámara?")).toEqual({ intent: "nonvisual", question: "" });
+    });
+    expect(capture.acquireCamera).toHaveBeenCalledOnce();
+    expect(visionApi.intent).not.toHaveBeenCalled();
+    expect(capture.captureCameraFrame).not.toHaveBeenCalled();
+  });
+
   it("never activates on mount; explicit activation blocks PWA reload and stop releases memory", async () => {
     const { result } = renderHook(() => useCameraVision(options)); await tick();
     expect(capture.acquireCamera).not.toHaveBeenCalled();

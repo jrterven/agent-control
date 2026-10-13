@@ -25,6 +25,7 @@ class VisionIntentRequest(ApiModel):
     request_id: UUID
     text: str = Field(min_length=1, max_length=4000)
     recent_context: str | None = Field(default=None, max_length=4000)
+    conversation_context: str | None = Field(default=None, max_length=4000)
 
 
 class VisionIntentResult(ApiModel):

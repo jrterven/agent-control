@@ -218,6 +218,25 @@ def test_intent_uses_selected_model_without_images_or_history_writes(vision_setu
         assert len(db.scalars(select(VisionObservationRecord)).all()) == 1
 
 
+def test_intent_accepts_bounded_conversation_without_promoting_it_to_instructions(vision_setup, app):
+    client, headers, owner_id, session_id, fake = vision_setup
+    context = "User: ¿Qué estás viendo?\nVoice assistant: ¿Quieres que mire por la cámara?\nUser: Sí, adelante"
+    path = f"/api/v1/sessions/{session_id}/vision/intent"
+    payload = {"requestId": str(uuid4()), "text": "Sí, adelante", "conversationContext": context, "recentContext": "Una taza ayer"}
+    response = client.post(path, json=payload, headers=headers)
+    assert response.status_code == 200, response.text
+    data = json.loads(fake.calls[0]["content"][0]["text"])
+    assert data == {"currentRequest": "Sí, adelante", "recentContext": "Una taza ayer", "conversationContext": context}
+    assert context not in fake.calls[0]["instructions"]
+    assert all(item["type"] == "input_text" for item in fake.calls[0]["content"])
+    assert client.post(path, json={**payload, "requestId": str(uuid4()), "conversationContext": "x" * 4001}, headers=headers).status_code == 422
+    assert len(fake.calls) == 1
+    with app.state.session_factory() as db:
+        assert db.scalar(select(VisionObservationRecord)) is None
+        receipt = db.scalar(select(VisionRequestReceipt))
+        assert context not in receipt.result_ciphertext
+
+
 def test_failed_and_in_progress_receipts_never_repeat_provider(vision_setup, app):
     client, headers, owner_id, session_id, fake = vision_setup
     fake.failure = IntegrationError(status_code=504, code="VISION_PROVIDER_TIMEOUT", message="Timed out")
