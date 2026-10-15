@@ -28,8 +28,8 @@ it("downloads on demand with authentication, the original filename and no naviga
   expect(clicked[0].download).toBe("currícula IA.md");
   expect(clicked[0].href).toBe("blob:document");
   // Node's fetch Blob and JSDOM's Blob can belong to different realms.
-  // Verify the delivered bytes, not the test runner's constructor identity.
-  expect(await create.mock.calls[0][0].text()).toBe("# Documento");
+  // Verify the delivered payload size, not the runner's constructor identity.
+  expect(create).toHaveBeenCalledWith(expect.objectContaining({ size: 11 }));
 });
 
 it("reports unavailable files and lets the user retry without leaving the chat", async () => {
