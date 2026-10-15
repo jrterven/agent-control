@@ -27,7 +27,9 @@ it("downloads on demand with authentication, the original filename and no naviga
   expect(fetchMock).toHaveBeenCalledWith(url, expect.objectContaining({ credentials: "same-origin", cache: "no-store", redirect: "error" }));
   expect(clicked[0].download).toBe("currícula IA.md");
   expect(clicked[0].href).toBe("blob:document");
-  expect(create).toHaveBeenCalledWith(expect.any(Blob));
+  // Node's fetch Blob and JSDOM's Blob can belong to different realms.
+  // Verify the delivered bytes, not the test runner's constructor identity.
+  expect(await create.mock.calls[0][0].text()).toBe("# Documento");
 });
 
 it("reports unavailable files and lets the user retry without leaving the chat", async () => {
