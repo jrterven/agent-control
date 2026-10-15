@@ -58,6 +58,10 @@ def project_file_context(content: str) -> str:
     if not content.startswith(_PREFIX):
         return content
     payload, separator, body = content[len(_PREFIX):].partition(_SUFFIX)
+    # Attachment composition trims an empty prompt. Its native image suffix
+    # can then be removed before this projection, leaving only the full header.
+    if not separator and payload.endswith(_SUFFIX.rstrip()):
+        payload, separator, body = payload[:-len(_SUFFIX.rstrip())], _SUFFIX, ""
     try:
         directory = json.loads(payload) if separator and len(payload) <= 8192 else None
         if (isinstance(directory, str) and directory.startswith("/")

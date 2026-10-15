@@ -98,6 +98,9 @@ def test_context_preserves_user_text_attachments_and_reconciliation(tmp_path):
                                       [PromptAttachment("image", "photo.png", "image/png", b"image")], [])
     assert project_attachment_prompt(inner)[0] == "Revisa esto"
     assert SessionService._prompt_digest(inner) == SessionService._prompt_digest(prompt)
+    empty = compose_attachment_prompt(with_file_context("", tmp_path, "selected", "session"),
+                                      [PromptAttachment("image", "photo.png", "image/png", b"image")], [])
+    assert project_attachment_prompt(empty + "\n\n[Image attached at: /private/photo.png]\n[screenshot]")[0] == ""
 
 
 @pytest.mark.asyncio
