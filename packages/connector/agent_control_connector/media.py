@@ -8,6 +8,7 @@ import stat
 
 from hermes_client.connector_protocol import MAX_BLOB_BYTES
 from hermes_client.attachments import attachment_image_paths
+from hermes_client.generated_files import project_files, read_file
 
 TYPES = {".aac": "audio/aac", ".flac": "audio/flac", ".m4a": "audio/mp4", ".mp3": "audio/mpeg",
          ".oga": "audio/ogg", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".wav": "audio/wav", ".webm": "audio/webm"}
@@ -73,7 +74,7 @@ def project_media(history, hermes_home: Path, profile: str, session_id: str):
         for match in reversed(matches):
             content = content[:match.start()] + content[match.end():]
         result[index][key] = content.strip()
-    return result
+    return project_files(result, hermes_home, profile, session_id)
 
 
 def image_candidates(history, hermes_home: Path, profile: str, session_id: str):
@@ -150,4 +151,4 @@ def read_media(history, hermes_home: Path, profile: str, session_id: str, media_
         if not 0 < len(content) <= maximum:
             raise ValueError("Voice note exceeds transfer limit")
         return {"content": content, "media_type": media_type}
-    raise LookupError("Voice note not found")
+    return read_file(history, hermes_home, profile, session_id, media_id)

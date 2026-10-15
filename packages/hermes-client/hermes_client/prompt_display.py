@@ -1,5 +1,6 @@
 """Public projection of audited managed context; never changes model input."""
 import re
+from .generated_files import project_file_context
 
 # Exact text only: quoted, partial and user-authored lookalikes remain visible.
 # Kept separately from the installable plugins, which run in the Hermes process.
@@ -8,6 +9,7 @@ MEDIA_CONTEXT = 'Agent Control images: use publish_images when pictures, paper f
 _LIMITS = re.compile(r" Current account limits: [0-9]{1,3} images per gallery, [0-9]{1,3} per response, [0-9]{1,10} bytes and [0-9]{1,10} pixels per image\.$")
 
 def project_managed_context(content: str) -> str:
+    content = project_file_context(content)
     # Hooks append independent paragraphs. Remove only complete known suffixes,
     # in either hook order; do not strip a substring from the user's question.
     for _ in range(8):

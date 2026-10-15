@@ -366,6 +366,10 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .user-bubble { max-width: 74%; padding: 13px 16px 15px; border-radius: 20px 20px 6px 20px; color: var(--text-soft); background: var(--surface-2); }
 .user-bubble p { margin: 5px 0 0; white-space: pre-wrap; line-height: 1.62; }
 .message-attachments { display: grid; gap: 6px; margin-top: 7px; }
+.file-download > a { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; max-width: 100%; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.file-download > a > svg { flex-shrink: 0; }
+.file-download > a[aria-disabled] { opacity: .65; cursor: progress; }
+.file-download > [role="alert"] { display: block; color: var(--muted); font-size: .85em; }
 .message-attachments .message-image-gallery { width: min(320px, 100%); margin: 0 0 8px; }
 .message-attachments .message-image__open img { max-height: 240px; object-fit: contain; }
 .message-attachment { min-width: 0; display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: 10px; padding: 7px 9px; background: color-mix(in srgb, var(--surface-1) 72%, transparent); }

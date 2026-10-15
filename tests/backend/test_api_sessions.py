@@ -27,6 +27,40 @@ def gateway_id(client: TestClient) -> str:
     return response.json()[0]["id"]
 
 
+def test_private_installation_delivers_staged_documents(app, authenticated, tmp_path):
+    from hermes_client.generated_files import file_directory, file_id, project_file_context
+    from hermes_control_api.services import GatewayService
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "file-session")
+    app.state.services.settings.hermes_media_root = str(tmp_path / "profiles")
+    path = file_directory(tmp_path, "control-dev", session["storedSessionId"]) / "report.html"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"<script>alert(1)</script>")
+
+    async def seed():
+        with app.state.session_factory() as db:
+            row = db.get(SessionLink, session["id"])
+            connection = await GatewayService(app.state.services).connection(db, row.gateway_id, row.profile_name)
+        provider = await app.state.services.provider_pool.get(connection)
+        provider._messages[row.stored_session_id] = [{"role": "assistant", "content": "[Download](ac-file:report.html)"}]
+        return provider
+
+    provider = client.portal.call(seed)
+    url = f"/api/v1/sessions/{session['id']}/files/{file_id('control-dev', session['storedSessionId'], path.name)}"
+    history = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert url in history.json()["items"][0]["content"]
+    response = client.get(url)
+    assert response.content == path.read_bytes()
+    assert response.headers["content-disposition"].startswith("attachment;")
+    assert response.headers["content-type"] == "application/octet-stream"
+    submitted = client.post(f"/api/v1/sessions/{session['id']}/prompts", headers=mutation_headers(csrf, "file-prompt"),
+                            json={"content": "Create another document"})
+    assert submitted.status_code == 202, submitted.text
+    user_message = next(item["content"] for item in provider._messages[session["storedSessionId"]] if item["role"] == "user")
+    assert str(path.parent) in user_message
+    assert project_file_context(user_message) == "Create another document"
+
+
 def create_session(client: TestClient, csrf: str, profile: str, key: str) -> dict:
     response = client.post(
         "/api/v1/sessions",

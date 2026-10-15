@@ -11,6 +11,7 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Path, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -1952,6 +1953,22 @@ async def session_media(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.get("/sessions/{session_id}/files/{file_id}")
+async def download_session_file(
+    session_id: str, file_id: str, request: Request,
+    user: User = Depends(current_user), db: Session = Depends(get_db),
+) -> Response:
+    service = SessionService(services(request))
+    row = service.owned(db, user, session_id)
+    asset = await service.download_file(db, user, row, file_id)
+    return Response(asset["content"], media_type="application/octet-stream", headers={
+        "Content-Disposition": "attachment; filename*=UTF-8''" + quote(asset["filename"], safe=""),
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "sandbox; default-src 'none'",
+    })
 
 
 @router.get("/sessions/{session_id}/export")

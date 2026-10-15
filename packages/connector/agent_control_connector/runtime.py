@@ -496,6 +496,13 @@ class ConnectorRuntime:
             elif operation == "media":
                 history = await provider.history_readonly(args[0])
                 result = read_media(history, Path(self.config["hermesHome"]), profile, args[0], args[1])
+            elif operation == "submit_prompt":
+                from hermes_client.generated_files import with_file_context
+                route = args[0] if args else kwargs["route"]
+                prompt = args[1] if len(args) > 1 else kwargs["prompt"]
+                prompt = with_file_context(prompt, Path(self.config["hermesHome"]), profile, route.stored_session_id)
+                dispatch = {key: value for key, value in kwargs.items() if key not in {"route", "prompt"}}
+                result = await provider.submit_prompt(route, prompt, **dispatch)
             else:
                 result = await getattr(provider, operation)(*args, **kwargs)
             if operation == "delete_profile":
@@ -534,7 +541,7 @@ class ConnectorRuntime:
             if operation == "capabilities":
                 if self.config.get("sourceSha") in HERMES_CONNECTOR_REVISIONS:
                     result = replace(result, methods=result.methods | {"insights.generate"}, features=result.features | {"connector.toolFreeInsightsV1"})
-                result = replace(result, features=result.features | {"connector.historyPageV1", "connector.promptImagePreviewV1"})
+                result = replace(result, features=result.features | {"connector.historyPageV1", "connector.promptImagePreviewV1", "connector.fileDownloadsV1"})
                 if (self.profile_transfer_supported
                         and self.config.get("sourceSha") in HERMES_CONNECTOR_REVISIONS
                         and profile_contract_supports(self.config.get("sourceSha"), result.version, "profiles.transfer")

@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { remarkMessageImages, safeImageSource, type ImageReference } from "../lib/messageImages";
 import { MessageImageGallery } from "./MessageImageGallery";
 import { useAppStore } from "../store/appStore";
+import { FileDownloadLink } from "./FileDownloadLink";
 
 const imageSchema = {
   ...defaultSchema,
@@ -17,6 +18,13 @@ export function MessageMarkdown({ content, sessionId, streaming = false }: { con
   const { t } = useTranslation();
   const limits = useAppStore((state) => state.features?.images);
   const components = useMemo<Components>(() => ({
+      a: ({ href, children }) => {
+        const prefix = `/api/v1/sessions/${encodeURIComponent(sessionId)}/files/`;
+        if (href?.startsWith(prefix) && /^[a-f0-9]{32}$/.test(href.slice(prefix.length))) {
+          return <FileDownloadLink href={href}>{children}</FileDownloadLink>;
+        }
+        return href ? <a href={href}>{children}</a> : <span>{children}</span>;
+      },
       div: ({ node, children }) => {
         const serialized = node?.properties.dataImageRefs;
         if (typeof serialized === "string") {

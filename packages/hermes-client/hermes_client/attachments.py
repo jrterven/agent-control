@@ -95,6 +95,7 @@ def project_attachment_prompt(content: str) -> tuple[str, list[dict[str, Any]]]:
         )
     body = content[match.end():]
     body, _ = _image_suffix(body, sum(item["kind"] == "image" for item in attachments))
+    body = project_managed_context(body)
     cleaned = _REFS_BLOCK.sub("", body).strip()
     if cleaned.startswith(f"{_EMPTY_PROMPT}\n"):
         cleaned = ""
@@ -150,4 +151,5 @@ def prompt_without_native_suffix(content: str) -> str:
     if match is None or not attachments:
         return content
     body, _ = _image_suffix(content[match.end():], sum(item["kind"] == "image" for item in attachments))
+    body = project_managed_context(body)
     return content[:match.end()] + body

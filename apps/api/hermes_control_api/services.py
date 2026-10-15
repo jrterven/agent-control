@@ -2969,8 +2969,9 @@ class SearchService:
                             # A search endpoint indexes every Hermes session;
                             # Control may expose only sessions linked to this user.
                             continue
+                        public_snippet, _ = project_attachment_prompt(hit.snippet)
                         safe = normalizer.sanitize_data(
-                            {"role": hit.role, "content": hit.snippet}
+                            {"role": hit.role, "content": public_snippet}
                         )
                         if not isinstance(safe, dict) or safe.get("omitted"):
                             continue
@@ -2978,7 +2979,7 @@ class SearchService:
                         from .vision_context import project_camera_prompt
                         from .input_context import project_direct_chat_prompt
                         safe_content = project_direct_chat_prompt(project_camera_prompt(safe_content))
-                        if "hermes-control-text-input-v1" in safe_content:
+                        if "hermes-control-text-input-v1" in safe_content or "agent-control-downloads-v1" in safe_content:
                             safe_content = ""
                         safe_content, _ = project_email_reference_prompt(safe_content)
                         if "hermes-control-email-" in safe_content.casefold():
@@ -3599,6 +3600,10 @@ class SessionService:
         row: SessionLink,
         history: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        from hermes_client.generated_files import project_files
+        files_home = self._files_home(db, row)
+        if files_home is not None:
+            history = project_files(history, files_home, row.profile_name, row.stored_session_id)
         normalizer = EventNormalizer(
             gateway_id=row.gateway_id, profile_name=row.profile_name
         )
@@ -3629,6 +3634,7 @@ class SessionService:
             safe_item.pop("controlMedia", None)
             safe_item.pop("controlAttachmentMedia", None)
             safe_item.pop("controlAttachments", None)
+            safe_item.pop("controlFiles", None)
             if gateway is not None and gateway.transport_kind == "connector" and raw_item.get("role") == "assistant":
                 media = raw_item.get("controlMedia")
                 if isinstance(media, list):
@@ -3713,6 +3719,14 @@ class SessionService:
             for field in ("emailReferences", "email_references"):
                 references.extend(email_reference_candidates(raw_item.get(field)))
             projected_content, embedded = project_email_reference_prompt(raw_content)
+            if gateway is not None and (gateway.transport_kind == "connector" or files_home is not None):
+                from hermes_client.generated_files import file_references
+                files = self._file_entries(row, raw_item)
+                for match, name in reversed(list(file_references(projected_content))):
+                    reference = next((item for item in files if item["name"] == name), None)
+                    if reference is not None:
+                        url = f"/api/v1/sessions/{row.id}/files/{reference['id']}"
+                        projected_content = projected_content[:match.start()] + url + projected_content[match.end():]
             references.extend(embedded)
             if content_key is not None:
                 safe_item[content_key] = normalizer.sanitize_data(projected_content)
@@ -4033,6 +4047,58 @@ class SessionService:
                     return asset
         raise NotFoundError("Voice note not found")
 
+    def _files_home(self, db: Session, row: SessionLink) -> Path | None:
+        gateway = db.get(Gateway, row.gateway_id)
+        root = self.services.settings.hermes_media_root
+        if (gateway is None or gateway.transport_kind == "connector" or not gateway.env_managed
+                or not root or row.chat_mode == "temporary"):
+            return None
+        home = Path(root).expanduser().absolute().parent
+        return home if home.is_dir() else None
+
+    @staticmethod
+    def _file_entries(row: SessionLink, item: dict) -> list[dict]:
+        from hermes_client.generated_files import MAX_FILE_BYTES, file_id, valid_filename
+        files = item.get("controlFiles")
+        if row.chat_mode == "temporary" or item.get("role") != "assistant" or not isinstance(files, list):
+            return []
+        return [entry for entry in files[:16] if isinstance(entry, dict)
+                and valid_filename(entry.get("name")) and type(entry.get("size")) is int
+                and 0 <= entry["size"] <= MAX_FILE_BYTES
+                and entry.get("id") == file_id(row.profile_name, row.stored_session_id, entry["name"])]
+
+    async def download_file(self, db: Session, actor: User, row: SessionLink, identifier: str) -> dict:
+        from hermes_client.generated_files import MAX_FILE_BYTES, read_file
+        if row.owner_id != actor.id or row.chat_mode == "temporary" or not _SAFE_MEDIA_ID.fullmatch(identifier):
+            raise NotFoundError("File unavailable")
+        gateway = db.get(Gateway, row.gateway_id)
+        if gateway is None or not gateway.enabled:
+            raise NotFoundError("File unavailable")
+        history = await self._raw_history(db, row)
+        home = self._files_home(db, row)
+        if home is not None:
+            try:
+                return await asyncio.to_thread(read_file, history, home, row.profile_name, row.stored_session_id, identifier)
+            except LookupError:
+                raise NotFoundError("File unavailable") from None
+        if gateway.transport_kind != "connector" or gateway.owner_id != actor.id:
+            raise NotFoundError("File unavailable")
+        entry = next((entry for item in history if isinstance(item, dict)
+                      for entry in self._file_entries(row, item) if entry["id"] == identifier), None)
+        if entry is None:
+            raise NotFoundError("File unavailable")
+        connection = await self.gateways.connection(db, row.gateway_id, row.profile_name)
+        provider = await self.services.provider_pool.get(connection)
+        try:
+            result = await provider.media(row.stored_session_id, identifier)
+        except LookupError:
+            raise NotFoundError("File unavailable") from None
+        if (not isinstance(result, dict) or result.get("filename") != entry["name"]
+                or not isinstance(result.get("content"), bytes) or len(result["content"]) > MAX_FILE_BYTES
+                or result.get("media_type") != "application/octet-stream"):
+            raise NotFoundError("File unavailable")
+        return result
+
     async def image_metadata(self, db: Session, actor: User, row: SessionLink, media_id: str) -> dict:
         from .visual_media import get_visual_media_service, public_metadata
         from .models import VisualMedia
@@ -4219,6 +4285,10 @@ class SessionService:
             )
             from .input_context import with_direct_chat_context
             control_prompt = with_direct_chat_context(control_prompt, baseline_history)
+            files_home = self._files_home(db, row)
+            if files_home is not None:
+                from hermes_client.generated_files import with_file_context
+                control_prompt = with_file_context(control_prompt, files_home, row.profile_name, row.stored_session_id)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

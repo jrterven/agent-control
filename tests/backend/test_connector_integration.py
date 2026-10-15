@@ -135,6 +135,52 @@ def mutate(headers):
     return {**headers,"Idempotency-Key":uuid4().hex}
 
 
+def test_created_file_download_is_authenticated_and_conversation_bound(attached):
+    from urllib.parse import quote
+    from hermes_client.generated_files import file_directory, file_id
+    app, client, headers, runtime, peer, credentials, _ = attached
+    session = create_session(client, headers)
+    base = f"/api/v1/sessions/{session['id']}"
+    name = "currícula IA (final).md"
+    path = file_directory(Path(runtime.config["hermesHome"]), "selected", session["storedSessionId"]) / name
+    path.parent.mkdir(parents=True)
+    path.write_bytes("# Currícula\nContenido del documento".encode())
+    identifier = file_id("selected", session["storedSessionId"], name)
+    raw = f"Documento listo: [Descargar currícula](ac-file:{quote(name, safe='')})"
+    runtime.providers["selected"]._messages[session["storedSessionId"]] = [{"role": "assistant", "content": raw}]
+    history = client.get(base + "/messages")
+    assert history.status_code == 200, history.text
+    url = base + "/files/" + identifier
+    assert url in history.json()["items"][0]["content"]
+    assert "controlFiles" not in history.text and str(path.parent) not in history.text
+    downloaded = client.get(url)
+    assert downloaded.status_code == 200, downloaded.text
+    assert downloaded.content == path.read_bytes()
+    assert downloaded.headers["content-disposition"] == "attachment; filename*=UTF-8''" + quote(name, safe="")
+    assert downloaded.headers["content-type"] == "application/octet-stream"
+    assert "no-store" in downloaded.headers["cache-control"]
+    assert downloaded.headers["x-content-type-options"] == "nosniff"
+    from hermes_control_api.auth import issue_session
+    from hermes_control_api.models import User
+    saved_cookies = dict(client.cookies)
+    with app.state.session_factory() as db:
+        bob = db.scalar(select(User).where(User.username == "bob"))
+        token, _, _ = issue_session(db, bob, ttl_hours=1)
+    client.cookies.clear()
+    client.cookies.set("hc_session", token)
+    assert client.get(url).status_code == 404
+    client.cookies.clear()
+    client.cookies.update(saved_cookies)
+    other = create_session(client, headers)
+    assert client.get(f"/api/v1/sessions/{other['id']}/files/{identifier}").status_code == 404
+    # The media endpoint cannot inline documents, including HTML/SVG payloads.
+    assert client.get(base + "/media/" + identifier).status_code == 404
+    path.unlink()
+    assert client.get(url).status_code == 404
+    client.cookies.clear()
+    assert client.get(url).status_code == 401
+
+
 def create_session(client,headers):
     bootstrap = client.get("/api/v1/bootstrap").json()
     profile = next(row for row in bootstrap["profiles"] if row["technicalName"] == "selected")
@@ -223,7 +269,8 @@ def test_disconnect_after_dispatch_reconciles_without_repeating_prompt(attached)
         assert len(calls) == 1
         stored = client.get(f"/api/v1/sessions/{session['id']}/messages")
         assert stored.status_code == 200, stored.text
-        assert sum(1 for item in provider._messages[next(iter(provider._sessions))] if item["role"] == "user" and item["content"] == "Only once") == 1
+        from hermes_client.generated_files import project_file_context
+        assert sum(1 for item in provider._messages[next(iter(provider._sessions))] if item["role"] == "user" and project_file_context(item["content"]) == "Only once") == 1
     finally:
         replacement.close()
 
