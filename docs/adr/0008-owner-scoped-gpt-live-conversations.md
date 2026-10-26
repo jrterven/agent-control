@@ -93,6 +93,16 @@ separate voice API, not a replacement Hermes gateway or a Realtime API alias.
   prompt adopts that name and delegates questions about missing memory,
   personality, projects or capabilities to the same agent. The delegation
   wrapper preserves the backend agent's own identity and configured behavior.
+- Use GPT-Live's exact `Generate <|SpawnThinking|>` delegation instruction and
+  template headings. Account-access questions (including email, follow-up account
+  names and requests to check connections) require a backend read-only check before
+  affirming or denying access, unless the same account/operation already has a
+  still-current explicit agent result. A configured tool catalog does not establish
+  working account access; missing inventory and failed checks leave it unknown.
+  The factual connection block labels account access as unverified. The backend
+  wrapper requests minimal evidence without opening messages or changing data
+  merely to test access. Preserve existing approval requirements, distinguish
+  reading from sending/modification and report uncertainty when verification fails.
 - For general capability questions, use a broad, outcome-oriented introduction
   and a few varied, verified examples. The bounded catalog is a sample, not the
   agent's capability ceiling. Ask the selected agent for a current overview and

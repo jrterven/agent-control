@@ -66,6 +66,8 @@ def test_voice_uses_the_exact_selected_agent_and_owned_conversation(authenticate
     assert context["conversation_title"] == "Revisión del artículo"
     assert context["tools"] == [{"name": f"{route[1]}-research", "description": "Buscar publicaciones"}]
     assert context["catalogs_verified"] == ["skills", "toolsets"]
+    # A verified tool inventory must not be promoted to account authorization.
+    assert context["account_access"].startswith("Not verified by this snapshot.")
     assert "agent_context" not in response.text
 
     response = client.post("/api/v1/realtime/live-session", headers=headers(csrf),
@@ -117,6 +119,7 @@ def test_missing_optional_catalog_keeps_identity_and_marks_capabilities_unknown(
     data = context_data(fake.requests[0]["agent_context"].input_message(api_key=SECRET))
     assert data["agent_name"]
     assert data["catalogs_verified"] == []
+    assert data["account_access"].startswith("Not verified by this snapshot.")
     assert "ask the agent" in data["capability_catalog"]
     assert "private URL" not in str(data) + response.text
 
@@ -183,6 +186,10 @@ async def test_factual_agent_context_is_bounded_redacted_and_separate_from_instr
         )
     session = requests[0]["session"]
     assert session["instructions"] == LIVE_INSTRUCTIONS
+    # GPT-Live requires the literal handoff signal and these template labels;
+    # saying "delegate" alone does not establish the provider contract.
+    assert "Generate <|SpawnThinking|> when:" in session["instructions"]
+    assert "Do not generate <|SpawnThinking|> when:" in session["instructions"]
     assert injection not in session["instructions"]
     assert injection in session["input"][-1]["content"][0]["text"]
     assert session["input"][-1]["role"] == "user"
@@ -192,6 +199,7 @@ async def test_factual_agent_context_is_bounded_redacted_and_separate_from_instr
     assert sum(len(item["content"][0]["text"].encode()) for item in bounded) <= 7_500
     assert len(bounded[-1]["content"][0]["text"].encode()) <= 2_000
     assert context_data(bounded[-1])["agent_name"] == "Jarvis"
+    assert context_data(bounded[-1])["account_access"].startswith("Not verified by this snapshot.")
     escaped_key = 'sk-test_"escaped\\credential_123'
     escaped = LiveAgentContext(name="Jarvis", description=escaped_key).input_message(api_key=escaped_key)
     assert context_data(escaped)["agent_description"] == "[REDACTED]"

@@ -282,6 +282,7 @@ class LiveAgentContext:
             "conversation_title": _text(self.conversation, 200),
             "connection": "Delegations go to this agent in this conversation.",
             "capability_catalog": "Partial snapshot; ask the agent for missing or current capabilities.",
+            "account_access": "Not verified by this snapshot. Configured tools do not prove account access; missing tools do not prove no access. Ask the agent to check current connections and permissions.",
             "tools": list(self.catalogs.get("toolsets", [])),
             "skills": list(self.catalogs.get("skills", [])),
             "catalogs_verified": sorted(key for key in self.catalogs if key in {"toolsets", "skills"}),

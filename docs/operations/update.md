@@ -137,6 +137,17 @@ deployments older than the repository head still require the normal backup and
 migration rehearsal before activation. Simulated WebRTC checks validate the
 lifecycle and input contract, not the provider's exact wording or acoustic timing.
 
+For account-access prompt changes, manually check a new voice call with
+«¿tienes acceso a mi correo?», «¿y el del IPN?» and «revisa tus conexiones».
+Each unverified account must trigger delegation before an access claim; a spoken
+promise to check is insufficient. Test configured tools, missing/partial catalogs,
+an expired connection and prior incorrect voice denials. A failed check must
+remain unverified, and verifying access must not open messages or send/modify
+anything when connection status or folder metadata suffices. Reusing a still-current
+agent result for the same account must not duplicate the check. Automated fake
+provider tests verify configuration and context boundaries; they do not prove
+the live model's exact wording or delegation decisions.
+
 ## Transcription integration change
 
 ElevenLabs Scribe is independent from the Hermes release stream. Before
