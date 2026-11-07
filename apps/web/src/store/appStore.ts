@@ -19,6 +19,14 @@ import { detectedTimeZone } from "../lib/dateTime";
 import { readDesktopSidebarOpen, saveDesktopSidebarOpen } from "../lib/sidebarPreference";
 import { readAgentPreference, saveAgentPreference } from "../lib/agentPreference";
 
+// Default chat selection follows activity, independently of API or pin order.
+function latestSession(sessions: SessionSummary[], profileId: string, workspaceId?: string) {
+  return sessions.filter((session) => session.profileId === profileId
+    && (workspaceId === undefined || (session.workspaceId ?? "") === workspaceId))
+    .reduce<SessionSummary | undefined>((latest, session) =>
+      !latest || (Date.parse(session.updatedAt) || 0) > (Date.parse(latest.updatedAt) || 0) ? session : latest, undefined);
+}
+
 type AuthState = "checking" | "authenticated" | "offline" | "unauthenticated";
 
 type AppState = {
@@ -269,17 +277,19 @@ export const useAppStore = create<AppState>((set) => ({
   selectGateway: (selectedGatewayId) => set((state) => {
     const profile = state.profiles.find((item) => item.gatewayId === selectedGatewayId);
     const selectedProfileId = profile?.id ?? "";
-    const selectedSessionId = state.sessions.find((item) => item.profileId === selectedProfileId && (item.workspaceId ?? "") === state.selectedWorkspaceId)?.id ?? "";
+    const session = latestSession(state.sessions, selectedProfileId);
+    const selectedSessionId = session?.id ?? "";
     rememberAgent(state, profile);
-    return { preparingChat: false, selectedGatewayId, selectedProfileId, selectedSessionId, gatewayMenuOpen: false };
+    return { preparingChat: false, selectedGatewayId, selectedProfileId, selectedSessionId, selectedWorkspaceId: session?.workspaceId ?? "", gatewayMenuOpen: false };
   }),
   selectProfile: (selectedProfileId) => set((state) => {
     const profile = state.profiles.find((item) => item.id === selectedProfileId);
-    const selectedSessionId = state.sessions.find((item) => item.profileId === selectedProfileId && (item.workspaceId ?? "") === state.selectedWorkspaceId)?.id ?? "";
+    const session = latestSession(state.sessions, selectedProfileId);
+    const selectedSessionId = session?.id ?? "";
     rememberAgent(state, profile);
-    return { preparingChat: false, selectedProfileId, selectedGatewayId: profile?.gatewayId ?? state.selectedGatewayId, selectedSessionId };
+    return { preparingChat: false, selectedProfileId, selectedGatewayId: profile?.gatewayId ?? state.selectedGatewayId, selectedSessionId, selectedWorkspaceId: session?.workspaceId ?? "" };
   }),
-  selectWorkspace: (selectedWorkspaceId) => set((state) => ({ preparingChat: false, selectedWorkspaceId, selectedSessionId: state.sessions.find((item) => (item.workspaceId ?? "") === selectedWorkspaceId && item.profileId === state.selectedProfileId)?.id ?? "" })),
+  selectWorkspace: (selectedWorkspaceId) => set((state) => ({ preparingChat: false, selectedWorkspaceId, selectedSessionId: latestSession(state.sessions, state.selectedProfileId, selectedWorkspaceId)?.id ?? "" })),
   selectSession: (selectedSessionId) => set((state) => {
     const session = state.sessions.find((item) => item.id === selectedSessionId);
     const profile = session ? state.profiles.find((item) => item.id === session.profileId) : undefined;
@@ -318,14 +328,18 @@ export const useAppStore = create<AppState>((set) => ({
     // opened from automation runs are not silently replaced by a session in
     // the first workspace.
     const requestedSession = data.sessions.find((item) => item.id === state.selectedSessionId && item.profileId === selectedProfileId);
-    const selectedWorkspaceId = requestedSession
+    const initialSession = !state.bootstrapLoaded && !state.preparingChat && !requestedSession
+      ? latestSession(data.sessions, selectedProfileId) : undefined;
+    const selectedWorkspaceId = initialSession
+      ? initialSession.workspaceId ?? ""
+      : requestedSession
       ? requestedSession.workspaceId ?? ""
       : state.bootstrapLoaded && state.selectedWorkspaceId === ""
         ? ""
         : data.workspaces.some((item) => item.id === state.selectedWorkspaceId)
           ? state.selectedWorkspaceId
           : data.workspaces[0]?.id ?? "";
-    const selectedSessionId = state.preparingChat ? "" : data.sessions.some((item) => item.id === state.selectedSessionId && item.profileId === selectedProfileId && (item.workspaceId ?? "") === selectedWorkspaceId) ? state.selectedSessionId : data.sessions.find((item) => item.profileId === selectedProfileId && (item.workspaceId ?? "") === selectedWorkspaceId)?.id ?? "";
+    const selectedSessionId = state.preparingChat ? "" : data.sessions.some((item) => item.id === state.selectedSessionId && item.profileId === selectedProfileId && (item.workspaceId ?? "") === selectedWorkspaceId) ? state.selectedSessionId : latestSession(data.sessions, selectedProfileId, selectedWorkspaceId)?.id ?? "";
     return { ...data, bootstrapLoaded: true, selectedGatewayId, selectedProfileId, selectedWorkspaceId, selectedSessionId };
   }),
   addSession: (session) => set((state) => ({ preparingChat: false, sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)], selectedSessionId: session.id, leftDrawerOpen: false })),

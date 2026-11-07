@@ -160,7 +160,7 @@ describe("bootstrap selection reconciliation", () => {
         storedSessionId: "automation-stored",
         title: "Automatización de hoy",
         preview: "",
-        updatedAt: "ahora",
+        updatedAt: "2026-11-07T12:00:00Z",
       },
       {
         id: "workspace-session",
@@ -169,7 +169,7 @@ describe("bootstrap selection reconciliation", () => {
         storedSessionId: "workspace-stored",
         title: "Chat en Papers",
         preview: "",
-        updatedAt: "ahora",
+        updatedAt: "2026-11-06T12:00:00Z",
       },
     ],
     automations: [],
@@ -209,10 +209,37 @@ describe("bootstrap selection reconciliation", () => {
     expect(useAppStore.getState().selectedSessionId).toBe("automation-session");
   });
 
-  it("still selects the first workspace during the initial bootstrap", () => {
+  it("ignores input order and pins, selects the latest chat's workspace, and keeps explicit selections on refresh", () => {
+    const projection = { ...bootstrap, sessions: [
+      { ...bootstrap.sessions[0], pinnedAt: "2026-11-07T13:00:00Z" },
+      { ...bootstrap.sessions[1], updatedAt: "2026-11-07T14:00:00Z" },
+      { ...bootstrap.sessions[0], id: "other-agent", profileId: "other", updatedAt: "2026-11-08T14:00:00Z" },
+    ] };
+    useAppStore.getState().hydrateBootstrap(projection);
+    expect(useAppStore.getState()).toMatchObject({ selectedSessionId: "workspace-session", selectedWorkspaceId: "workspace-papers" });
+    useAppStore.getState().selectSession("automation-session");
+    useAppStore.getState().hydrateBootstrap(projection);
+    expect(useAppStore.getState().selectedSessionId).toBe("automation-session");
+  });
+
+  it.each(["profile", "gateway"])("opens the latest chat across workspaces when selecting a %s", (route) => {
+    useAppStore.getState().hydrateBootstrap(bootstrap);
+    useAppStore.getState().selectWorkspace("workspace-papers");
+    if (route === "profile") useAppStore.getState().selectProfile("profile-jarvis");
+    else useAppStore.getState().selectGateway("gateway-remote");
+    expect(useAppStore.getState()).toMatchObject({ selectedSessionId: "automation-session", selectedWorkspaceId: "" });
+  });
+
+  it("keeps a new chat empty during bootstrap refresh", () => {
+    useAppStore.getState().prepareChat();
+    useAppStore.getState().hydrateBootstrap(bootstrap);
+    expect(useAppStore.getState().selectedSessionId).toBe("");
+  });
+
+  it("opens the latest chat across workspaces during the initial bootstrap", () => {
     useAppStore.getState().hydrateBootstrap(bootstrap);
 
-    expect(useAppStore.getState().selectedWorkspaceId).toBe("workspace-papers");
-    expect(useAppStore.getState().selectedSessionId).toBe("workspace-session");
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("");
+    expect(useAppStore.getState().selectedSessionId).toBe("automation-session");
   });
 });
