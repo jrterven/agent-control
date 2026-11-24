@@ -200,6 +200,7 @@ describe("mobile-first chat", () => {
       emit("tool.complete", { tool_id: "search", name: "mcp__mail__mail_search" });
     });
     expect(toggle).toHaveTextContent("Revisando correo");
+    expect(screen.queryByRole("button", { name: "Mostrar el resumen de actividad de Newton" })).not.toBeInTheDocument();
     expect(within(log).getAllByText("Revisión de correo")).toHaveLength(1);
     expect(within(log).getByText("En curso")).toBeVisible();
     expect(within(log).queryByText(/tool calling|Asunto del correo/)).not.toBeInTheDocument();
@@ -254,12 +255,11 @@ describe("mobile-first chat", () => {
 
   it("shows a compact activity summary inside a tool-only message", async () => {
     const streamingMessage = {
-      id: "assistant-tools-progress",
+      id: "assistant-tools-summary",
       sessionId: "session-papers",
       role: "assistant" as const,
       content: "",
       createdAt: "10:43",
-      streaming: true,
       tools: [
         { id: "tool-1", name: "web_search", label: "web_search", summary: "Cinco resultados encontrados", status: "running" as const },
         { id: "tool-2", name: "terminal", label: "terminal", summary: "Comando completado", status: "completed" as const },
@@ -267,7 +267,7 @@ describe("mobile-first chat", () => {
     };
     useAppStore.setState({
       messages: [...initialMessages, streamingMessage],
-      streamingBySession: { "session-papers": streamingMessage.id },
+      streamingBySession: {},
     });
     const user = userEvent.setup();
     const { container } = render(<ChatView />);
