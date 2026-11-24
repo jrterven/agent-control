@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Archive, ArrowClockwise, CaretDown, CheckCircle, Clock, DownloadSimple, Gauge, Pulse, Robot, Trash, WarningCircle, Wrench, X } from "@phosphor-icons/react";
 import { Badge, Button, IconButton, StatusDot, Switch, cx } from "@hermes-control/ui";
 import { api } from "../lib/api";
+import { summarizeAgentActivity } from "../lib/agentActivity";
 import { useAppStore } from "../store/appStore";
 import { useOverlayDialog } from "../lib/useOverlayDialog";
 import { hasPwaUpdateBlockers, requestPwaUpdate, usePwaUpdateStore } from "../lib/pwaUpdate";
@@ -63,7 +64,9 @@ export function ActivityPanel() {
   const roundedContextPercent = contextPercent === undefined ? undefined : Math.round(contextPercent);
   const inputTokens = usage?.inputTokens ?? usage?.promptTokens;
   const outputTokens = usage?.outputTokens ?? usage?.completionTokens;
-  const latestTools = [...messages].reverse().find((message) => message.sessionId === sessionId && message.tools?.length)?.tools ?? [];
+  const latestWork = [...messages].reverse().find((message) => message.sessionId === sessionId && (message.tools?.length || message.activity?.length));
+  const latestTools = latestWork?.tools ?? [];
+  const { groups: activityGroups } = summarizeAgentActivity(latestWork);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -227,9 +230,16 @@ export function ActivityPanel() {
         </section> : <section className="metric-section"><div className="section-title"><span><Gauge size={18} /> {t("activity.usage.title")}</span><strong>—</strong></div><p className="muted-copy">{t("activity.usage.noTelemetry")}</p></section>}
 
         <details className="activity-details" open>
-          <summary><span><Wrench size={18} /> {t("activity.tools")}</span><span><Badge tone="info">{latestTools.length}</Badge><CaretDown size={15} /></span></summary>
+          <summary><span><Wrench size={18} /> {t(advancedMode ? "activity.tools" : "chat.activity.summary")}</span><CaretDown size={15} /></summary>
           <div className="activity-timeline">
-            {latestTools.length ? latestTools.map((tool) => <div key={tool.id}><CheckCircle weight="fill" /><span><strong>{tool.label}</strong><small>{tool.summary}</small></span></div>) : <div><Wrench /><span><strong>{t("activity.noActivity")}</strong><small>{t("activity.toolsWhenReported")}</small></span></div>}
+            {advancedMode && latestTools.length ? latestTools.map((tool) => (
+              <div key={tool.id}><Wrench /><span><strong>{tool.label}</strong><small>{tool.summary}</small></span></div>
+            )) : activityGroups.length ? activityGroups.map(({ step, status }) => (
+              <div key={step}>
+                {status === "running" ? <Clock /> : status === "failed" ? <WarningCircle /> : <CheckCircle weight="fill" />}
+                <span><strong>{t(`chat.activitySteps.${step}.label`)}</strong><small>{t(`chat.toolStatus.${status}`)}</small></span>
+              </div>
+            )) : <div><Wrench /><span><strong>{t("activity.noActivity")}</strong></span></div>}
           </div>
         </details>
 

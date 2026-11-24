@@ -78,7 +78,7 @@ describe("rehydrated Hermes tool history", () => {
       ]));
     });
 
-    expect(screen.queryByRole("button", { name: /Herramientas · 2/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mostrar el resumen de actividad de Newton" })).not.toBeInTheDocument();
   });
 
   it("retains image media in history without duplicating positional galleries or creating an audio player", async () => {
@@ -159,18 +159,19 @@ describe("rehydrated Hermes tool history", () => {
     const user = userEvent.setup();
     render(<ReopenedChat />);
 
-    const toggle = await screen.findByRole("button", { name: "Mostrar historial de herramientas de Newton" });
+    const toggle = await screen.findByRole("button", { name: "Mostrar el resumen de actividad de Newton" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("Se alcanzó a crear un evento")).not.toBeInTheDocument();
     expect(screen.getByText(/se interrumpió antes/i)).toBeVisible();
 
     await user.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(toggle).toHaveAccessibleName("Ocultar historial de herramientas de Newton");
-    const history = screen.getByRole("region", { name: "Historial de herramientas de Newton" });
-    expect(history).toHaveAttribute("data-max-items", "10");
+    expect(toggle).toHaveAccessibleName("Ocultar el resumen de actividad de Newton");
+    const history = screen.getByRole("region", { name: "Resumen de actividad de Newton" });
     expect(history).toHaveClass("message-evidence__viewport");
-    expect(screen.getByText("Se alcanzó a crear un evento")).toBeVisible();
+    expect(within(history).getByText("Calendario")).toBeVisible();
+    expect(within(history).getByText("Listo")).toBeVisible();
+    expect(within(history).queryByText("Se alcanzó a crear un evento")).not.toBeInTheDocument();
   });
 
   it("renders mail-tool references as cards and loads a plain-text preview on demand", async () => {

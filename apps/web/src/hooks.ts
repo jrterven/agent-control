@@ -738,10 +738,14 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
   if (event.type.startsWith("tool.")) {
     const current = useAppStore.getState().messages.find((message) => message.id === messageId);
     const requestedToolName = typeof data.name === "string" ? data.name : undefined;
-    const activeTool = [...(current?.tools ?? [])].reverse().find((tool) => tool.status === "running" && (!requestedToolName || tool.name === requestedToolName));
-    const toolName = requestedToolName ?? activeTool?.name ?? "tool";
-    const toolId = String(payloadValue(data, "tool_id", "toolId") ?? data.id ?? activeTool?.id ?? event.eventId ?? event.id ?? crypto.randomUUID());
-    const status = ["tool.error", "tool.failed"].includes(event.type) || event.type.endsWith(".error") || event.type.endsWith(".failed")
+    const reportedToolId = payloadValue(data, "tool_id", "toolId") ?? data.id;
+    const previousTool = reportedToolId == null
+      ? [...(current?.tools ?? [])].reverse().find((tool) => tool.status === "running" && (!requestedToolName || tool.name === requestedToolName))
+      : current?.tools?.find((tool) => tool.id === String(reportedToolId));
+    const toolName = requestedToolName ?? previousTool?.name ?? "tool";
+    const toolId = String(reportedToolId ?? previousTool?.id ?? event.eventId ?? event.id ?? crypto.randomUUID());
+    const statusHint = typeof data.status === "string" ? data.status.toLowerCase() : "";
+    const status = statusHint === "error" || statusHint === "failed" || event.type.endsWith(".error") || event.type.endsWith(".failed")
       ? "failed"
       : ["tool.complete", "tool.completed"].includes(event.type) || event.type.endsWith(".complete") || event.type.endsWith(".completed")
         ? "completed"
@@ -749,9 +753,9 @@ export function applyRealtimeEvent(event: RealtimeEvent): boolean {
     const nextTool = {
       id: toolId,
       name: toolName,
-      label: boundedAgentActivityText(data.label ?? data.name ?? activeTool?.label, "Herramienta"),
+      label: boundedAgentActivityText(data.label ?? data.name ?? previousTool?.label, "Herramienta"),
       status: status as "running" | "completed" | "failed",
-      summary: boundedAgentActivityText(data.summary ?? activeTool?.summary, "Actividad de Hermes"),
+      summary: boundedAgentActivityText(data.summary ?? previousTool?.summary, "Actividad de Hermes"),
     };
     const tools = [...(current?.tools ?? []).filter((tool) => tool.id !== toolId), nextTool];
     const activityId = event.eventId ?? event.id ?? crypto.randomUUID();

@@ -12,6 +12,7 @@ import { Badge, Button, IconButton } from "@hermes-control/ui";
 import { continueIncompleteResponse, createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
 import { api } from "../lib/api";
 import { conversationTimeline } from "../lib/chatTimeline";
+import { summarizeAgentActivity, type ActivityGroup } from "../lib/agentActivity";
 import { hasVisibleText } from "../lib/messageContent";
 import { liveDelegationConversation } from "../lib/liveDelegation";
 import { activeResponseId, useAppStore } from "../store/appStore";
@@ -23,7 +24,7 @@ import { VisionObservationCard, visionInteractionCopy } from "./VisionObservatio
 import { useOpenAILive } from "../hooks/useOpenAILive";
 import { useSpeechPlayback, type LiveSpeechStatus, type SpeechPlaybackStatus } from "../hooks/useSpeechPlayback";
 import { usePwaUpdateStore } from "../lib/pwaUpdate";
-import type { AgentActivityItem, ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageAttachment, MessageMedia, Profile } from "../types";
+import type { ApprovalRequest, ChatMessage, ClarificationQuestion, ClarificationRequest, MessageAttachment, MessageMedia, Profile } from "../types";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { ChatModeIndicator, NewChatSetup, type ChatStart } from "./ChatMode";
 import { EmailReferences } from "./EmailReferences";
@@ -34,7 +35,6 @@ import { CloudEmptyState } from "../screens/CloudScreens";
 const emptyApprovals: ApprovalRequest[] = [];
 const emptyClarifications: ClarificationRequest[] = [];
 const automationInstructionMaxLines = 10;
-const toolEvidenceMaxItems = 10;
 const conversationFollowThreshold = 48;
 const attachmentMaxFiles = 5;
 const attachmentMaxBytes = 8 * 1024 * 1024;
@@ -80,24 +80,13 @@ function AgentActivityDisclosure({ agentName, message }: { agentName: string; me
   const logRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
   const [expanded, setExpanded] = useState(false);
-  const activity = useMemo<AgentActivityItem[]>(() => {
-    const entries: AgentActivityItem[] = [{
-      id: `${message?.id ?? "active"}:analysis`,
-      kind: "analysis",
-      status: "running",
-      label: t("chat.activity.analyzing"),
-    }, ...(message?.activity ?? [])];
-    if (hasVisibleText(message?.content)) {
-      entries.push({
-        id: `${message.id}:composing`,
-        kind: "composing",
-        status: "running",
-        label: t("chat.activity.composing"),
-      });
-    }
-    return entries;
-  }, [message?.activity, message?.content, message?.id, t]);
-  const activityKey = activity.map((item) => `${item.id}:${item.status}:${item.summary ?? ""}`).join("|");
+  const tools = message?.tools;
+  const activity = message?.activity;
+  const { groups, current } = useMemo(() => summarizeAgentActivity({ tools, activity }), [tools, activity]);
+  const composing = !current && hasVisibleText(message?.content);
+  const phase = composing ? t("chat.activity.composing") : groups.length ? undefined : t("chat.activity.analyzing");
+  const currentLabel = current ? t(`chat.activitySteps.${current}.current`) : phase;
+  const activityKey = `${groups.map(({ step, status }) => `${step}:${status}`).join("|")}:${phase ?? ""}`;
 
   useEffect(() => {
     setExpanded(false);
@@ -117,7 +106,7 @@ function AgentActivityDisclosure({ agentName, message }: { agentName: string; me
 
   return (
     <div className="agent-activity">
-      <span className="sr-only" role="status">{t("chat.typing", { agent: agentName })}</span>
+      <span className="sr-only" role="status">{currentLabel ? `${agentName}: ${currentLabel}` : t("chat.typing", { agent: agentName })}</span>
       <button
         type="button"
         className="agent-activity__toggle"
@@ -126,7 +115,7 @@ function AgentActivityDisclosure({ agentName, message }: { agentName: string; me
         aria-label={t(expanded ? "chat.activity.hide" : "chat.activity.show", { agent: agentName })}
         onClick={toggle}
       >
-        <span>{t("chat.typing", { agent: agentName })}</span>
+        <span>{currentLabel ?? t("chat.typing", { agent: agentName })}</span>
         <span className="agent-activity__dots" aria-hidden="true"><i /><i /><i /></span>
         <CaretDown className="agent-activity__caret" size={15} weight="bold" aria-hidden="true" />
       </button>
@@ -144,25 +133,21 @@ function AgentActivityDisclosure({ agentName, message }: { agentName: string; me
             followLatestRef.current = log.scrollHeight - log.scrollTop - log.clientHeight <= 16;
           }}
         >
-          {activity.map((item) => (
-            <div className={`agent-activity__item is-${item.status}`} key={item.id}>
+          {groups.map(({ step, status }) => (
+            <div className={`agent-activity__item is-${status}`} key={step}>
               <span className="agent-activity__marker" aria-hidden="true" />
-              <span>
-                <strong>{item.label ?? t(item.kind === "delegation" ? "chat.activity.delegation" : "chat.activity.tool")}</strong>
-                {item.summary && item.summary !== item.label ? <small>{item.summary}</small> : null}
-              </span>
-              <span className="sr-only">{t(`chat.toolStatus.${item.status}`)}</span>
+              <strong>{t(`chat.activitySteps.${step}.label`)}</strong>
+              <small>{t(`chat.toolStatus.${status}`)}</small>
             </div>
           ))}
+          {phase ? <div className="agent-activity__item"><span className="agent-activity__marker" aria-hidden="true" /><strong>{phase}</strong></div> : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-type ToolEvidenceItem = { id: string; label: string; summary: string };
-
-function ToolEvidenceDisclosure({ agentName, evidence, messageId, toolCount }: { agentName: string; evidence: ToolEvidenceItem[]; messageId: string; toolCount: number }) {
+function ToolEvidenceDisclosure({ agentName, groups, messageId }: { agentName: string; groups: ActivityGroup[]; messageId: string }) {
   const { t } = useTranslation();
   const panelId = useId();
   const [expanded, setExpanded] = useState(false);
@@ -181,10 +166,7 @@ function ToolEvidenceDisclosure({ agentName, evidence, messageId, toolCount }: {
       >
         <span className="message-evidence__identity">
           <Wrench size={17} aria-hidden="true" />
-          <span>
-            <strong>{t("chat.toolsCount", { count: toolCount || evidence.length })}</strong>
-            <small>{t(expanded ? "chat.toolEvidence.hideHint" : "chat.toolEvidence.showHint")}</small>
-          </span>
+          <strong>{t("chat.activity.summary")}</strong>
         </span>
         <CaretDown className="message-evidence__caret" size={15} weight="bold" aria-hidden="true" />
       </button>
@@ -194,11 +176,10 @@ function ToolEvidenceDisclosure({ agentName, evidence, messageId, toolCount }: {
           className="message-evidence__viewport"
           role="region"
           aria-label={t("chat.toolEvidence.label", { agent: agentName })}
-          data-max-items={toolEvidenceMaxItems}
           tabIndex={0}
         >
           <ul>
-            {evidence.map((item) => <li key={item.id}><span>{item.label}</span><small>{item.summary}</small></li>)}
+            {groups.map(({ step, status }) => <li key={step}><span>{t(`chat.activitySteps.${step}.label`)}</span><small>{t(`chat.toolStatus.${status}`)}</small></li>)}
           </ul>
         </div>
       ) : null}
@@ -547,20 +528,8 @@ function Message({ message, agentName, speech, liveExplanation, automationInstru
       </article>
     );
   }
-  const evidence = !hasVisibleText(message.content)
-    ? [
-        ...(message.tools ?? []).map((tool) => ({
-          id: `tool:${tool.id}`,
-          label: tool.label,
-          summary: tool.summary || t(`chat.toolStatus.${tool.status}`),
-        })),
-        ...(message.activity ?? []).map((item) => ({
-          id: `activity:${item.id}`,
-          label: item.label || t(item.kind === "delegation" ? "chat.activity.delegation" : "chat.activity.tool"),
-          summary: item.summary || t(`chat.toolStatus.${item.status}`),
-        })),
-      ]
-    : [];
+  const hasText = hasVisibleText(message.content);
+  const activityGroups = hasText ? [] : summarizeAgentActivity(message).groups;
   return (
     <article className="message message--assistant" id={message.controlTurnOrigin ? taskResultAnchor(message.id) : undefined} tabIndex={message.controlTurnOrigin ? -1 : undefined} aria-label={t("chat.assistantResponse", { agent: agentName })}>
       <div className="assistant-content">
@@ -570,10 +539,10 @@ function Message({ message, agentName, speech, liveExplanation, automationInstru
           {message.streaming ? <Badge tone="info">{t("chat.streaming")}</Badge> : null}
         </header> : null}
         <div className="markdown-body">
-          {hasVisibleText(message.content) ? (
+          {hasText ? (
             <MessageMarkdown content={message.content} sessionId={message.sessionId} streaming={message.streaming} />
-          ) : evidence.length ? (
-            <ToolEvidenceDisclosure agentName={agentName} evidence={evidence} messageId={message.id} toolCount={message.tools?.length ?? 0} />
+          ) : activityGroups.length ? (
+            <ToolEvidenceDisclosure agentName={agentName} groups={activityGroups} messageId={message.id} />
           ) : " "}
           {message.streaming ? <span className="stream-caret" aria-hidden="true" /> : null}
         </div>

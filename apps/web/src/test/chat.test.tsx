@@ -1,12 +1,12 @@
 import axe from "axe-core";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "../i18n";
 import { ChatView } from "../components/ChatView";
 import { automations, gateways, initialMessages, profiles, sessions, workspaces } from "../data";
 import { api } from "../lib/api";
-import { rehydrateSession } from "../hooks";
+import { applyRealtimeEvent, rehydrateSession } from "../hooks";
 import { textForSpeech } from "../hooks/useSpeechPlayback";
 import { useAppStore } from "../store/appStore";
 import type { Profile } from "../types";
@@ -92,7 +92,7 @@ describe("mobile-first chat", () => {
     const { container } = render(<ChatView />);
     expect(screen.getByRole("heading", { name: "Memoria de agentes · agosto" })).toBeInTheDocument();
     expect(screen.getByText("Comparativa de memoria de agentes — Agosto 2026")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Herramientas · 2/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mostrar el resumen de actividad de Newton" })).not.toBeInTheDocument();
     expect((await axe.run(container)).violations).toHaveLength(0);
   });
 
@@ -167,65 +167,66 @@ describe("mobile-first chat", () => {
     expect((await axe.run(container)).violations).toHaveLength(0);
   });
 
-  it("turns the typing label into a six-line, scrollable public activity disclosure", async () => {
+  it("summarizes live tool events by user-facing activity and keeps the current step visible", async () => {
     const streamingMessage = {
-      id: "assistant-progress",
-      sessionId: "session-papers",
-      role: "assistant" as const,
-      content: "Borrador parcial",
-      createdAt: "10:42",
-      streaming: true,
-      activity: [
-        { id: "search-1", kind: "tool" as const, label: "Búsqueda", summary: "Revisando fuentes", status: "running" as const },
-        { id: "delegate-1", kind: "delegation" as const, label: "Investigador", summary: "Comparando resultados", status: "completed" as const },
-      ],
+      id: "assistant-progress", sessionId: "session-papers", role: "assistant" as const,
+      content: "", createdAt: "10:42", streaming: true,
     };
     useAppStore.setState({
       messages: [...initialMessages, streamingMessage],
       streamingBySession: { "session-papers": streamingMessage.id },
+      pendingOperations: { "turn-progress": streamingMessage.id },
     });
     const user = userEvent.setup();
     const { container } = render(<ChatView />);
-
+    const emit = (type: string, data: Record<string, unknown>) => applyRealtimeEvent({
+      type, correlationId: "turn-progress", controlSessionId: "session-papers", data,
+    });
     const toggle = screen.getByRole("button", { name: "Mostrar actividad de Newton" });
+    expect(toggle).toHaveTextContent("Analizando la solicitud");
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("log", { name: "Actividad de Newton" })).not.toBeInTheDocument();
 
     await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(toggle).toHaveAccessibleName("Ocultar actividad de Newton");
     const log = screen.getByRole("log", { name: "Actividad de Newton" });
-    expect(log).toHaveClass("agent-activity__log");
-    expect(screen.getByText("Analizando la solicitud")).toBeVisible();
-    expect(screen.getByText("Búsqueda")).toBeVisible();
-    expect(screen.getByText("Revisando fuentes")).toBeVisible();
-    expect(screen.getByText("Redactando la respuesta")).toBeVisible();
-
     let scrollHeight = 320;
     Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => scrollHeight });
     Object.defineProperty(log, "clientHeight", { configurable: true, get: () => 100 });
     act(() => {
-      useAppStore.getState().updateMessage(streamingMessage.id, {
-        activity: [...streamingMessage.activity, {
-          id: "search-2", kind: "tool", label: "Búsqueda", summary: "Fuentes verificadas", status: "completed",
-        }],
-      });
+      emit("tool.start", { tool_id: "search", name: "mcp__mail__mail_search", label: "tool calling" });
+      emit("tool.progress", { tool_id: "search", summary: "Asunto del correo" });
+      emit("tool.start", { tool_id: "read", name: "mail_read" });
+      emit("tool.complete", { tool_id: "search", name: "mcp__mail__mail_search" });
     });
+    expect(toggle).toHaveTextContent("Revisando correo");
+    expect(within(log).getAllByText("Revisión de correo")).toHaveLength(1);
+    expect(within(log).getByText("En curso")).toBeVisible();
+    expect(within(log).queryByText(/tool calling|Asunto del correo/)).not.toBeInTheDocument();
     await waitFor(() => expect(log.scrollTop).toBe(320));
 
     scrollHeight = 500;
     log.scrollTop = 120;
     fireEvent.scroll(log);
     act(() => {
-      const current = useAppStore.getState().messages.find((message) => message.id === streamingMessage.id);
-      useAppStore.getState().updateMessage(streamingMessage.id, {
-        activity: [...(current?.activity ?? []), {
-          id: "search-3", kind: "tool", label: "Búsqueda", summary: "Última comprobación", status: "completed",
-        }],
-      });
+      emit("tool.start", { tool_id: "web", name: "web_search" });
+      emit("tool.complete", { tool_id: "read" });
     });
-    await waitFor(() => expect(screen.getByText("Última comprobación")).toBeVisible());
+    expect(toggle).toHaveTextContent("Consultando la web");
+    expect(within(log).getByText("Listo")).toBeVisible();
     expect(log.scrollTop).toBe(120);
+
+    act(() => {
+      emit("tool.complete", { tool_id: "web", status: "failed" });
+      emit("tool.start", { tool_id: "mail", name: "mcp__agent_control_mail_8e8a820132c846f4ad590d5cc110456_c937b38b" });
+    });
+    expect(toggle).toHaveTextContent("Trabajando con correo");
+    expect(within(log).getByText("Error")).toBeVisible();
+    act(() => {
+      emit("tool.completed", { tool_id: "mail" });
+      emit("message.delta", { delta: "Borrador parcial" });
+    });
+    expect(toggle).toHaveTextContent("Redactando la respuesta");
     expect((await axe.run(container)).violations).toHaveLength(0);
   });
 
@@ -251,7 +252,7 @@ describe("mobile-first chat", () => {
     expect(submit.mock.calls[0][1]).toBe("Otra pregunta");
   });
 
-  it("collapses streaming tool history by default and bounds it when expanded", async () => {
+  it("shows a compact activity summary inside a tool-only message", async () => {
     const streamingMessage = {
       id: "assistant-tools-progress",
       sessionId: "session-papers",
@@ -271,16 +272,17 @@ describe("mobile-first chat", () => {
     const user = userEvent.setup();
     const { container } = render(<ChatView />);
 
-    const toggle = screen.getByRole("button", { name: "Mostrar historial de herramientas de Newton" });
+    const toggle = screen.getByRole("button", { name: "Mostrar el resumen de actividad de Newton" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByText("Herramientas · 2")).toBeVisible();
+    expect(toggle).toHaveTextContent("Resumen de actividad");
     expect(screen.queryByText("Cinco resultados encontrados")).not.toBeInTheDocument();
 
     await user.click(toggle);
-    expect(toggle).toHaveAccessibleName("Ocultar historial de herramientas de Newton");
-    const history = screen.getByRole("region", { name: "Historial de herramientas de Newton" });
-    expect(history).toHaveAttribute("data-max-items", "10");
-    expect(screen.getByText("Cinco resultados encontrados")).toBeVisible();
+    expect(toggle).toHaveAccessibleName("Ocultar el resumen de actividad de Newton");
+    const history = screen.getByRole("region", { name: "Resumen de actividad de Newton" });
+    expect(within(history).getByText("Consulta web")).toBeVisible();
+    expect(within(history).getByText("Ejecución de tareas")).toBeVisible();
+    expect(within(history).queryByText("Cinco resultados encontrados")).not.toBeInTheDocument();
     expect((await axe.run(container)).violations).toHaveLength(0);
   });
 
@@ -396,7 +398,7 @@ describe("mobile-first chat", () => {
 
     expect(screen.getByText("August 28, 2026")).toBeVisible();
     expect(screen.getByRole("textbox", { name: "Message Newton…" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Tools · 2" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show activity summary for Newton" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Memoria de agentes · agosto" })).toBeVisible();
     expect(screen.getByText("Comparativa de memoria de agentes — Agosto 2026")).toBeVisible();
   });
