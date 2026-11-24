@@ -9,12 +9,9 @@
 .conversation__title { border-bottom-color: transparent; }
 .conversation__title .eyebrow { display: none; }
 .message-list, .date-divider { width: min(760px, calc(100% - 36px)); }
-.message--assistant { gap: 10px; }
 .assistant-content { padding: 14px 20px 18px; border-radius: 22px; background: var(--glass); }
-.assistant-content > header { min-height: 30px; margin-bottom: 6px; }
 .user-bubble { border-radius: 22px; background: color-mix(in srgb, var(--accent-soft) 92%, var(--surface-1)); padding: 14px 18px; }
 .user-bubble p, .markdown-body { font-size: 16px; line-height: 1.75; }
-.assistant-avatar { padding-top: 12px; }
 .home-page { width: min(1180px, 100%); margin-inline: auto; padding: clamp(24px, 4vw, 52px); }
 .home-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
 .home-eyebrow { display: flex; gap: 10px; color: var(--muted-strong); font-size: 12px; text-transform: capitalize; }
@@ -121,7 +118,7 @@
   .home-pinned .home-panel { height: auto; padding: 15px; margin-bottom: 16px; }
 }
 @media (max-width: 1000px) { .home-grid { grid-template-columns: 1fr; } .home-header { flex-direction: column; align-items: flex-start; } }
-@media (max-width: 779px) { .home-page { padding: 24px 16px 38px; } .home-panel { border-radius: 20px; } .home-dialog-backdrop { padding: 12px; } .home-dialog { padding: 20px; max-height: calc(100dvh - 24px); } .assistant-content { padding: 12px 14px; border-radius: 18px; } .user-bubble { border-radius: 18px; } .message--assistant { gap: 7px; } .assistant-avatar .profile-avatar { width: 28px; height: 28px; font-size: 16px; } .home-toolbar { width: 100%; } }
+@media (max-width: 779px) { .home-page { padding: 24px 16px 38px; } .home-panel { border-radius: 20px; } .home-dialog-backdrop { padding: 12px; } .home-dialog { padding: 20px; max-height: calc(100dvh - 24px); } .assistant-content { padding: 12px 14px; border-radius: 18px; } .user-bubble { border-radius: 18px; } .home-toolbar { width: 100%; } }
 [data-reduce-transparency="true"] { --glass: var(--surface-1); }
 [data-reduce-transparency="true"] .home-panel, [data-reduce-transparency="true"] .top-bar, [data-reduce-transparency="true"] .left-sidebar, [data-reduce-transparency="true"] .home-review-strip { backdrop-filter: none; }
 @media (prefers-reduced-transparency: reduce) { :root { --glass: var(--surface-1); } .home-panel, .top-bar, .left-sidebar, .home-review-strip { backdrop-filter: none; } }

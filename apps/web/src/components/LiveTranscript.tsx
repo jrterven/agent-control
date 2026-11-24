@@ -9,7 +9,7 @@ export function LiveTranscriptRows({ rows, agentName }: { rows: LiveConversation
   const { t } = useTranslation();
   return <div className="live-transcript__rows">
     {rows.map((row, index) => <div key={row.id ?? index} className={`live-transcript__row live-transcript__row--${row.role}`} data-speaker={row.role}>
-      <small>{row.role === "user" ? t("liveVoice.inputCaption") : agentName}</small><p>{row.text}</p>
+      <p><span className="sr-only">{row.role === "user" ? t("liveVoice.inputCaption") : agentName}: </span>{row.text}</p>
     </div>)}
   </div>;
 }
