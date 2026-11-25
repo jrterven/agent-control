@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from hermes_client.compatibility import HERMES_0216_SHA, HERMES_CONNECTOR_REVISIONS
+from hermes_client.compatibility import HERMES_CONNECTOR_REVISIONS, HERMES_PM_REVISIONS
 from .visual_media import profile_home
 
 
@@ -27,7 +27,7 @@ def generate_insight(config, name, context):
     else:
         candidates = [root / environment / "bin/python" for root in (source, home / "hermes-agent")
                       for environment in ("venv", ".venv")]
-        if revision == HERMES_0216_SHA:
+        if revision in HERMES_PM_REVISIONS:
             # Read only PM's committed interpreter; never provision dependencies
             # or run a launcher that can complete a pending upstream update.
             probe = """import json, sys
@@ -57,7 +57,7 @@ print(json.dumps(str(python) if python else None))
     environment["HERMES_HOME"] = str(profile)
     worker = Path(__file__).with_name("insight_worker.py").read_text()
     request = {"source": str(source), "profileHome": str(profile), "context": context,
-               "activateDependencies": revision == HERMES_0216_SHA}
+               "activateDependencies": revision in HERMES_PM_REVISIONS}
     result = subprocess.run([str(python), "-I", "-B", "-c", worker], input=json.dumps(request).encode(),
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, cwd=source, timeout=140)
     if result.returncode or len(result.stdout) > 64000:

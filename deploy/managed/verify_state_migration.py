@@ -1,7 +1,8 @@
-"""Native regression for schema-30 empty/nonempty stores; disposable data only."""
+"""Native regression for the audited Hermes migrations; disposable data only."""
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
@@ -38,10 +39,40 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def verify_0234(root: Path, output: Path) -> dict:
+    python, source = root / "python/bin/python3", root / "hermes"
+    migration.private_directory(output)
+    home = output / "schema-31"
+    original = seed_database(home, nonempty=True)
+    profile_db = seed_database(home / "profiles/lab")
+    for path in (original, profile_db):
+        with closing(sqlite3.connect(path)) as database, database:
+            database.executescript("""
+                UPDATE schema_version SET version=31;
+                INSERT INTO state_meta(key,value) VALUES('message_uid_backfill','1');
+                INSERT INTO sessions(id,source,started_at,parent_session_id,model_config)
+                    VALUES('delegate-session','subagent',1234567891,'fixture-session','{"model":"fixture"}');
+            """)
+    before = [digest(path) for path in (original, profile_db)]
+    records = migration.migrate_directory(home, output / "rehearsal", python, source, revision=migration.HERMES_0234_SHA)
+    assert [digest(path) for path in (original, profile_db)] == before
+    assert [(row["schema"], row["preservedRows"]["messages"]) for row in records] == [(33, 2), (33, 0)]
+    migration.migrate_directory(home, output / "offline", python, source, offline=True, revision=migration.HERMES_0234_SHA)
+    for path in (original, profile_db):
+        assert migration.inspect(path)["schema"] == 33
+        with migration.connect(path) as database:
+            config = database.execute("SELECT model_config FROM sessions WHERE id='delegate-session'").fetchone()[0]
+            assert json.loads(config) == {"model": "fixture", "_delegate_from": "fixture-session"}
+            assert database.execute("SELECT count(*) FROM resumable_subagents").fetchone() == (0,)
+    return {"status": "verified", "schema": 33, "cases": ["profile-and-launch-rehearsal", "offline-replacement"]}
+
+
 def verify(root: Path, output: Path) -> dict:
     stamp = json.loads((root / "hermes/install-stamp.json").read_text())
+    if stamp.get("commit") == migration.HERMES_0234_SHA:
+        return verify_0234(root, output)
     if stamp.get("commit") != migration.HERMES_SHA:
-        raise ValueError("Native fixture requires the audited 0.21.6 build")
+        raise ValueError("Native fixture requires an audited Hermes build")
     python, source = root / "python/bin/python3", root / "hermes"
     migration.private_directory(output)
     results = []

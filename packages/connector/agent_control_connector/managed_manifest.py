@@ -34,8 +34,8 @@ METADATA = {"runtime-manifest.json", "runtime-manifest.json.sig", "runtime-publi
 
 def data_schema_version(manifest: dict) -> int:
     """The audited rollback boundary, not SQLite's independent schema number."""
-    from hermes_client.compatibility import HERMES_0216_SHA
-    expected = 2 if manifest.get("hermesSourceSha") == HERMES_0216_SHA else 1
+    from hermes_client.compatibility import MANAGED_DATA_SCHEMAS
+    expected = MANAGED_DATA_SCHEMAS.get(manifest.get("hermesSourceSha"), 1)
     value = manifest.get("dataSchemaVersion", 1)
     if type(value) is not int or value != expected:
         raise ValueError("El formato de datos del runtime no corresponde a su revisión auditada; requiere una migración del operador.")

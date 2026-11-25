@@ -34,7 +34,7 @@ from .media_install import media_profiles
 from .background_install import background_profiles
 from .chat_modes_install import chat_mode_profiles
 from .background_tasks import retired_profile, snapshot as background_snapshot, unavailable as background_unavailable
-from hermes_client.compatibility import HERMES_0216_SHA, HERMES_CONNECTOR_REVISIONS, profile_contract_supports
+from hermes_client.compatibility import HERMES_0216_SHA, HERMES_0234_SHA, HERMES_CONNECTOR_REVISIONS, profile_contract_supports
 from .profile_transfer import ProfileImportManagementServerRequired, ProfileImportRefused, ProfileTransfers, TRANSFER_OPERATIONS
 from .hermes_media_plugin import queue_directory, validate_policy
 from .visual_media import acknowledge as acknowledge_media, next_publication, profile_home, fetch_image, normalize_image
@@ -507,11 +507,11 @@ class ConnectorRuntime:
                 result = await getattr(provider, operation)(*args, **kwargs)
             if operation == "delete_profile":
                 await self._confirm_profile_deleted(provider, args[0])
-                # A logically deleted 0.21.6 profile may still be settling its
+                # A logically deleted profile may still be settling its
                 # remote identity. Preserve only that neutral warning bit after
                 # proving local absence; never ship upstream details or retry it.
                 result = ({"identity_settlement_pending": True}
-                    if self.config.get("sourceSha") == HERMES_0216_SHA
+                    if self.config.get("sourceSha") in {HERMES_0216_SHA, HERMES_0234_SHA}
                     and isinstance(result, dict) and result.get("identity_settlement_pending") is True else None)
             if operation in {"create_profile", "profile_import_finish"}:
                 name = kwargs["name"] if operation == "create_profile" else result.name

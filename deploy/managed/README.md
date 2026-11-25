@@ -23,11 +23,13 @@ the native Anthropic provider, are exported from the upstream committed
 and precompiled wheels. Missing wheels fail the build; no source-build fallback
 or dependency version substitution is allowed.
 
-Hermes 0.21.6 runs on the pinned portable CPython 3.14.8. Its base dependencies
+Hermes 0.23.4 runs on the pinned portable CPython 3.14.8. Its base dependencies
 no longer include PyYAML, which both Control packages need; the supplemental
 `connector-requirements.lock` takes PyYAML 6.0.3 and its wheel hashes from the
-same upstream lock. The build installs both locks, runs `pip check`, and the
-native smoke verifies every dependency declared by the bundled Control packages.
+same upstream lock. The build checks the installed wheels and uses Hermes'
+lock-aware checker to recognize its declared dependency overrides, including
+Pillow 13 for Browser Harness. The native smoke verifies the dependencies of
+the bundled Control packages.
 
 Hermes deliberately rejects ordinary wheel distribution because it would lose
 source-relative assets. The runtime therefore retains the full audited source,
@@ -146,21 +148,19 @@ Mac browser downloads remain unavailable until their separate Apple signing and
 notarization are implemented and verified. Optional modules never gate the base
 installation and never cause an automatic operating-system package installation.
 
-## Hermes 0.21.6 data migration and recovery
+## Hermes data migration and recovery
 
-The 0.21.6 payload declares `dataSchemaVersion: 2`. This is Agent Control's
-rollback compatibility boundary, not the SQLite version number. Hermes changes
-`state.db` from schema 30 to 31 and its separate FTS layout from 2 to 3, adds
-message identities and changes the FTS source projection. The older executable
-is not certified to write those stores. Update, rollback and interrupted-update
-recovery therefore refuse to cross the boundary before stopping the service.
-Changing the manifest number or bypassing that check is not a migration.
+The 0.23.4 payload declares `dataSchemaVersion: 3`. This value controls Agent
+Control's update and rollback checks. Hermes upgrades `state.db` from SQLite
+schema 31 to 33, adds persistence tables and repairs delegation lineage. It
+keeps the FTS 3 layout. Update, rollback and interrupted-update recovery refuse
+to cross this boundary before stopping the service.
 
-Existing 0.21.2 updaters do not audit the new source revision. The operator must
+Existing 0.21.6 updaters cannot verify the new source revision. The operator must
 stage the immutable release through the signed installer/archive verification
 and execute the **new release's included Python and connector code** for this
 one-time migration. The old updater's rejection must not be bypassed by adding
-an unverified SHA to a local allowlist. Future schema-2 to schema-2 updates use
+an unverified SHA to a local allowlist. Future schema-3 to schema-3 updates use
 the ordinary lifecycle after the operator has completed this transition.
 
 The operator cutover must satisfy all of these steps on each computer:
@@ -187,7 +187,7 @@ The operator cutover must satisfy all of these steps on each computer:
    readiness, profile inventory, chat capability and connector identity. Release
    maintenance only after the canary checks pass. Record the backup and both
    immutable releases for this host. Do not advertise the old release as an
-   executable-only rollback for schema-2 data.
+   executable-only rollback for schema-3 data.
 5. If activation or readiness fails **before maintenance is released**, stop the
    new owned processes and preserve the failed migrated home separately. Restore
    the cold home and matching setup/connector identity as a unit, then start the
@@ -207,7 +207,7 @@ Hermes commit before importing its code and never writes to the input databases:
 python deploy/managed/migrate_hermes_state.py rehearse \
   --input /PRIVATE_COLD_DATABASE_SNAPSHOT \
   --output /NEW_PRIVATE_REHEARSAL_DIRECTORY \
-  --source /CLEAN_HERMES_818C13BE_CHECKOUT \
+  --source /CLEAN_HERMES_8FC03744_CHECKOUT \
   --python /VERIFIED_RUNTIME/python/bin/python3
 ```
 
@@ -216,18 +216,21 @@ For the stopped operator cutover, `offline --input /OWNED_HERMES_HOME --output
 --offline-confirmed` verifies the runtime's full signed inventory before opening
 the databases. It snapshots **all** state databases before any migration, runs
 without real profile configuration or credentials, preserves the journal mode,
-and verifies every original column and row afterward. It excludes derived FTS
-tables and the schema/state metadata that the migration intentionally updates.
+and compares every original column and row afterward. The comparator permits
+the audited `_delegate_from` changes for delegation and reset rows. It excludes
+derived FTS tables and the schema/state metadata. For 0.23.4 the utility verifies
+every migrated copy before writing any of them back to the stopped installation.
 This database utility supplements the required complete cold home/identity
 backup; it does not replace it or manage services, cron or maintenance admission.
 For an external Git installation, the operator may instead supply `--source`
-with a separate strictly clean 818c13be checkout and `--python` with the verified
+with a separate strictly clean 8fc03744 checkout and `--python` with the verified
 staged interpreter. Do not use the working installation's source directory if it
 contains a venv, install stamp or any other untracked/ignored file: source
 verification deliberately refuses those. No migration mode fetches source or
 installs dependencies at runtime.
 
-An upstream 0.21.6 defect can commit the empty external-FTS migration and then
+For the earlier schema 30 to 31 transition, the utility also accepts the exact
+0.21.6 runtime. An upstream defect can commit the empty external-FTS migration and then
 raise `no such savepoint: fts_align_empty`. The utility permits exactly one
 second open only for audited source 818c13be, an empty schema-30 database with
 the old external `messages` source and FTS marker absent/1/2, the exact exception
@@ -235,6 +238,5 @@ and migration stack, and a resulting schema-31/FTS-3 aligned source. Integrity,
 foreign keys and all original rows must already pass before that second open.
 Any other failure stops migration and leaves private before-images and logs for
 operator recovery. Do not erase those logs or restart the old executable against
-the failed migrated data. `verify_state_migration.py` certifies all three empty
-states, nonempty history and rejection of unknown errors on every native CI
-platform without modifying the audited Hermes source.
+the failed migrated data. `verify_state_migration.py` exercises rehearsal and
+offline activation on each native CI platform using synthetic profile data.

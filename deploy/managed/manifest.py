@@ -82,9 +82,7 @@ def create_manifest(root: Path, revision: str, platform: str, *, extras: dict | 
         if (root / "extras-catalog.json").stat().st_size > 16_384:
             raise ValueError("Managed extra catalog exceeds size limit")
         extras = json.loads((root / "extras-catalog.json").read_text())
-    # Hermes 0.21.6 changes state.db 30→31 and the FTS layout 2→3. Restoring
-    # only the old executable is not an audited rollback of these writes.
-    value = {"schemaVersion": 1, "dataSchemaVersion": 2, "release": revision, "platform": platform,
+    value = {"schemaVersion": 1, "dataSchemaVersion": PINS["dataSchemaVersion"], "release": revision, "platform": platform,
              "hermesSourceSha": PINS["hermesSourceSha"], "hermesVersion": PINS["hermesVersion"],
              "pythonVersion": PINS["pythonVersion"], "entrypoint": "bin/agent-control-setup", "files": files}
     if extras is not None:

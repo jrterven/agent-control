@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import runpy
 from pathlib import Path
 import platform
 import shutil
@@ -26,6 +27,23 @@ def invoke(*args, **kwargs):
 def digest(path: Path) -> str:
     with path.open("rb") as source:
         return hashlib.file_digest(source, "sha256").hexdigest()
+
+def check_dependencies(root: Path, env: dict) -> None:
+    source = root / "hermes"
+    result = subprocess.run(
+        [sys.executable, "-m", "uv", "--no-color", "--no-cache", "pip", "check",
+         "--python", str(root / "python/bin/python3")],
+        env=env, cwd=source, capture_output=True, text=True, timeout=60,
+    )
+    if result.returncode == 0:
+        return
+    # Wheel metadata retains the original requirement even when the reviewed
+    # Hermes lock overrides it (currently browser-harness and patched Pillow).
+    checker = runpy.run_path(str(source / "pm/pip_check.py"))["unexpected_incompatibilities"]
+    report = result.stdout + result.stderr
+    if result.returncode != 1 or checker(report, source / "uv.lock") != []:
+        raise ValueError("Managed runtime dependency check failed:\n" + report)
+    print("Verified locked Hermes dependency overrides")
 
 
 def fetch_python(target: str, cache: Path) -> Path:
@@ -186,7 +204,7 @@ def build(output: Path, revision: str, target: str, cache: Path, hermes_source: 
         # No fallback can compile code or silently choose different versions.
         invoke(root / "python/bin/python3", "-B", "-m", "pip", "install", "--index-url", "https://pypi.org/simple", "--require-hashes", "--only-binary=:all:",
                "--no-compile", "--no-deps", "-r", requirements, "-r", connector_requirements, env=env)
-        invoke(root / "python/bin/python3", "-B", "-m", "pip", "check", env=env)
+        check_dependencies(root, env)
         stamp_runtime(root, target, env)
         # Hermes rejects wheels because they omit source-relative assets. Keep
         # its entire source tree and generate only standard distribution metadata.

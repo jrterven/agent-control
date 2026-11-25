@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import wraps
 import json
 import inspect
@@ -29,7 +29,7 @@ MODES = ("memory_read_write", "memory_read_only", "temporary")
 LEASE_SECONDS = 300
 POLICY_VERSION = 1
 PLUGIN_NAME = "agent-control-chat-modes"
-PLUGIN_VERSION = "1.1.1"
+PLUGIN_VERSION = "1.2.0"
 _current = ContextVar("agent_control_chat_policy", default=None)
 
 
@@ -247,32 +247,43 @@ class NativePolicyRuntime:
             raise RuntimeError("TEMPORARY_CHAT_ENDED")
         # Compression continuations retain their native ids and parent linkage.
         # Consult ancestry only for unrecognized ids; never infer a downgrade.
-        if ancestry and identity and hasattr(self, "original_acquire"):
-            db = self.original_acquire()
-            try:
+        if ancestry and identity:
+            with self.ancestry_reader() as parent_of:
                 parent = identity
                 for _ in range(100):
-                    row = db.get_session(parent)
-                    parent = (row or {}).get("parent_session_id")
+                    parent = parent_of(parent)
                     if not parent or parent == identity:
                         break
                     if parent in self.policies or parent.startswith(("ac_ro_", "ac_tmp_")):
                         value = self.policy(parent)
                         self.policies[identity] = value
                         return value
-            finally:
-                self.original_release(db)
         return None
+
+    @contextmanager
+    def ancestry_reader(self):
+        if not hasattr(self, "original_acquire"):
+            yield lambda identity: None
+            return
+        db = self.original_acquire()
+        try:
+            yield lambda identity: (db.get_session(identity) or {}).get("parent_session_id")
+        finally:
+            self.original_release(db)
 
     def active_policy(self):
         current = current_policy()
         if current is not None:
             return current
-        from gateway.session_context import get_session_env
         for key in ("HERMES_SESSION_ID", "HERMES_SESSION_KEY"):
-            if value := self.policy(get_session_env(key, "")):
+            if value := self.policy(self.session_identity(key)):
                 return value
         return None
+
+    @staticmethod
+    def session_identity(key):
+        from gateway.session_context import get_session_env
+        return get_session_env(key, "")
 
     def available_modes(self, cfg):
         # A separate compute process does not share this adapter's policy or RAM
@@ -306,7 +317,8 @@ class NativePolicyRuntime:
         def initialize(agent, *args, **kwargs):
             bound = signature.bind(agent, *args, **kwargs)
             arguments = bound.arguments
-            policy = runtime.policy(arguments.get("session_id"), ancestry=True) or runtime.policy(arguments.get("parent_session_id")) or runtime.active_policy()
+            policy = (runtime.policy(arguments.get("session_id")) or runtime.policy(arguments.get("parent_session_id"))
+                      or runtime.active_policy() or runtime.policy(arguments.get("session_id"), ancestry=True))
             if policy:
                 policy.require_active()
                 from hermes_cli.config import load_config
@@ -316,6 +328,8 @@ class NativePolicyRuntime:
                 if policy.mode == "temporary":
                     arguments.update(session_db=runtime.databases[policy.session_id], save_trajectories=False,
                                      verbose_logging=False, checkpoints_enabled=False)
+                    if "persistence" in signature.parameters:
+                        arguments["persistence"] = arguments["session_db"]
             with policy_scope(policy):
                 original_init(*bound.args, **bound.kwargs)
             if policy:
@@ -448,8 +462,7 @@ class NativePolicyRuntime:
                 return server._err(rid, 4095, "TEMPORARY_CHAT_ENDED")
             stamp = lambda value: datetime.fromtimestamp(value, timezone.utc).isoformat()
             with policy_scope(policy), contextlib.closing(self.storage[policy.session_id].connect()) as db:
-                from tools.async_delegation import _initialize_schema
-                _initialize_schema(db)
+                self.prepare_delegation_store(db)
                 rows = db.execute("SELECT delegation_id,state,delivery_state,dispatched_at,updated_at,completed_at FROM async_delegations").fetchall()
             tasks = []
             for identifier, state, delivery, started, updated, ended in rows:
@@ -550,17 +563,20 @@ class NativePolicyRuntime:
                 return self.media_storage[policy.session_id].connect()
         return None
 
-    def install_storage(self):
+    def install_persistence(self):
         import hermes_state_registry as registry
-        runtime = self
         acquire = registry.acquire
         self.original_acquire = acquire
         self.original_release = registry.release_or_close
 
         @wraps(acquire)
         def scoped_acquire(*args, **kwargs):
-            return runtime.private_database() or acquire(*args, **kwargs)
+            return self.private_database() or acquire(*args, **kwargs)
         registry.acquire = scoped_acquire
+
+    def install_storage(self):
+        self.install_persistence()
+        runtime = self
         # Native notification/recovery and lifecycle threads bind a profile before
         # reading their stores. Bind the conversation policy at that same boundary
         # so 0.21.6 orphan sweeps cannot route a temporary task to durable state.db.
@@ -668,6 +684,10 @@ class NativePolicyRuntime:
             return mutate(store, *args, **kwargs)
         MemoryStore._mutate = guarded_mutate
 
+        self.install_lineage()
+
+    def install_lineage(self):
+        runtime = self
         from hermes_state import SessionDB
         publish_child = SessionDB.publish_compression_child
         @wraps(publish_child)
@@ -679,19 +699,26 @@ class NativePolicyRuntime:
                 return publish_child(db, *args, **kwargs)
         SessionDB.publish_compression_child = publish
 
-    def install_background(self):
-        from tools import async_delegation as tasks
+    def prepare_delegation_store(self, db):
+        from tools.async_delegation import _initialize_schema
+        _initialize_schema(db)
+
+    def install_delegation_storage(self, tasks):
         connect = tasks._connect
-        runtime = self
         def scoped_connect():
-            policy = runtime.active_policy()
+            policy = self.active_policy()
             if policy and policy.mode == "temporary":
-                connection = runtime.storage[policy.session_id].connect()
+                connection = self.storage[policy.session_id].connect()
                 connection.row_factory = sqlite3.Row
-                tasks._initialize_schema(connection)
+                self.prepare_delegation_store(connection)
                 return connection
             return connect()
         tasks._connect = scoped_connect
+
+    def install_background(self):
+        from tools import async_delegation as tasks
+        self.install_delegation_storage(tasks)
+        runtime = self
         # Delivery and monitor threads do not always inherit the dispatch context.
         # Bind by delegation identity before a late completion can reach storage.
         for name in ("_persist_dispatch", "_persist_completion", "record_unit_child", "_finalize",
@@ -769,6 +796,183 @@ class NativePolicyRuntime:
                         self.close_policy(policy)
 
 
+class PersistencePolicyRuntime(NativePolicyRuntime):
+    """Use Hermes 0.23.4's repositories on a lease-owned SQLite holder."""
+
+    def install_rpc(self):
+        server = self.server
+        history = server._methods["session.history"]
+
+        @wraps(history)
+        def active_history(rid, params):
+            policy = current_policy()
+            if policy is None or policy.mode != "temporary":
+                return history(rid, params)
+            session = server._sessions.get(params.get("session_id"))
+            if session is None or self.policy(session.get("session_key")) is not policy:
+                return server._err(rid, 4095, "TEMPORARY_CHAT_ENDED")
+            # Hermes' persisted projection can contain the submitted user row
+            # alone because the agent has its durable flushes disabled.
+            with session["history_lock"]:
+                messages = list(session.get("history", []))
+            return server._ok(rid, {"count": len(messages), "messages":
+                server._history_to_messages(messages, profile_home=session.get("profile_home"))})
+        server._methods["session.history"] = active_history
+        super().install_rpc()
+
+    def allocate_storage(self, policy):
+        from persistence_assembly import Persistence, profile_scope
+        from persistence.sqlite import SQLiteBackend
+        from persistence.sqlite._holder import StoreHolder
+        from persistence.sqlite._schema import _init_schema
+
+        storage = VolatileSqlite(policy)
+        scope = profile_scope()
+
+        class VolatileHolder(StoreHolder):
+            def _open_writer(holder):
+                holder._conn = storage.connect()
+                holder._conn.isolation_level = None
+                holder._conn.row_factory = sqlite3.Row
+                _init_schema(holder)
+
+            def _ensure_db_file_generation(holder):
+                policy.require_active()
+
+            def _raise_if_db_replaced(holder):
+                policy.require_active()
+
+            def _halt_if_db_generation_changed(holder):
+                policy.require_active()
+
+            def _reopen_after_close_locked(holder, context="write"):
+                raise RuntimeError("TEMPORARY_CHAT_ENDED")
+
+        holder = VolatileHolder(Path(tempfile.gettempdir()) / policy.session_id / "state.db")
+        backend = SQLiteBackend.lending(scope.hermes_home_key, holder)
+        backend.capabilities = replace(backend.capabilities, cross_process=False, reopen_durability=False, physical_admin=False)
+
+        def bind():
+            policy.require_active()
+            return backend.open(scope)
+
+        persistence = Persistence(scope, read_only=False, bind=bind, release=lambda: None)
+        policy.cleanup[:0] = [backend.close, holder.close, persistence.close]
+        self.storage[policy.session_id] = storage
+        self.databases[policy.session_id] = persistence
+
+    def install_persistence(self):
+        import persistence_assembly as assembly
+        from gateway import session_context
+
+        open_store = assembly.open_persistence
+        self.original_reader = open_reader = assembly.open_persistence_reader
+        store_exists = assembly.store_exists
+        store_location = assembly.store_location
+        publish_session_id = session_context.set_current_session_id
+
+        @wraps(publish_session_id)
+        def scoped_session_id(identifier):
+            policy = self.policy(identifier) or current_policy()
+            if policy and policy.mode == "temporary":
+                session_context._SESSION_ID.set(identifier)
+            else:
+                publish_session_id(identifier)
+
+        def private_handle(scope, *, read_only=False):
+            root = self.private_database()
+            if root is None:
+                return None
+            if scope.hermes_home_key != root.scope.hermes_home_key:
+                raise RuntimeError("CHAT_ROUTE_MISMATCH")
+            # A borrow can close independently. Only lease teardown closes the backend.
+            return assembly.Persistence(root.scope, read_only=read_only, bind=root._bound_store, release=lambda: None)
+
+        @wraps(open_store)
+        def scoped_store(scope, *, eager=False):
+            handle = private_handle(scope)
+            if handle is None:
+                return open_store(scope, eager=eager)
+            if eager:
+                handle.ready()
+            return handle
+
+        @contextmanager
+        def scoped_reader(target, **kwargs):
+            if self.private_database() is None:
+                with open_reader(target, **kwargs) as db:
+                    yield db
+                return
+            scope = (assembly.profile_scope(home=target.parent if target.name == "state.db" else target)
+                     if isinstance(target, Path) else assembly.profile_scope(target))
+            with private_handle(scope, read_only=True) as db:
+                yield db
+
+        def scoped_exists(scope):
+            root = self.private_database()
+            return scope.hermes_home_key == root.scope.hermes_home_key if root is not None else store_exists(scope)
+
+        assembly.open_persistence = scoped_store
+        assembly.open_persistence_reader = scoped_reader
+        assembly.store_exists = scoped_exists
+        assembly.store_location = lambda scope: None if self.private_database() is not None else store_location(scope)
+        session_context.set_current_session_id = scoped_session_id
+
+    @staticmethod
+    def session_identity(key):
+        from gateway.session_context import bound_session_env
+        return bound_session_env(key)
+
+    @contextmanager
+    def ancestry_reader(self):
+        from persistence_assembly import profile_scope
+
+        if self.private_database() is not None:
+            yield lambda identity: None
+            return
+        home = profile_scope().profile_dir
+        if not (home / "state.db").is_file():
+            yield lambda identity: None
+            return
+        with self.original_reader(home) as db:
+            def parent_of(identity):
+                row = db.sessions.get(identity)
+                return row.parent_session_id if row else None
+            yield parent_of
+
+    def install_lineage(self):
+        from persistence.sqlite.conversation.lineage import SQLiteLineageRepository
+        publish_child = SQLiteLineageRepository.publish_compression_child
+
+        @wraps(publish_child)
+        def publish(repository, parent_session_id, child, *args, **kwargs):
+            policy = self.policy(parent_session_id) or self.active_policy()
+            with policy_scope(policy):
+                result = publish_child(repository, parent_session_id, child, *args, **kwargs)
+                if policy:
+                    self.policies[child.session_id] = policy
+                return result
+        SQLiteLineageRepository.publish_compression_child = publish
+
+    def prepare_delegation_store(self, db):
+        # The native state schema already creates async_delegations.
+        pass
+
+    def install_delegation_storage(self, tasks):
+        from tools import delegate_tool_resumable
+        target_for = delegate_tool_resumable._db_path_for
+
+        @wraps(target_for)
+        def resumable_target(parent_agent=None):
+            # Resume and worktree pinning deliberately outlive a native run.
+            # The live parent and its async delivery remain available in RAM.
+            policy = getattr(parent_agent, "_agent_control_chat_policy", None) or self.active_policy()
+            if policy and policy.mode == "temporary":
+                return None
+            return target_for(parent_agent)
+        delegate_tool_resumable._db_path_for = resumable_target
+
+
 def register(ctx):
     """Load only in the audited Serve process, before accepting RPC traffic."""
     import hashlib
@@ -805,7 +1009,8 @@ def register(ctx):
             raise ValueError("Unsupported chat policy runtime")
     runtime = getattr(server, "_agent_control_chat_policy", None)
     if runtime is None:
-        runtime = NativePolicyRuntime(server)
+        adapter = PersistencePolicyRuntime if hashes is AUDITED_0234_HASHES else NativePolicyRuntime
+        runtime = adapter(server)
         runtime.install()
         server._agent_control_chat_policy = runtime
         sys.modules["agent_control_chat_policy"] = sys.modules[__name__]
@@ -877,10 +1082,53 @@ AUDITED_0216_HASHES = {'tui_gateway/server.py': '56a7b9ff796add6788f1632ca80d611
  'tools/process_registry.py': '4dacd3f6753d7b81e4ab338f7612624ec1f11c074cc969db49024a967a3b625e',
  'tools/process_registry_notifications.py': 'fa7219e7df360e95170cf1be6e132beb61b61f94a32da50d79a2bcf51e672799'}
 
+
+AUDITED_0234_HASHES = {'tui_gateway/server.py': 'c2fdb2471d0428339928bb2a936ce01cab262fb6d5700e1ef4477f402a0b875a',
+ 'hermes_cli/plugins.py': 'd83cc89fbdfca460dba25960f52d2498488ee7e34d32b7470a63e7986ac114e6',
+ 'hermes_cli/plugins_loader.py': '3400cc514c8a0f0749e02b309020cc48794eae530adc26c0ad3f2381ba6935fc',
+ 'tui_gateway/methods_session.py': 'e68c42d49fd6bb75703e96415afc00acab1b90fe25e3c571ed03fcfb73217f03',
+ 'tui_gateway/session_workdir.py': '2c1e4bd3ef411aac19373fbeb3e00e9587342a14fe473710f99cb007d7154d30',
+ 'tui_gateway/session_lifecycle.py': '8f8f6008db9927efaf95b0f9d378618f9deb7305e57b3fff50aa5c925d4ff303',
+ 'tui_gateway/session_notifications.py': '9e4b2d1e8986af881fce4a6ff368ee14f49a5ce8e461942c407972cd3aa53e5c',
+ 'hermes_state.py': '55373fae961fd8b1d928d0e6dfe0fd5d9ad5588ae3e154b432f9ab9440c003e9',
+ 'run_agent.py': '21dfe95ddcd021d0ac5fc2b0306588558b441f91d2eb926aa908bf5af4b8d722',
+ 'agent/agent_init.py': '916d8e0c8d774e456f9cb2c3f3626893b1189c4e062041384af50a79aad5d813',
+ 'agent/session_persistence.py': '18440f06503b35f9f03752b1a4c5bad8536849ca1d2e24c3669260fb2f585ff7',
+ 'agent/conversation_compression.py': '7cbcf8345e3b51f27f8641dbaca02d44fae6c9d81f32c9f965bbdf8be11cf6e9',
+ 'tools/async_delegation.py': '5ae95dc34a4f264523450b3f0ad67fb2d827cf22d2d2c4f3bf418a798c044e51',
+ 'tools/memory_tool_store.py': '502c85f10f6d12f2f92e511670882602988c7f43476ffd74e376c0daa37a3032',
+ 'hermes_cli/main.py': 'a48175e492ca870ca49b997aec017970a131381fbfb43c08297d7984e4ca8058',
+ 'tui_gateway/prompt_turn.py': '55578951277e71db35e8743dd1020945751da64dc532daee49acac70b736c997',
+ 'tui_gateway/prompt_attachments.py': 'c521ffb4b0bd79e05515f00c07f70299de8aede4900e4ed4f4da6a0d87ba04ef',
+ 'tui_gateway/methods_prompt.py': '3e700b418a6e22f5036f936aa99989f251ab021060aaede2ba47f39df21d335c',
+ 'tui_gateway/session_compression.py': 'a64a89ebd56f742065912b003d5ea2ad6c3205b58a8c8c324ed33c4a672e1aa5',
+ 'tui_gateway/compute_host_bridge.py': '58ef6ed7f72ce731f2bfe55b7a52f41986ba694551cb38fdebb1d5b10377a514',
+ 'tools/thread_context.py': '308fd053f0b85f050492083cef40df942b23f0781a733da54e06cc981fc794d0',
+ 'tools/debug_helpers.py': '24d7ea3fc0162160d503e52f6602b2598fcfdd70a7a52fdfccfdb397cf02eb80',
+ 'tui_gateway/model_switch.py': 'cf12e9e5b00b76507b369495c993eb323f6d845b0bca088ca36612a5a737e300',
+ 'tools/process_registry.py': 'b0856e484a763a6f12f6026d63bda9fb6a41d8641b28d5665d763fff8a2228e2',
+ 'tools/process_registry_notifications.py': 'b3095d22b5c9914dd1d91adbfff7b97ec557bfb620bc861f6c40e0485a4fd774',
+ 'agent/agent_init_session.py': '610a95d281838ceb628148ca1de890c1f84a60ce69c5f36ff77ac2430548d358',
+ 'persistence_assembly.py': 'c8e2502953355e25f0aa8b51da02d609c60f436e8aefd204f2b343849fc7d1c1',
+ 'persistence/sqlite/_backend.py': 'cfd0dcad6a30703992f73f8e783fdf618f5d5df22c1ec777a2e651176fcebfb1',
+ 'persistence/sqlite/_holder.py': '1f6db09c4fffdc5fc04069acb480a726140941a7c02bdce878b4e8e2a0463b7d',
+ 'persistence/sqlite/_schema.py': '0d6425e4d260895c66b7e505cc938a690ab9eff2e106c87194257b316babec6c',
+ 'persistence/sqlite/conversation/lineage.py': '8615c3c4d9c6810bf13328efa4ed35a4945df0f3a10b91f01aed83973366ed1f',
+ 'persistence/sqlite/conversation/_store/compression.py': '2b1ed7758589443892ba59b490c126497a025deca3a08034be65240e43ce202d',
+ 'persistence/sqlite/authority/coordination.py': '9a8022eccf321603f44328201c862cb2ab57f7f712b0a9d0daf6dea425fe70c2',
+ 'persistence/sqlite/authority/subagents.py': 'ccdb51551f53deced469ff46ee97e5bb4d4988c87ffd3ffa75fb293e448643ca',
+ 'tui_gateway/store_handles.py': '42c29b17d90a7b9a2564288cd68d80ff9ca8cdef156b76054d9700715058cd11',
+ 'tools/delegate_tool.py': '8a11dcfbf92af95cdd6df259913c6607c7670ad04d8e33b332c1fc0785bd8c0e',
+ 'tools/delegate_tool_resumable.py': 'e1d46e800e5859d6dc51fa8a3d6ca2464733bebfb034e867698f4a020f31bebe',
+ 'tools/delegate_tool_auto_resume.py': 'aa020431ef3301907bcef910b14379b9b4ad5cc37e5aaacb8778df9f6ec83524',
+ 'gateway/session_context.py': '58e15a377a3b639ce85b9588f3e74b55888d9f36d5473a231479f33a6c03b6b2',
+ 'persistence/sqlite/_schema_ddl.py': 'ec75667daac0e0b962f67bc43b3a25810c6bb4eda9c7714cca86555c0b050ab3'}
+
+
 def audited_source_hashes(root):
     import hashlib
     digest = hashlib.sha256((root / "tui_gateway/server.py").read_bytes()).hexdigest()
-    for hashes in (AUDITED_HASHES, AUDITED_0216_HASHES):
+    for hashes in (AUDITED_HASHES, AUDITED_0216_HASHES, AUDITED_0234_HASHES):
         if hashes["tui_gateway/server.py"] == digest:
             return hashes
     raise ValueError("Unsupported chat policy runtime")

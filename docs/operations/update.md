@@ -65,30 +65,32 @@ both temporary archives.
 
 No Control startup, deploy or health check may execute `hermes update`.
 
-For the separately authorized October rollout, pin Hermes `0.21.6` to commit
-`818c13be1dc4fd28987e1e881a9408224afd4535` and Python `3.14.8`.
+Pin Hermes `0.23.4` to commit `8fc0374447313e276f6b9a2764bfc750190c966a`
+and Python `3.14.8` for this rollout.
 Stage its own source directory and dependency environment from the committed
-upstream lock, preserving installed optional integrations, then run `pip check`.
+upstream lock. Preserve installed integrations and verify the installed packages
+against the lock, including overrides declared by Hermes.
 The canonical Hermes path may point to the selected release; retain the former
 checkout and virtualenv together for rollback. Restart every Hermes process
 using the upgraded checkout, including `serve` and messaging gateways, only
 after a fresh idle check. Never leave a running process with replaced sources.
 
-Hermes state schema 30 becomes 31, and its FTS storage contract changes. Before activation, use SQLite's backup API
+Hermes state schema 31 becomes 33. Before activation, use SQLite's backup API
 to snapshot every profile's `state.db`, migrate copies with the staged Hermes
 runtime and compare session/message rows plus integrity. After draining and
 stopping Hermes, retain a private complete data backup separately from the old
 code. Include `shared-state.db` when present. Control's own backup script does
-not cover Hermes data. A rollback to 0.21.2 must restore its data backup unless
-backward schema compatibility has been independently demonstrated.
+not cover Hermes data. A rollback to 0.21.6 must restore its data backup before
+the original runtime opens the store.
 
 Update the environment-managed `HERMES_CONTROL_HERMES_SOURCE_SHA` and each
 registered gateway's encrypted trust anchor only when its installed revision is
 verified. Refresh profile capabilities after Control reconnects. Keep mixed
-profile transfers disabled throughout the transition and keep memory disabled.
+profile transfers disabled throughout the transition. Validate each profile's
+attested chat modes before releasing maintenance.
 
-The managed runtime marks this boundary as `dataSchemaVersion: 2`; the previous
-channel used `1`. Ordinary automatic/interactive runtime updates and recovery
+The managed runtime marks this boundary as `dataSchemaVersion: 3`. The previous
+channel used `2`. Ordinary automatic/interactive runtime updates and recovery
 must reject crossing that boundary. Use the reviewed operator migration in
 `deploy/managed/README.md` with the new signed runtime, a cold data/identity
 backup and a canary under maintenance. Never bypass the inventory or relabel an

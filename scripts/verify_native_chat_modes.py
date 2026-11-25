@@ -38,6 +38,7 @@ def main():
                 hooks[name] = handler
         policy_module.register(Context())
         runtime = policy_module.active_runtime
+        assembled_store = isinstance(runtime, policy_module.PersistencePolicyRuntime)
         # Agent construction is tested explicitly below; disable only the async
         # eager build to keep the RPC test deterministic and entirely offline.
         server._schedule_agent_build = lambda sid: None
@@ -68,12 +69,31 @@ def main():
                     debug.save()
                     assert debug._calls == []
                     db = runtime.databases[key]
-                    db.create_session(session_id=key, source="cli")
-                    db.append_message(key, "user", "private-transcript-canary")
-                    assert db.get_messages(key)[0]["content"] == "private-transcript-canary"
-                    assert db._conn.execute("PRAGMA database_list").fetchone()[2] == ""
                     from tools import async_delegation
-                    with contextlib.closing(async_delegation._connect()) as jobs:
+                    if assembled_store:
+                        from persistence.conversation.lineage import CompressionChild
+                        from persistence.conversation.messages import NewMessage
+                        from persistence.conversation.sessions import NewSession
+                        db.sessions.create(NewSession(key, "cli"))
+                        db.messages.append(key, NewMessage("user", "private-transcript-canary"))
+                        assert db.messages.read_transcript(key)[0].content == "private-transcript-canary"
+                        with async_delegation._ledger() as ledger:
+                            assert ledger.serves_same_store(db)
+                            assert not ledger.capabilities.reopen_durability
+                        from persistence_assembly import open_persistence, profile_scope
+                        try:
+                            open_persistence(profile_scope(home=home / "foreign"), eager=True)
+                        except RuntimeError as error:
+                            assert str(error) == "CHAT_ROUTE_MISMATCH"
+                        else:
+                            raise AssertionError("Temporary chat opened a foreign profile's store")
+                    else:
+                        db.create_session(session_id=key, source="cli")
+                        db.append_message(key, "user", "private-transcript-canary")
+                        assert db.get_messages(key)[0]["content"] == "private-transcript-canary"
+                        assert db._conn.execute("PRAGMA database_list").fetchone()[2] == ""
+                    private_jobs = runtime.storage[key].connect if assembled_store else async_delegation._connect
+                    with contextlib.closing(private_jobs()) as jobs:
                         assert jobs.execute("PRAGMA database_list").fetchone()[2] == ""
                     record = server._sessions[sid]
                     # Native Linux boot redirects tempfile into the retained
@@ -111,11 +131,16 @@ def main():
                     # Native compression publication must retain its child in RAM
                     # and attach the same restrictions before any follow-up turn.
                     child = "private-compression-child"
-                    db.publish_compression_child(parent_session_id=key, child_session_id=child,
-                        source="cli", messages=[{"role": "user", "content": "private-compression-canary"}],
-                        require_compression_lease=False)
+                    if assembled_store:
+                        db.lineage.publish_compression_child(key, CompressionChild(child, "cli"),
+                            [NewMessage("user", "private-compression-canary")], require_compression_lease=False)
+                        assert db.messages.read_transcript(child)[0].content == "private-compression-canary"
+                    else:
+                        db.publish_compression_child(parent_session_id=key, child_session_id=child,
+                            source="cli", messages=[{"role": "user", "content": "private-compression-canary"}],
+                            require_compression_lease=False)
+                        assert db.get_messages(child)[0]["content"] == "private-compression-canary"
                     assert runtime.policy(child) is policy
-                    assert db.get_messages(child)[0]["content"] == "private-compression-canary"
                     record["agent"].session_id = child
                     server._sync_session_key_after_compress(sid, record)
                     assert record["session_key"] == key
@@ -124,8 +149,12 @@ def main():
                 # entry must bind it from the session before recovery claims open a DB.
                 def deliver_from_native_scope():
                     with server._session_profile_runtime_scope(record):
-                        with contextlib.closing(async_delegation._connect()) as jobs:
-                            assert jobs.execute("PRAGMA database_list").fetchone()[2] == ""
+                        if assembled_store:
+                            with async_delegation._ledger_reader() as ledger:
+                                assert ledger.serves_same_store(db)
+                        else:
+                            with contextlib.closing(async_delegation._connect()) as jobs:
+                                assert jobs.execute("PRAGMA database_list").fetchone()[2] == ""
                         event = {"type": "async_delegation", "delegation_id": delegation_id,
                                  "parent_session_id": key, "session_key": key}
                         claim = async_delegation.claim_event_delivery(event, "isolated-smoke")

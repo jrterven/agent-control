@@ -74,8 +74,9 @@ No live provider credentials are included in repository tests.
 ## Hermes compatibility and deployment
 
 Supported native baselines: Hermes **0.21.2** at
-`939e45c91d751fadd94dcd1b873ac3cb44846213` and **0.21.6** at
-`818c13be1dc4fd28987e1e881a9408224afd4535`. No Hermes source changes are required.
+`939e45c91d751fadd94dcd1b873ac3cb44846213`, **0.21.6** at
+`818c13be1dc4fd28987e1e881a9408224afd4535` and **0.23.4** at
+`8fc0374447313e276f6b9a2764bfc750190c966a`.
 Agent Control creates one `agent_control_mail_<uuid>` MCP entry per authorized
 profile through native create/list/test/delete APIs. Bearer tokens use Hermes's
 native profile `.env` indirection; provider credentials stay in Agent Control.

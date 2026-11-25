@@ -9,10 +9,13 @@ from dataclasses import dataclass
 
 HERMES_0212_SHA = "939e45c91d751fadd94dcd1b873ac3cb44846213"
 HERMES_0216_SHA = "818c13be1dc4fd28987e1e881a9408224afd4535"
+HERMES_0234_SHA = "8fc0374447313e276f6b9a2764bfc750190c966a"
 HERMES_0206_SHA = "4209d371aa1bb8840ce8447555bdd863a1a96c38"
-HERMES_CONNECTOR_REVISIONS = frozenset({HERMES_0212_SHA, HERMES_0216_SHA})
+HERMES_CONNECTOR_REVISIONS = frozenset({HERMES_0212_SHA, HERMES_0216_SHA, HERMES_0234_SHA})
 BACKGROUND_TURN_REVISIONS = HERMES_CONNECTOR_REVISIONS
-SERVER_REQUEST_REVISIONS = frozenset({HERMES_0216_SHA})
+SERVER_REQUEST_REVISIONS = frozenset({HERMES_0216_SHA, HERMES_0234_SHA})
+HERMES_PM_REVISIONS = frozenset({HERMES_0216_SHA, HERMES_0234_SHA})
+MANAGED_DATA_SCHEMAS = {HERMES_0216_SHA: 2, HERMES_0234_SHA: 3}
 _SESSION_METHODS = frozenset({
     "session.create", "session.resume", "session.status", "session.history",
     "prompt.submit", "session.interrupt", "approval.respond", "clarify.respond",
@@ -53,6 +56,10 @@ CONTRACTS = {
         "0.21.6", _PROFILE_ARCHIVES | {"profiles.transfer"}, atomic_paused_cron=True,
         server_requests=True, native_background_turns=True, default_management_server=True,
     ),
+    HERMES_0234_SHA: HermesContract(
+        "0.23.4", _PROFILE_ARCHIVES | {"profiles.transfer"}, atomic_paused_cron=True,
+        server_requests=True, native_background_turns=True, default_management_server=True,
+    ),
 }
 AUDITED_REVISIONS = {
     sha: (contract.version, _SESSION_METHODS, _CRON_METHODS)
@@ -64,11 +71,12 @@ PROFILE_MANAGEMENT_METHODS = {
 PROFILE_TRANSFER_REVISIONS = {
     sha: contract.version for sha, contract in CONTRACTS.items()
 }
-# Do not permit mixed-version transfers: 0.21.2 advances Hermes' SQLite schema.
+# Each pair shares an audited native archive and state schema.
 PROFILE_TRANSFER_PAIRS = frozenset({
     (HERMES_0206_SHA, HERMES_0206_SHA),
     (HERMES_0212_SHA, HERMES_0212_SHA),
     (HERMES_0216_SHA, HERMES_0216_SHA),
+    (HERMES_0234_SHA, HERMES_0234_SHA),
 })
 
 

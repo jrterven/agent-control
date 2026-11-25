@@ -88,6 +88,10 @@ def test_lifecycle_capabilities_fail_closed_for_hermes_0205():
     assert all(unsafe_0205 not in pair for pair in _AUDITED_PROFILE_TRANSFER_PAIRS)
     assert _AUDITED_PROFILE_TRANSFER_PAIRS == {
         (
+            "8fc0374447313e276f6b9a2764bfc750190c966a",
+            "8fc0374447313e276f6b9a2764bfc750190c966a",
+        ),
+        (
             "818c13be1dc4fd28987e1e881a9408224afd4535",
             "818c13be1dc4fd28987e1e881a9408224afd4535",
         ),
