@@ -220,6 +220,8 @@ export type PushNotificationConfig = {
   applicationServerKey: string;
 };
 
+export type AnsweredClarification = { question: string; answer: string | string[] };
+
 export type ChatMessage = {
   id: string;
   sessionId: string;
@@ -234,6 +236,7 @@ export type ChatMessage = {
   media?: MessageMedia[];
   attachments?: MessageAttachment[];
   emailReferences?: EmailReference[];
+  answeredClarifications?: AnsweredClarification[];
   streaming?: boolean;
   /** Local notice for a settled human turn with no visible answer. */
   responseIncomplete?: boolean;

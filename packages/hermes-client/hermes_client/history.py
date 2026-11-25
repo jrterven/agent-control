@@ -7,6 +7,40 @@ from typing import Any
 from .background_tasks import background_task_id
 
 
+def answered_clarifications(message: Mapping[str, Any]) -> list[dict[str, str | list[str]]]:
+    """Extract user-visible exchanges from the native clarify tool result."""
+    name = message.get("name") or message.get("tool_name") or message.get("toolName")
+    if message.get("role") != "tool" or name != "clarify":
+        return []
+    content = message.get("content", message.get("text"))
+    if not isinstance(content, str) or len(content) > 1_048_576:
+        return []
+    try:
+        result = json.loads(content)
+    except (ValueError, RecursionError):
+        return []
+    responses = result.get("responses") if isinstance(result, dict) else None
+    if not isinstance(responses, list):
+        return []
+
+    exchanges: list[dict[str, str | list[str]]] = []
+    for response in responses[:16]:
+        if not isinstance(response, dict) or response.get("status") != "answered":
+            continue
+        question = response.get("question")
+        answer = response.get("user_response")
+        if not isinstance(question, str) or not question.strip() or len(question) > 10_000:
+            continue
+        if isinstance(answer, str) and answer.strip() and len(answer) <= 10_000:
+            exchanges.append({"question": question, "answer": answer})
+        elif isinstance(answer, list) and 1 <= len(answer) <= 100 and all(
+            isinstance(choice, str) and choice.strip() and len(choice) <= 8_000
+            for choice in answer
+        ):
+            exchanges.append({"question": question, "answer": answer})
+    return exchanges
+
+
 def _background_origin(message: Mapping[str, Any]) -> dict[str, str] | None:
     if message.get("role") != "user" or message.get("display_kind") != "async_delegation_complete":
         return None

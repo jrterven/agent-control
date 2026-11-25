@@ -35,7 +35,11 @@ from hermes_client import (
     resolve_endpoint,
     validate_endpoint,
 )
-from hermes_client.history import project_history_message, project_history_turn_origins
+from hermes_client.history import (
+    answered_clarifications,
+    project_history_message,
+    project_history_turn_origins,
+)
 from hermes_client.compatibility import (
     HERMES_CONNECTOR_REVISIONS,
     PROFILE_TRANSFER_REVISIONS as _AUDITED_PROFILE_TRANSFER_REVISIONS,
@@ -3635,6 +3639,7 @@ class SessionService:
             safe_item.pop("controlAttachmentMedia", None)
             safe_item.pop("controlAttachments", None)
             safe_item.pop("controlFiles", None)
+            safe_item.pop("controlClarifications", None)
             if gateway is not None and gateway.transport_kind == "connector" and raw_item.get("role") == "assistant":
                 media = raw_item.get("controlMedia")
                 if isinstance(media, list):
@@ -3679,6 +3684,8 @@ class SessionService:
                     safe_item["controlAttachments"] = normalizer.sanitize_data(attachments)
                 continue
             if raw_item.get("role") == "tool":
+                if safe_item.get("role") == "tool" and (exchanges := answered_clarifications(raw_item)):
+                    safe_item["controlClarifications"] = normalizer.sanitize_data(exchanges)
                 if content_key is not None:
                     cleaned_tool_content, _ = project_email_reference_prompt(raw_content)
                     safe_item[content_key] = normalizer.sanitize_data(

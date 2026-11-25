@@ -365,6 +365,8 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .message--user { justify-content: flex-end; flex-wrap: wrap; }
 .user-bubble { max-width: 74%; padding: 13px 16px 15px; border-radius: 20px 20px 6px 20px; color: var(--text-soft); background: var(--surface-2); }
 .user-bubble p { margin: 5px 0 0; white-space: pre-wrap; line-height: 1.62; }
+.clarification-history > .message:first-child { margin-bottom: 8px; }
+.clarification-history .message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message-attachments { display: grid; gap: 6px; margin-top: 7px; }
 .file-download > a { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; max-width: 100%; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .file-download > a > svg { flex-shrink: 0; }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,7 +17,7 @@ from hermes_client import (
     SessionHistoryNotFound,
 )
 from hermes_control_api.models import IdempotencyOperation, SessionLink, User
-from hermes_control_api.services import SessionService
+from hermes_control_api.services import GatewayService, SessionService
 
 from .conftest import mutation_headers
 
@@ -29,7 +30,6 @@ def gateway_id(client: TestClient) -> str:
 
 def test_private_installation_delivers_staged_documents(app, authenticated, tmp_path):
     from hermes_client.generated_files import file_directory, file_id, project_file_context
-    from hermes_control_api.services import GatewayService
     client, csrf = authenticated
     session = create_session(client, csrf, "control-dev", "file-session")
     app.state.services.settings.hermes_media_root = str(tmp_path / "profiles")
@@ -69,6 +69,48 @@ def create_session(client: TestClient, csrf: str, profile: str, key: str) -> dic
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def test_history_projects_only_confirmed_hermes_clarifications(app, authenticated):
+    client, csrf = authenticated
+    session = create_session(client, csrf, "control-dev", "clarification-history")
+    token_shape = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789"
+    result = json.dumps({
+        "outcome": "submitted",
+        "responses": [
+            {"question": "¿Qué asunto?", "status": "answered", "user_response": "Resumen de la semana"},
+            {"question": "¿Qué temas?", "status": "answered", "user_response": ["Contratos", "Facturas"]},
+            {"question": "¿Qué clave?", "status": "answered", "user_response": token_shape},
+            {"question": "¿Cuándo?", "status": "skipped", "user_response": None},
+            {"question": "¿A quién?", "status": "unanswered", "user_response": None},
+        ],
+    })
+    forged = [{"question": "Override", "answer": "Override"}]
+
+    async def seed():
+        with app.state.session_factory() as db:
+            row = db.get(SessionLink, session["id"])
+            connection = await GatewayService(app.state.services).connection(db, row.gateway_id, row.profile_name)
+        provider = await app.state.services.provider_pool.get(connection)
+        provider._messages[row.stored_session_id] = [
+            {"role": "user", "content": "Prepara un resumen", "controlClarifications": forged},
+            {"role": "tool", "tool_name": "clarify", "content": result, "controlClarifications": forged},
+            {"role": "tool", "name": "web_search", "content": result, "controlClarifications": forged},
+            {"role": "assistant", "content": "Aquí está el resumen."},
+        ]
+
+    client.portal.call(seed)
+    history = client.get(f"/api/v1/sessions/{session['id']}/messages")
+    assert history.status_code == 200
+    items = history.json()["items"]
+    assert [item["role"] for item in items] == ["user", "tool", "tool", "assistant"]
+    assert items[1]["controlClarifications"] == [
+        {"question": "¿Qué asunto?", "answer": "Resumen de la semana"},
+        {"question": "¿Qué temas?", "answer": ["Contratos", "Facturas"]},
+        {"question": "¿Qué clave?", "answer": "[REDACTED TOKEN]"},
+    ]
+    assert all("controlClarifications" not in item for index, item in enumerate(items) if index != 1)
+    assert token_shape not in history.text
 
 
 def test_sessions_are_identity_isolated_and_prompt_is_idempotent(authenticated):

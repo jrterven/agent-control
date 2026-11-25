@@ -265,6 +265,7 @@ function sanitizeTranscript(messages: ChatMessage[]): ChatMessage[] {
         summary: tool.summary,
       })),
       ...(emailReferences ? { emailReferences } : {}),
+      ...(message.answeredClarifications?.length ? { answeredClarifications: message.answeredClarifications } : {}),
       streaming: false,
     };
   });

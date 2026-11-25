@@ -513,6 +513,18 @@ function AutomationInstructionMessage({ message }: { message: ChatMessage }) {
 
 function Message({ message, agentName, speech, liveExplanation, automationInstruction = false, canContinue = false, isActive = false }: { canContinue?: boolean; message: ChatMessage; agentName: string; speech: MessageSpeech; liveExplanation?: MessageLiveExplanation; automationInstruction?: boolean; isActive?: boolean }) {
   const { t } = useTranslation();
+  if (message.answeredClarifications?.length) {
+    return message.answeredClarifications.map(({ question, answer }, index) => (
+      <div className="clarification-history" key={index}>
+        <article className="message message--assistant" aria-label={t("clarifications.oneQuestion")}>
+          <div className="assistant-content markdown-body"><p>{question}</p></div>
+        </article>
+        <article className="message message--user" aria-label={t("chat.userMessage")}>
+          <div className="user-bubble"><p>{Array.isArray(answer) ? answer.join("\n") : answer}</p></div>
+        </article>
+      </div>
+    ));
+  }
   if (message.role === "user") {
     const conversation = liveDelegationConversation(message.content);
     if (conversation) return <article className="live-transcript" aria-label={t("liveVoice.transcript")}>
@@ -927,6 +939,7 @@ export function ChatView() {
       || hasVisibleText(message.content)
       || Boolean(message.media?.length)
       || Boolean(message.emailReferences?.length)
+      || Boolean(message.answeredClarifications?.length)
       || Boolean(message.tools?.length)
       || Boolean(message.activity?.length)
     )

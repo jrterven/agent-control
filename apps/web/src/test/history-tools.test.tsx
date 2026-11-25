@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../i18n";
 import { ChatView } from "../components/ChatView";
 import { gateways, profiles, sessions, workspaces } from "../data";
-import { useSessionHistory } from "../hooks";
+import { rehydrateSession, useSessionHistory } from "../hooks";
 import { api } from "../lib/api";
 import { useAppStore } from "../store/appStore";
 
@@ -36,6 +36,45 @@ describe("rehydrated Hermes tool history", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     Reflect.deleteProperty(window.navigator, "clipboard");
+  });
+
+  it("shows confirmed clarification exchanges in order when reopening the chat", async () => {
+    vi.spyOn(api, "sessionHistory").mockResolvedValue({
+      sessionStatus: "ready",
+      activeOperation: null,
+      pendingInteractions: [],
+      items: [
+        { id: "prompt", role: "user", content: "Prepara un resumen" },
+        {
+          id: "clarify-result",
+          role: "tool",
+          name: "clarify",
+          controlClarifications: [
+            { question: "¿De qué periodo?", answer: "La última semana" },
+            { question: "¿Qué temas?", answer: ["Contratos", "Facturas"] },
+          ],
+        },
+        { id: "reply", role: "assistant", content: "Aquí está el resumen." },
+      ],
+    });
+    const { container } = render(<ReopenedChat />);
+    await screen.findByText("Aquí está el resumen.");
+
+    await act(async () => {
+      await rehydrateSession("session-papers");
+    });
+
+    expect(Array.from(container.querySelectorAll(".message-list article"), (row) => row.textContent?.trim())).toEqual([
+      "Prepara un resumen",
+      "¿De qué periodo?",
+      "La última semana",
+      "¿Qué temas?",
+      "Contratos\nFacturas",
+      "Aquí está el resumen.",
+    ]);
+    expect(screen.getByText("La última semana").closest(".user-bubble")).toBeVisible();
+    expect(screen.getByText("¿Qué temas?").closest(".message--assistant")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Responder" })).not.toBeInTheDocument();
   });
 
   it("preserves role=tool history for the activity panel without inline chat cards", async () => {

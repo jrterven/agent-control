@@ -28,6 +28,7 @@ import { controlTurnOrigin, normalizeBackgroundTasks } from "./lib/backgroundTas
 import { detectedTimeZone, isValidTimeZone, TIME_ZONE_PREFERENCE_KEY } from "./lib/dateTime";
 import type {
   AgentActivityItem,
+  AnsweredClarification,
   BootstrapData,
   ApprovalChoice,
   ApprovalRequest,
@@ -868,6 +869,19 @@ function attachmentsFromHistory(item: Record<string, unknown>) {
   });
 }
 
+function answeredClarificationsFromHistory(value: unknown): AnsweredClarification[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 16).flatMap<AnsweredClarification>((row: unknown) => {
+    if (!row || typeof row !== "object") return [];
+    const { question, answer } = row as Record<string, unknown>;
+    if (typeof question !== "string" || !question.trim() || question.length > 10_000) return [];
+    if (typeof answer === "string" && answer.trim() && answer.length <= 10_000) return [{ question, answer }];
+    if (Array.isArray(answer) && answer.length > 0 && answer.length <= 100
+      && answer.every((choice) => typeof choice === "string" && choice.trim() && choice.length <= 8_000)) return [{ question, answer }];
+    return [];
+  });
+}
+
 function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index: number): MappedHistoryItem | null {
   const role = item.role;
   // The adapter's synthetic notification marker binds subsequent replies to
@@ -876,6 +890,11 @@ function mapHistoryItem(sessionId: string, item: Record<string, unknown>, index:
   const timestamp = historyTimestamp(item);
   const createdAt = timestamp ? new Date(timestamp).toLocaleTimeString(getCurrentLanguage(), { hour: "2-digit", minute: "2-digit" }) : "";
   if (role === "tool") {
+    const answeredClarifications = answeredClarificationsFromHistory(item.controlClarifications);
+    if (answeredClarifications.length) {
+      const sourceId = item.id ?? item.tool_call_id ?? item.toolCallId ?? index;
+      return { id: `${sessionId}-clarify-${sourceId}`, sessionId, role: "assistant", content: "", createdAt, timestamp, answeredClarifications };
+    }
     const id = String(item.id ?? item.tool_call_id ?? item.toolCallId ?? `${sessionId}-history-tool-${index}`);
     return {
       id,
@@ -924,7 +943,7 @@ function historyMessages(sessionId: string, items: Record<string, unknown>[]): C
     let assistantIndex = -1;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       if (messages[index].role === "user") break;
-      if (messages[index].role === "assistant") {
+      if (messages[index].role === "assistant" && !messages[index].answeredClarifications) {
         assistantIndex = index;
         break;
       }
@@ -967,7 +986,7 @@ function historyMessages(sessionId: string, items: Record<string, unknown>[]): C
       return;
     }
     if (item.role === "user") attachPendingEvidence();
-    if (item.role === "assistant" && (pendingTools.length || pendingEmailReferences.length)) {
+    if (item.role === "assistant" && !item.answeredClarifications && (pendingTools.length || pendingEmailReferences.length)) {
       const byId = new Map((item.tools ?? []).map((tool) => [tool.id, tool]));
       pendingTools.forEach((tool) => byId.set(tool.id, tool));
       messages.push({
