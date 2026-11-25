@@ -116,11 +116,25 @@ def snapshot(home: Path, stored_session_id: str | None = None) -> dict:
             active = db.execute("SELECT count(*) FROM async_delegations WHERE state IN ('running','stalling','finalizing','queued','dispatched')" + scope, params).fetchone()[0]
             pending = db.execute("SELECT count(*) FROM async_delegations WHERE state NOT IN ('running','stalling','finalizing','queued','dispatched') AND delivery_state='pending'" + scope, params).fetchone()[0]
             total = db.execute("SELECT count(*) FROM async_delegations a" + where, params).fetchone()[0]
+            # 0.23.4 can owe a resume or have a synchronous delegate outside
+            # async_delegations. Their records are local-only, but an inventory
+            # missing that work cannot prove that maintenance is safe.
+            resume_work = stored_session_id is None and "resumable_subagents" in tables and db.execute("""
+                SELECT 1 FROM resumable_subagents r
+                WHERE (r.state IN ('running','claimed') AND NOT EXISTS (
+                    SELECT 1 FROM async_delegations a
+                    WHERE a.delegation_id=json_extract(r.record_json,'$.unit_id')
+                    AND a.state IN ('running','stalling','finalizing','queued','dispatched')
+                )) OR (r.state IN ('resumable','expired')
+                    AND json_extract(r.record_json,'$.auto_promised')
+                    AND json_extract(r.record_json,'$.auto_gave_up') IS NULL)
+                LIMIT 1
+            """).fetchone() is not None
             rows = db.execute("""SELECT a.delegation_id,a.parent_session_id,a.state,a.delivery_state,
                 a.dispatched_at,a.updated_at,a.completed_at,s.id
                 FROM async_delegations a LEFT JOIN sessions s ON s.id=a.parent_session_id""" + where +
                 " ORDER BY a.updated_at DESC,a.delegation_id LIMIT ?", (*params, MAX_TASKS)).fetchall()
-        result = {"available": True, "complete": total <= MAX_TASKS, "activeCount": active, "pendingDeliveryCount": pending,
+        result = {"available": True, "complete": total <= MAX_TASKS and not resume_work, "activeCount": active, "pendingDeliveryCount": pending,
             "totalCount": total, "tasks": [], "source": "hermes-native-delegation", "observedAt": observed_at}
         for identifier, session_id, state, delivery, started, updated, ended, parent in rows:
             if (not isinstance(identifier, str) or len(identifier) > 128 or not IDENTIFIER.fullmatch(identifier)

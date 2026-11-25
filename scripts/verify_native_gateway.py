@@ -29,6 +29,7 @@ def native_server(root: Path, port: int) -> None:
     sys.path.insert(0, str(root / "hermes"))
     from tui_gateway import server, server_requests
     results = {}
+    release_delegations = threading.Event()
 
     # A test-only entry point to the actual native server-request machinery.
     # It never executes a command, changes approval policy or reads credentials.
@@ -47,6 +48,29 @@ def native_server(root: Path, port: int) -> None:
     @server.method("control.test.result")
     def result(rid, params):
         return server._ok(rid, {"answer": results.get(params["session_id"])})
+
+    @server.method("control.test.delegate")
+    def dispatch(rid, params):
+        from tools.async_delegation import dispatch_async_delegation_batch
+
+        sid = params["session_id"]
+        session = server._sessions[sid]
+        key = session["session_key"]
+        label = params["label"]
+
+        def runner():
+            assert release_delegations.wait(25), "The isolated test did not release its delegates"
+            return {"results": [{"task_index": 0, "status": "completed", "summary": label}]}
+
+        with server._session_profile_runtime_scope(session):
+            result = dispatch_async_delegation_batch(goals=[label], context=None, toolsets=[], role="general", model=None,
+                session_key=key, parent_session_id=key, origin_ui_session_id=sid, origin_session_id=key, runner=runner)
+        return server._ok(rid, result)
+
+    @server.method("control.test.release-delegates")
+    def release(rid, params):
+        release_delegations.set()
+        return server._ok(rid, {"released": True})
 
     from hermes_cli.main import main
     sys.argv = ["hermes", "serve", "--host", "127.0.0.1", "--port", str(port), "--isolated"]
@@ -76,7 +100,7 @@ class ModelHandler(BaseHTTPRequestHandler):
         has_tool = any(item.get("role") == "tool" for item in messages[user_index + 1:])
         tool = "SMOKE_CLARIFY" in prompt and not has_tool
         slow = "SMOKE_SLOW" in prompt
-        content = "HERMES_NATIVE_SMOKE_OK"
+        content = "HERMES_DELEGATE_DELIVERED" if "SMOKE_DELEGATE_RESULT_" in prompt else "HERMES_NATIVE_SMOKE_OK"
         call = {"id": "call_smoke_clarify", "type": "function", "function": {"name": "clarify", "arguments": json.dumps({"questions": [
             {"question": "Choose two colors", "choices": ["Blue", "Green"], "multi_select": True},
             {"question": "Enter a short label"}]})}}
@@ -119,16 +143,14 @@ class ModelHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
-async def exercise(url: str, token: str) -> list[str]:
-    import httpx
+async def exercise(url: str, token: str, source_sha: str, version: str, work: Path) -> list[str]:
     from hermes_client import HermesGatewayProvider, HermesAutomation, ProviderConnection, SessionRoute
-    from hermes_client.compatibility import HERMES_0216_SHA
     events = []
     async def sink(event):
         events.append(event)
     provider = HermesGatewayProvider(ProviderConnection(gateway_id="offline-certification", profile_name="default",
         rest_url=url, ws_url=url.replace("http://", "ws://") + "/api/ws", dashboard_token=token,
-        trusted_source_sha=HERMES_0216_SHA), sink)
+        trusted_source_sha=source_sha), sink)
     checks = []
     def passed(name):
         checks.append(name)
@@ -146,7 +168,7 @@ async def exercise(url: str, token: str) -> list[str]:
         raise AssertionError(f"No {kind}; observed event types: {sorted({event.type for event in events[start:]})}")
     try:
         caps = await provider.capabilities()
-        assert caps.version == "0.21.6" and {"prompt.submit", "clarify.respond", "cron.create"}.issubset(caps.methods)
+        assert caps.version == version and {"prompt.submit", "clarify.respond", "cron.create"}.issubset(caps.methods)
         assert {"session.mode.temporary", "session.mode.memory_read_only"} <= caps.features
         passed("authenticated-native-capabilities-and-strict-handshake")
         session = await provider.create_session(title="Offline native certification")
@@ -212,9 +234,85 @@ async def exercise(url: str, token: str) -> list[str]:
         await provider.delete_automation(automation.automation_id)
         assert all(row.automation_id != automation.automation_id for row in await provider.list_automations())
         passed("native-atomic-paused-cron-create-edit-delete")
+
+        private = await provider.create_session(chat_mode="temporary")
+        private_route = SessionRoute("offline-certification", "default", private.stored_session_id, private.runtime_session_id)
+        start = len(events)
+        await provider.submit_prompt(private_route, "OFFLINE_PRIVATE_CANARY", operation_id="offline-private")
+        await event_after("message.complete", start)
+        assert "HERMES_NATIVE_SMOKE_OK" in json.dumps(await provider.history(private_route))
+        await provider.renew_temporary_session(private_route)
+        await provider.close_temporary_session(private_route)
+        assert private.stored_session_id not in {row.stored_session_id for row in await provider.list_sessions()}
+        assert all(b"OFFLINE_PRIVATE_CANARY" not in path.read_bytes()
+                   for path in (work / "hermes-home").rglob("*") if path.is_file())
+        passed("temporary-chat-actual-turn-renewal-close-and-no-persisted-transcript")
+
+        profile = await provider.create_profile(name="offline-source", display_name="Offline source")
+        assert profile.name == "offline-source"
+        archive = work / "transfer.tar.gz"
+        await provider.export_profile_archive_to(profile.name, archive)
+        imported = await provider.import_profile_archive_from("offline-destination", archive)
+        assert {profile.name, imported.name} <= {item.name for item in await provider.list_profiles()}
+        await provider.delete_profile(imported.name)
+        await provider.delete_profile(profile.name)
+        assert {profile.name, imported.name}.isdisjoint({item.name for item in await provider.list_profiles()})
+        passed("native-profile-create-export-import-and-delete")
+        await verify_background_delivery(provider, events, work / "hermes-home")
+        passed("native-background-completion-once-in-each-owning-profile")
         return checks
     finally:
         await provider.close()
+
+
+async def verify_background_delivery(provider, events, home):
+    from agent_control_connector.background_tasks import snapshot
+    from dataclasses import replace
+    from hermes_client import HermesGatewayProvider, SessionRoute
+
+    peer_events = []
+    async def peer_sink(event):
+        peer_events.append(event)
+    peer = HermesGatewayProvider(replace(provider.connection, profile_name="offline-worker"), peer_sink)
+    try:
+        scopes = [(provider, events, home), (peer, peer_events, home / "profiles/offline-worker")]
+        delegations = []
+        for agent, received, profile_home in scopes:
+            session = await agent.create_session(title="Offline scoped delegation")
+            profile_name = agent.connection.profile_name
+            stored_id = session.stored_session_id
+            route = SessionRoute(agent.connection.gateway_id, profile_name, stored_id, session.runtime_session_id)
+            await agent.submit_prompt(route, "SMOKE_CHAT", operation_id="offline-prepare-delegation")
+            for _ in range(240):
+                if any(event.type == "message.complete" and event.stored_session_id == stored_id for event in received):
+                    break
+                await asyncio.sleep(.05)
+            else:
+                raise AssertionError(f"Test parent did not complete its foreground turn in {profile_name}")
+            label = "SMOKE_DELEGATE_RESULT_" + profile_name
+            dispatched = await agent.rpc.request("control.test.delegate", {"session_id": route.runtime_session_id, "label": label})
+            assert dispatched["status"] == "dispatched", dispatched
+            observed = snapshot(profile_home, stored_id)
+            assert observed["complete"] and observed["activeCount"] == 1, observed
+            delegations.append((agent, received, profile_home, stored_id, label, dispatched["delegation_id"]))
+        await provider.rpc.request("control.test.release-delegates", {})
+        for agent, received, profile_home, stored_id, label, task_id in delegations:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                observed = snapshot(profile_home, stored_id)
+                completions = [event for event in received if event.type == "message.complete" and event.stored_session_id == stored_id]
+                if any(task["id"] == task_id and task["deliveryState"] == "delivered" for task in observed["tasks"]) and len(completions) == 2:
+                    break
+                await asyncio.sleep(.1)
+            else:
+                raise AssertionError(f"Native completion not delivered to {agent.connection.profile_name}: {observed}")
+            transcript = await agent.history_readonly(stored_id)
+            assert sum(row.get("content") == "HERMES_DELEGATE_DELIVERED" for row in transcript) == 1
+            assert label in json.dumps(transcript)
+            other = next(item[4] for item in delegations if item[4] != label)
+            assert other not in json.dumps(transcript)
+    finally:
+        await peer.close()
 
 
 def main():
@@ -229,7 +327,12 @@ def main():
     sys.path.insert(0, str(REPO / "packages/hermes-client"))
     sys.path.insert(0, str(REPO / "packages/connector"))
     from agent_control_connector import background_install, chat_modes_install, media_install
-    from hermes_client.compatibility import HERMES_0216_SHA
+    from hermes_client.compatibility import CONTRACTS, SERVER_REQUEST_REVISIONS
+    stamp = json.loads((root / "hermes/install-stamp.json").read_text())
+    source_sha = stamp["commit"]
+    if source_sha not in SERVER_REQUEST_REVISIONS or stamp["displayVersion"] != CONTRACTS[source_sha].version:
+        raise ValueError("Native certification requires an audited runtime")
+    version = CONTRACTS[source_sha].version
     with tempfile.TemporaryDirectory(prefix="verify-native-gateway-") as temporary:
         work = Path(temporary)
         home = work / "hermes-home"
@@ -244,9 +347,13 @@ def main():
                   "display": {"streaming": True}, "dashboard": {"turn_isolation": False},
                   "memory": {"enabled": False}, "plugins": {"enabled": []}}
         (home / "config.yaml").write_text(json.dumps(config))
-        chat_modes_install.install_profile(home, HERMES_0216_SHA)
-        background_install.install_profile(home, HERMES_0216_SHA)
+        chat_modes_install.install_profile(home, source_sha)
+        background_install.install_profile(home, source_sha)
         media_install.install_profile(home)
+        peer_home = home / "profiles/offline-worker"
+        peer_home.mkdir(parents=True)
+        (peer_home / "config.yaml").write_text(json.dumps(config))
+        background_install.install_profile(peer_home, source_sha)
         token = secrets.token_urlsafe(32)
         with socket.socket() as reserve:
             reserve.bind(("127.0.0.1", 0))
@@ -278,12 +385,12 @@ def main():
                         if time.monotonic() >= deadline:
                             raise AssertionError("Native server did not become ready")
                         time.sleep(0.1)
-                assert background_install.probe_profile(home, HERMES_0216_SHA)["state"] == "ready"
+                assert background_install.probe_profile(home, source_sha)["state"] == "ready"
                 marker = json.loads((home / ".agent-control/background/runtime.json").read_text())
                 assert marker["profileDeliveryMode"] == "native-tui"
                 assert media_install.probe_profile(home)["state"] == "ready"
-                checks = asyncio.run(exercise(url, token))
-                print(json.dumps({"ok": True, "hermes": "0.21.6", "checks": checks}), flush=True)
+                checks = asyncio.run(exercise(url, token, source_sha, version, work))
+                print(json.dumps({"ok": True, "hermes": version, "checks": checks}), flush=True)
             except BaseException:
                 # This log contains only isolated fake credentials/prompts.
                 tail = log.read_text(errors="replace")[-10_000:].replace(token, "[test-token]")

@@ -9,9 +9,11 @@ import subprocess
 from uuid import uuid4
 
 import yaml
-from hermes_client.compatibility import HERMES_0212_SHA, HERMES_0216_SHA, HERMES_CONNECTOR_REVISIONS
+from hermes_client.compatibility import HERMES_0212_SHA, HERMES_CONNECTOR_REVISIONS
 
-from .hermes_background_plugin import DELIVERY_SHIM, PLUGIN_NAME, PLUGIN_VERSION, disabled, process_identity, string_list
+from .hermes_background_plugin import (
+    DELIVERY_SHIM, NATIVE_SCOPED_REVISIONS, PLUGIN_NAME, PLUGIN_VERSION, disabled, process_identity, string_list,
+)
 from .background_tasks import retired_profile
 from .media_install import _read, _write
 from .visual_media import profile_home
@@ -126,7 +128,7 @@ def probe_profile(home: Path, source_sha=HERMES_0212_SHA) -> dict:
             ) or (
                 runtime.get("profileDeliveryMode") in {"native-gateway", "native-tui"}
                 and runtime.get("profileDeliveryShim") is None
-                and (runtime.get("profileDeliveryMode") != "native-tui" or source_sha == HERMES_0216_SHA)
+                and (runtime.get("profileDeliveryMode") != "native-tui" or source_sha in NATIVE_SCOPED_REVISIONS)
             )
             if runtime.get("processIdentity") == process_identity(pid) and delivery_ready:
                 return {"state": "ready" if runtime.get("delegationAvailable") is True else "disabled",

@@ -24,6 +24,8 @@ PLUGIN_NAME = "agent-control-background"
 PLUGIN_VERSION = "1.1.0"
 AUDITED_SOURCE_SHA = "939e45c91d751fadd94dcd1b873ac3cb44846213"
 NATIVE_SCOPED_SOURCE_SHA = "818c13be1dc4fd28987e1e881a9408224afd4535"
+HERMES_0234_SOURCE_SHA = "8fc0374447313e276f6b9a2764bfc750190c966a"
+NATIVE_SCOPED_REVISIONS = frozenset({NATIVE_SCOPED_SOURCE_SHA, HERMES_0234_SOURCE_SHA})
 DELIVERY_SHIM = "profile-delivery-939e-v1"
 DELIVERY_SOURCE_HASHES = {
     "tui_gateway/session_notifications.py": "f71b9dac8722e74cbf2fda89fd49263a1ef89df468f13ef4dbc79888b7f25cfa",
@@ -54,7 +56,26 @@ NATIVE_SCOPED_HASHES = {'DELIVERY_SOURCE_HASHES': {'tui_gateway/model_switch.py'
                               'hermes_cli/plugins.py': 'b0f09d0004890ff0b2c07d17ee7c5688709162da4fd43d404cabbe13f1d9f59d',
                               'gateway/run.py': 'a3f05d3b91ed23fdab2946c050619cce822b8c483e6f5dde75cf17c11e8a5ffe'}}
 
+AUDITED_0234_HASHES = {'DELIVERY_SOURCE_HASHES': {'tui_gateway/model_switch.py': 'cf12e9e5b00b76507b369495c993eb323f6d845b0bca088ca36612a5a737e300',
+                            'tui_gateway/session_notifications.py': '9e4b2d1e8986af881fce4a6ff368ee14f49a5ce8e461942c407972cd3aa53e5c',
+                            'tools/async_delegation.py': '5ae95dc34a4f264523450b3f0ad67fb2d827cf22d2d2c4f3bf418a798c044e51',
+                            'hermes_constants.py': '3997b158c42ba99948cc799e930ae7bdef45714d043cab267f5f260cbddb7fc8',
+                            'persistence_assembly.py': 'c8e2502953355e25f0aa8b51da02d609c60f436e8aefd204f2b343849fc7d1c1',
+                            'persistence/sqlite/authority/coordination.py': '9a8022eccf321603f44328201c862cb2ab57f7f712b0a9d0daf6dea425fe70c2',
+                            'persistence/sqlite/authority/subagents.py': 'ccdb51551f53deced469ff46ee97e5bb4d4988c87ffd3ffa75fb293e448643ca'},
+ 'DELIVERY_BOOTSTRAP_HASHES': {'hermes_cli/main.py': 'a48175e492ca870ca49b997aec017970a131381fbfb43c08297d7984e4ca8058',
+                               'hermes_cli/plugins.py': 'd83cc89fbdfca460dba25960f52d2498488ee7e34d32b7470a63e7986ac114e6',
+                               'hermes_cli/plugins_loader.py': '3400cc514c8a0f0749e02b309020cc48794eae530adc26c0ad3f2381ba6935fc',
+                               'tui_gateway/server.py': 'c2fdb2471d0428339928bb2a936ce01cab262fb6d5700e1ef4477f402a0b875a'},
+ 'GATEWAY_BOOTSTRAP_HASHES': {'hermes_cli/main.py': 'a48175e492ca870ca49b997aec017970a131381fbfb43c08297d7984e4ca8058',
+                              'hermes_cli/gateway.py': 'efd510c6c511e90e23145a7fdf080afe9a2e2e8f5af072bccd1690871026e0ae',
+                              'hermes_cli/plugins.py': 'd83cc89fbdfca460dba25960f52d2498488ee7e34d32b7470a63e7986ac114e6',
+                              'gateway/run.py': 'cadcb61e751d3f6f9bd5fca4a8260ff087982db6d6f6230534d77959ab55e294'}}
+
+
 def _source_hashes(source_sha, group):
+    if source_sha == HERMES_0234_SOURCE_SHA:
+        return AUDITED_0234_HASHES[group]
     if source_sha == NATIVE_SCOPED_SOURCE_SHA:
         return NATIVE_SCOPED_HASHES[group]
     if source_sha == AUDITED_SOURCE_SHA:
@@ -148,7 +169,7 @@ def _delivery_server(source_sha=AUDITED_SOURCE_SHA):
     # 0.21.6 runs each registration in a bounded loader worker. Its caller
     # remains blocked in canonical startup on the main thread until we return.
     frame = (sys._current_frames().get(threading.main_thread().ident)
-             if source_sha == NATIVE_SCOPED_SOURCE_SHA else sys._getframe(1))
+             if source_sha in NATIVE_SCOPED_REVISIONS else sys._getframe(1))
     try:
         for _ in range(64):
             if frame is None:
@@ -201,13 +222,13 @@ def install_delivery_profile_scope(source_sha: str) -> bool:
     turn correctly persists the result in the session profile. No event is
     replayed, acknowledged early, or changed by this shim.
     """
-    if source_sha not in {AUDITED_SOURCE_SHA, NATIVE_SCOPED_SOURCE_SHA}:
+    if source_sha not in NATIVE_SCOPED_REVISIONS and source_sha != AUDITED_SOURCE_SHA:
         raise ValueError("Unsupported native background delivery revision")
     server = _delivery_server(source_sha)
     if server is None:
         return False  # CLI needs no TUI shim; it cannot prove Serve activation.
     original = _verified_delivery_dispatch(server, source_sha)
-    if source_sha == NATIVE_SCOPED_SOURCE_SHA:
+    if source_sha in NATIVE_SCOPED_REVISIONS:
         # 0.21.6 binds the whole notification poller to its native profile scope,
         # including claims, recovery sweeps and acknowledgements. Keep it intact.
         poller = getattr(server, "_notification_poller_loop", None)
@@ -295,7 +316,7 @@ def _canonical_gateway_startup(source_sha=AUDITED_SOURCE_SHA) -> bool:
 
 def delivery_runtime_mode(delivery_scoped: bool, source_sha=AUDITED_SOURCE_SHA) -> str | None:
     if delivery_scoped:
-        return "native-tui" if source_sha == NATIVE_SCOPED_SOURCE_SHA else "tui-scoped"
+        return "native-tui" if source_sha in NATIVE_SCOPED_REVISIONS else "tui-scoped"
     # A separate profile gateway uses native gateway delivery, not the TUI
     # poller. Do not confuse it with Serve importing late/partially initialized.
     if "tui_gateway.server" in sys.modules or "tui_gateway.entry" in sys.modules:

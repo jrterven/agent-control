@@ -159,6 +159,21 @@ def test_truncated_orphaned_and_invalid_rows_do_not_certify_complete(tmp_path, m
     db.close()
 
 
+def test_resumable_subagent_work_blocks_idle_until_native_settlement(tmp_path):
+    db = ledger(tmp_path)
+    with db:
+        db.execute("CREATE TABLE resumable_subagents(state TEXT, record_json TEXT)")
+        db.execute("INSERT INTO resumable_subagents VALUES('resumable', ?)",
+                   ('{"auto_promised":true,"unit_id":"dg-one","goal":"PRIVATE"}',))
+    frozen = snapshot(tmp_path)
+    assert frozen["activeCount"] == 0 and frozen["complete"] is False
+    assert "PRIVATE" not in json.dumps(frozen)
+    with db:
+        db.execute("UPDATE resumable_subagents SET record_json=json_set(record_json,'$.auto_gave_up','expired')")
+    assert snapshot(tmp_path)["complete"] is True
+    db.close()
+
+
 @pytest.mark.parametrize("state,delivery,expected", [
     ("completed", "delivered", True), ("failed", "dropped", True), ("cancelled", "delivered", True),
     ("running", "pending", False), ("completed", "pending", False), ("unknown", "delivered", False),

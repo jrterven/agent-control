@@ -227,6 +227,8 @@ async def test_cancel_is_session_bound_and_empty_authoritative_snapshot_expires_
 @pytest.mark.parametrize("bad", [frame("secret"), frame("sudo"), frame("window.read"), frame(questions=[]),
     frame(questions=[{"qid": "x", "question": "ok"}, {"qid": "x", "question": "duplicate"}]),
     frame(answers={"foreign": "answer"}), frame("approval", choices=["execute"]),
+    frame("approval", kind="network", choices=["once", "deny"]),
+    frame("approval", kind="access", choices=["once", "deny"]),
     {"id": "srq-0123456789ab", "method": [], "params": {}}])
 async def test_unsupported_or_malformed_requests_never_become_human_controls(bad):
     sink = AsyncMock()

@@ -1,8 +1,9 @@
 {
   "schemaVersion": 1,
   "hermesRepository": "https://github.com/NousResearch/hermes-agent.git",
-  "hermesSourceSha": "818c13be1dc4fd28987e1e881a9408224afd4535",
-  "hermesVersion": "0.21.6",
+  "hermesSourceSha": "8fc0374447313e276f6b9a2764bfc750190c966a",
+  "hermesVersion": "0.23.4",
+  "dataSchemaVersion": 3,
   "pythonVersion": "3.14.8",
   "uvVersion": "0.12.15",
   "baseExtras": [

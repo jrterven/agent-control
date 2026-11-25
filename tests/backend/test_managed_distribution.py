@@ -55,8 +55,8 @@ def test_signed_inventory_covers_every_shipped_code_file_and_rejects_stale_signi
     signature = manifest.sign_manifest(root, signing_key)
     value = json.loads((root / "runtime-manifest.json").read_text())
     assert set(value["files"]) == {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()} - manifest.EXCLUDED
-    assert value["hermesSourceSha"] == "818c13be1dc4fd28987e1e881a9408224afd4535"
-    assert value["dataSchemaVersion"] == 2
+    assert value["hermesSourceSha"] == "8fc0374447313e276f6b9a2764bfc750190c966a"
+    assert value["dataSchemaVersion"] == 3
     subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(root / "runtime-public-key.pem"),
                     "-signature", str(signature), str(root / "runtime-manifest.json")], check=True, capture_output=True)
     (root / "connector/engine.py").write_text("unexpected code")
@@ -64,7 +64,7 @@ def test_signed_inventory_covers_every_shipped_code_file_and_rejects_stale_signi
         manifest.sign_manifest(root, signing_key)
 
 
-@pytest.mark.parametrize("version", [None, 1, True, "2", 3])
+@pytest.mark.parametrize("version", [None, 1, True, "3", 2, 4])
 def test_native_runtime_rejects_false_data_compatibility_for_new_hermes(version):
     from agent_control_connector.managed_manifest import data_schema_version
     value = {"hermesSourceSha": manifest.PINS["hermesSourceSha"]}
@@ -76,12 +76,14 @@ def test_native_runtime_rejects_false_data_compatibility_for_new_hermes(version)
 
 def test_data_schema_boundary_allows_same_generation_only():
     from agent_control_connector.managed_manifest import require_same_data_schema
-    from hermes_client.compatibility import HERMES_0212_SHA, HERMES_0216_SHA
+    from hermes_client.compatibility import HERMES_0212_SHA, HERMES_0216_SHA, HERMES_0234_SHA
     old = {"hermesSourceSha": HERMES_0212_SHA}  # Legacy manifests omitted the optional field.
-    new = {"hermesSourceSha": HERMES_0216_SHA, "dataSchemaVersion": 2}
+    middle = {"hermesSourceSha": HERMES_0216_SHA, "dataSchemaVersion": 2}
+    new = {"hermesSourceSha": HERMES_0234_SHA, "dataSchemaVersion": 3}
     assert require_same_data_schema(old, old) == 1
-    assert require_same_data_schema(new, new) == 2
-    for source, target in ((old, new), (new, old)):
+    assert require_same_data_schema(middle, middle) == 2
+    assert require_same_data_schema(new, new) == 3
+    for source, target in ((old, new), (new, old), (middle, new), (new, middle), (old, middle), (middle, old)):
         with pytest.raises(ValueError, match="migración"):
             require_same_data_schema(source, target)
 

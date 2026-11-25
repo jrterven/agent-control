@@ -8,7 +8,7 @@ import stat
 import subprocess
 import sys
 
-from hermes_client.compatibility import HERMES_0216_SHA, HERMES_CONNECTOR_REVISIONS
+from hermes_client.compatibility import HERMES_CONNECTOR_REVISIONS, HERMES_PM_REVISIONS
 from .visual_media import profile_home
 
 
@@ -34,7 +34,7 @@ def export_snapshot(config: dict, name: str, output: Path) -> None:
     else:
         candidates = [root / environment / "bin/python" for root in (source, home / "hermes-agent")
                       for environment in ("venv", ".venv")]
-        if revision == HERMES_0216_SHA:
+        if revision in HERMES_PM_REVISIONS:
             # Read only PM's committed interpreter; never provision dependencies
             # or run a launcher that can complete a pending upstream update.
             probe = """import json, sys
@@ -62,7 +62,7 @@ print(json.dumps(str(python) if python else None))
     if python is None:
         raise ValueError("The installed Hermes Python could not be located")
     worker = Path(__file__).with_name("profile_export_worker.py").read_text()
-    request = {"source": str(source), "home": str(home), "name": name, "output": str(output), "activateDependencies": revision == HERMES_0216_SHA}
+    request = {"source": str(source), "home": str(home), "name": name, "output": str(output), "activateDependencies": revision in HERMES_PM_REVISIONS}
     result = subprocess.run([str(python), "-I", "-B", "-c", worker], input=json.dumps(request).encode(),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
                             cwd=source, timeout=90)

@@ -53,6 +53,10 @@ def request_payload(raw: Mapping[str, Any]) -> tuple[str, str, str, dict[str, An
     # extension data (which can contain credentials or unbounded sidecars).
     payload = {"session_id": sid, "request_id": identifier}
     if method == "approval":
+        # Access and network requests require displaying the destination and
+        # have different grant lifetimes. A command approval cannot represent them.
+        if params.get("kind") not in (None, "command"):
+            return None
         choices = params.get("choices")
         if (not isinstance(choices, list) or not 0 < len(choices) <= 4
                 or any(not isinstance(choice, str) or choice not in _CHOICES for choice in choices)):
