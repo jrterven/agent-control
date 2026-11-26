@@ -127,14 +127,18 @@ describe("mobile-first chat", () => {
       { id: "copy-user", sessionId: "session-papers", role: "user", content: "Pedido original", createdAt: "12:26" },
     ] });
     render(<ChatView />);
-    const button = screen.getByRole("button", { name: "Copiar respuesta" });
-    expect(button.textContent).toBe("");
-    expect(button).not.toHaveAttribute("title");
-    const header = button.closest("header");
-    expect(header?.nextElementSibling).toHaveClass("markdown-body");
-    await user.click(button);
+    const [top, bottom] = screen.getAllByRole("button", { name: "Copiar respuesta" });
+    expect(top.textContent).toBe("");
+    expect(bottom.textContent).toBe("");
+    expect(top).not.toHaveAttribute("title");
+    expect(bottom).not.toHaveAttribute("title");
+    expect(top.closest("header")?.nextElementSibling).toHaveClass("markdown-body");
+    expect(bottom.closest(".message-actions")?.previousElementSibling).toHaveClass("markdown-body");
+    await user.click(top);
     expect(await screen.findByText("Copiado")).toHaveClass("sr-only");
-    expect(write).toHaveBeenCalledTimes(1);
+    expect(top.innerHTML).toBe(bottom.innerHTML);
+    await user.click(bottom);
+    expect(write).toHaveBeenCalledTimes(2);
 
     const [{ formats }] = write.mock.calls[0][0];
     const read = (blob: Blob) => new Promise<string>((resolve) => {
@@ -151,6 +155,7 @@ describe("mobile-first chat", () => {
     expect(html).toContain("Informe.pdf");
     expect(html).not.toMatch(/<svg|\/api\/v1\/|12:24|Respuesta parcial|Pedido original/);
     expect(await read(formats["text/plain"])).toBe(formatted);
+    expect(await read(write.mock.calls[1][0][0].formats["text/html"])).toBe(html);
   });
 
   it("copies Markdown when the browser only supports text and reports denied access", async () => {
@@ -162,12 +167,12 @@ describe("mobile-first chat", () => {
       { id: "copy-simple", sessionId: "session-papers", role: "assistant", content, createdAt: "" },
     ] });
     render(<ChatView />);
-    const button = screen.getByRole("button", { name: "Copiar respuesta" });
+    const [top, bottom] = screen.getAllByRole("button", { name: "Copiar respuesta" });
     writeText.mockRejectedValueOnce(new Error("Clipboard denied"));
-    await user.click(button);
+    await user.click(top);
     expect(await screen.findByText("No se pudo copiar la respuesta.")).toHaveClass("sr-only");
 
-    await user.click(button);
+    await user.click(bottom);
     expect(await screen.findByText("Copiado")).toHaveClass("sr-only");
     expect(writeText).toHaveBeenLastCalledWith(content);
   });

@@ -7,7 +7,7 @@ import type { CSSProperties } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { MessageMarkdown } from "./MessageMarkdown";
-import { CopyResponseButton } from "./CopyResponseButton";
+import { CopyResponseButton, useResponseCopy } from "./CopyResponseButton";
 import { BackgroundTasks, taskResultAnchor } from "./BackgroundTasks";
 import { Badge, Button, IconButton } from "@hermes-control/ui";
 import { continueIncompleteResponse, createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
@@ -515,6 +515,7 @@ function AutomationInstructionMessage({ message }: { message: ChatMessage }) {
 function Message({ message, agentName, speech, liveExplanation, automationInstruction = false, canContinue = false, isActive = false }: { canContinue?: boolean; message: ChatMessage; agentName: string; speech: MessageSpeech; liveExplanation?: MessageLiveExplanation; automationInstruction?: boolean; isActive?: boolean }) {
   const { t } = useTranslation();
   const markdownBody = useRef<HTMLDivElement>(null);
+  const responseCopy = useResponseCopy(markdownBody, message.content);
   if (message.answeredClarifications?.length) {
     return message.answeredClarifications.map(({ question, answer }, index) => (
       <div className="clarification-history" key={index}>
@@ -549,14 +550,15 @@ function Message({ message, agentName, speech, liveExplanation, automationInstru
   const hasCompletedText = hasText && !message.responseIncomplete && !message.streaming;
   const canCopy = hasCompletedText && !isActive && message.role === "assistant" && !message.id.startsWith("control-terminal-");
   const showSpeechActions = hasCompletedText && (speech.available || liveExplanation?.available);
+  const copyStatus = responseCopy.status;
   return (
     <article className="message message--assistant" id={message.controlTurnOrigin ? taskResultAnchor(message.id) : undefined} tabIndex={message.controlTurnOrigin ? -1 : undefined} aria-label={t("chat.assistantResponse", { agent: agentName })}>
       <div className="assistant-content">
-        {message.createdAt || message.controlTurnOrigin || message.streaming || canCopy ? <header>
+        {message.createdAt || message.controlTurnOrigin || message.streaming || canCopy ? <header className={canCopy ? "message-copy-header" : undefined}>
           {message.createdAt ? <time>{message.createdAt}</time> : null}
           {message.controlTurnOrigin ? <Badge>{t(message.controlTurnOrigin.taskId ? "backgroundTasks.resultFor" : "backgroundTasks.resultLabel", { id: message.controlTurnOrigin.taskId?.slice(0, 8) })}</Badge> : null}
           {message.streaming ? <Badge tone="info">{t("chat.streaming")}</Badge> : null}
-          {canCopy ? <CopyResponseButton body={markdownBody} markdown={message.content} /> : null}
+          {canCopy ? <CopyResponseButton {...responseCopy} /> : null}
         </header> : null}
         <div className="markdown-body" ref={markdownBody}>
           {hasText ? (
@@ -580,10 +582,16 @@ function Message({ message, agentName, speech, liveExplanation, automationInstru
           </div>
         ) : null}
         {message.responseIncomplete ? <Button disabled={!canContinue} onClick={() => void continueIncompleteResponse(message.id)}>{t("runtimeMessages.continueResponse")}</Button> : null}
-        {showSpeechActions ? <div className="message-actions">
-          {speech.available ? <IconButton className="message-speech__button" label={t("speech.readResponse")} selected={speech.activeMessageId === message.id} icon={<SpeakerHigh weight="fill" />} onClick={() => void speech.speak(message)} /> : null}
-          {liveExplanation?.available ? <IconButton className="message-speech__button" label={t("liveVoice.explainResponse")} selected={liveExplanation.activeMessageId === message.id} disabled={liveExplanation.disabled} icon={<Waveform weight="bold" />} onClick={() => liveExplanation.explain(message)} /> : null}
-          {speech.available && speech.activeMessageId === message.id ? <SpeechPlayer speech={speech} /> : null}
+        {canCopy || showSpeechActions ? <div className="message-actions">
+          {showSpeechActions ? <>
+            {speech.available ? <IconButton className="message-speech__button" label={t("speech.readResponse")} selected={speech.activeMessageId === message.id} icon={<SpeakerHigh weight="fill" />} onClick={() => void speech.speak(message)} /> : null}
+            {liveExplanation?.available ? <IconButton className="message-speech__button" label={t("liveVoice.explainResponse")} selected={liveExplanation.activeMessageId === message.id} disabled={liveExplanation.disabled} icon={<Waveform weight="bold" />} onClick={() => liveExplanation.explain(message)} /> : null}
+            {speech.available && speech.activeMessageId === message.id ? <SpeechPlayer speech={speech} /> : null}
+          </> : null}
+          {canCopy ? <>
+            <CopyResponseButton {...responseCopy} />
+            <span role="status" className="sr-only">{copyStatus === "copied" || copyStatus === "error" ? t(`chat.copyResponse.${copyStatus}`) : ""}</span>
+          </> : null}
         </div> : null}
       </div>
     </article>

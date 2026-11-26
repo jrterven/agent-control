@@ -399,7 +399,8 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .assistant-content > header { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-bottom: 6px; }
 .assistant-content > header time { color: var(--muted); font-size: 12px; }
 .assistant-content > header .hc-badge { margin-left: auto; }
-.assistant-content > header .message-copy-button { margin-inline-start: auto; color: var(--muted-strong); }
+.message-copy-header { position: sticky; inset-block-start: 0; z-index: 1; background: var(--bg); }
+.message-copy-button { margin-inline-start: auto; color: var(--muted-strong); }
 .assistant-content > header .hc-badge + .message-copy-button { margin-inline-start: 0; }
 .markdown-body { color: var(--text-soft); font-size: 15px; line-height: 1.7; }
 .markdown-body > :first-child { margin-top: 0; }

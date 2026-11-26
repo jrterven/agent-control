@@ -15,11 +15,8 @@ function responseHtml(body: HTMLDivElement) {
   return copy.innerHTML;
 }
 
-export function CopyResponseButton({ body, markdown }: { body: RefObject<HTMLDivElement | null>; markdown: string }) {
-  const { t } = useTranslation();
+export function useResponseCopy(body: RefObject<HTMLDivElement | null>, markdown: string) {
   const [status, setStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
-  const feedback = status === "copied" || status === "error" ? status : undefined;
-  const Icon = status === "copied" ? Check : status === "error" ? WarningCircle : Copy;
 
   useEffect(() => {
     if (status !== "copied") return;
@@ -47,18 +44,20 @@ export function CopyResponseButton({ body, markdown }: { body: RefObject<HTMLDiv
     }
   }
 
-  return <>
-    <IconButton
-      type="button"
-      className="message-copy-button"
-      label={t("chat.copyResponse.label")}
-      title={undefined}
-      aria-disabled={status === "copying"}
-      icon={<Icon size={18} aria-hidden="true" />}
-      onClick={() => void copyResponse()}
-    />
-    <span role="status" className="sr-only">
-      {feedback ? t(`chat.copyResponse.${feedback}`) : ""}
-    </span>
-  </>;
+  return { status, copyResponse };
+}
+
+export function CopyResponseButton({ status, copyResponse }: ReturnType<typeof useResponseCopy>) {
+  const { t } = useTranslation();
+  const Icon = status === "copied" ? Check : status === "error" ? WarningCircle : Copy;
+
+  return <IconButton
+    type="button"
+    className="message-copy-button"
+    label={t("chat.copyResponse.label")}
+    title={undefined}
+    aria-disabled={status === "copying"}
+    icon={<Icon size={18} aria-hidden="true" />}
+    onClick={() => void copyResponse()}
+  />;
 }
