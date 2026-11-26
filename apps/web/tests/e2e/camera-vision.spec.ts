@@ -399,10 +399,13 @@ test("a Live transcript alone triggers a fresh capture and one verified agent an
   expect(mock.prompts).toHaveLength(0);
   expect((await mediaState(page)).commentary).toHaveLength(0);
   const question = "¿La taza está a la derecha o a la izquierda del cuaderno?";
+  // Hold the clock during the debounce assertion so browser round trips cannot advance it.
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 5_000));
   await page.evaluate((text) => (window as SmokeWindow).cameraSmoke.speak(text), question);
   await page.clock.runFor(500);
   expect(mock.intents).toHaveLength(0);
   await page.clock.runFor(400);
+  await page.clock.resume();
   await expect.poll(() => mock.prompts.length).toBe(1);
   expect(mock.intents).toHaveLength(1);
   expect(mock.intents[0]).toMatchObject({ text: question });
