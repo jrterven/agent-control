@@ -64,7 +64,7 @@ describe("rehydrated Hermes tool history", () => {
       await rehydrateSession("session-papers");
     });
 
-    expect(Array.from(container.querySelectorAll(".message-list article"), (row) => row.textContent?.trim())).toEqual([
+    expect(Array.from(container.querySelectorAll(".message-list article p"), (row) => row.textContent?.trim())).toEqual([
       "Prepara un resumen",
       "¿De qué periodo?",
       "La última semana",
@@ -315,7 +315,7 @@ describe("rehydrated Hermes tool history", () => {
     expect(exactSearch).toHaveValue("rfc822msgid:test@example.com");
     await user.click(screen.getByRole("button", { name: "Copiar búsqueda" }));
     expect(clipboardWrite).toHaveBeenCalledWith("rfc822msgid:test@example.com");
-    expect(await screen.findByRole("status")).toHaveTextContent("Búsqueda copiada");
+    expect(await screen.findByText(/Búsqueda copiada/)).toHaveAttribute("role", "status");
 
     clipboardWrite.mockRejectedValueOnce(new Error("Clipboard denied"));
     await user.click(screen.getByRole("button", { name: "Copiada" }));

@@ -490,7 +490,10 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .voice-note__label { display: flex; align-items: center; gap: 7px; margin: 0 3px 8px; color: var(--text); font-size: 13px; font-weight: 720; }
 .voice-note__label svg { flex: 0 0 auto; color: var(--accent); }
 .voice-note audio { display: block; width: 100%; height: 40px; color-scheme: dark; }
-.message-speech { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.message-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.message-copy-button.hc-button--ghost { color: var(--muted-strong); }
+.message-copy-feedback { color: var(--muted-strong); font-size: 13px; }
+.message-copy-feedback--error { color: var(--danger-text); }
 .message-speech__button { width: 38px !important; min-width: 38px !important; height: 38px !important; color: var(--accent) !important; border-color: var(--border-accent) !important; background: var(--accent-soft) !important; }
 .speech-player { min-height: 46px; max-width: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; border: 1px solid var(--border); border-radius: 13px; padding: 4px 7px; background: var(--surface-1); }
 .speech-player .hc-icon-button { width: 38px; min-width: 38px; height: 38px; }

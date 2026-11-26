@@ -96,6 +96,78 @@ describe("mobile-first chat", () => {
     expect((await axe.run(container)).violations).toHaveLength(0);
   });
 
+  it("copies a whole response with rich formatting and a Markdown alternative", async () => {
+    const user = userEvent.setup();
+    const write = vi.fn<(items: { formats: Record<string, Blob> }[]) => Promise<void>>().mockResolvedValue(undefined);
+    vi.spyOn(navigator, "clipboard", "get").mockReturnValue({ write } as unknown as Clipboard);
+    vi.stubGlobal("ClipboardItem", class {
+      constructor(readonly formats: Record<string, Blob>) {}
+    });
+    const formatted = [
+      "## Resumen",
+      "",
+      "El **primer** resultado:",
+      "",
+      "1. Revisar",
+      "2. Enviar",
+      "",
+      "| Tarea | Estado |",
+      "| --- | --- |",
+      "| Informe | Listo |",
+      "",
+      "```txt",
+      "línea de código",
+      "```",
+      "",
+      "[Informe.pdf](/api/v1/sessions/session-papers/files/0123456789abcdef0123456789abcdef)",
+    ].join("\n");
+    useAppStore.setState({ messages: [
+      { id: "copy-fixture", sessionId: "session-papers", role: "assistant", content: formatted, createdAt: "12:24" },
+      { id: "copy-stream", sessionId: "session-papers", role: "assistant", content: "Respuesta parcial", createdAt: "12:25", streaming: true },
+      { id: "copy-user", sessionId: "session-papers", role: "user", content: "Pedido original", createdAt: "12:26" },
+    ] });
+    render(<ChatView />);
+    const button = screen.getByRole("button", { name: "Copiar respuesta" });
+    await user.click(button);
+    expect(await screen.findByText("Copiado")).toBeVisible();
+    expect(write).toHaveBeenCalledTimes(1);
+
+    const [{ formats }] = write.mock.calls[0][0];
+    const read = (blob: Blob) => new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.readAsText(blob);
+    });
+    const html = await read(formats["text/html"]);
+    expect(html).toContain("<h2>Resumen</h2>");
+    expect(html).toContain("<strong>primer</strong>");
+    expect(html).toMatch(/<ol>[\s\S]*<li>Enviar<\/li>/);
+    expect(html).toMatch(/<table>[\s\S]*<td>Listo<\/td>/);
+    expect(html).toMatch(/<pre><code[^>]*>línea de código/);
+    expect(html).toContain("Informe.pdf");
+    expect(html).not.toMatch(/<svg|\/api\/v1\/|12:24|Respuesta parcial|Pedido original/);
+    expect(await read(formats["text/plain"])).toBe(formatted);
+  });
+
+  it("copies Markdown when the browser only supports text and reports denied access", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    vi.stubGlobal("ClipboardItem", undefined);
+    const content = "## Resumen\n\n- **Informe listo**";
+    useAppStore.setState({ messages: [
+      { id: "copy-simple", sessionId: "session-papers", role: "assistant", content, createdAt: "" },
+    ] });
+    render(<ChatView />);
+    const button = screen.getByRole("button", { name: "Copiar respuesta" });
+    writeText.mockRejectedValueOnce(new Error("Clipboard denied"));
+    await user.click(button);
+    expect(await screen.findByText("No se pudo copiar la respuesta.")).toBeVisible();
+
+    await user.click(button);
+    expect(await screen.findByText("Copiado")).toBeVisible();
+    expect(writeText).toHaveBeenLastCalledWith(content);
+  });
+
   it("offers continuation for an invisible final answer without empty speech controls", async () => {
     useAppStore.setState({ messages: [], features: { speech: { available: true, provider: "elevenlabs", modelId: "eleven_flash_v2_5" }, dictation: { available: false, provider: "elevenlabs", modelId: "scribe_v2_realtime" } } });
     vi.spyOn(api, "sessionHistory").mockResolvedValue({ items: [
@@ -106,7 +178,7 @@ describe("mobile-first chat", () => {
     const { container } = render(<ChatView />);
     expect(screen.getByText("El agente terminó sin entregar una respuesta final de texto.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pedir que continúe" })).toBeEnabled();
-    expect(container.querySelector(".message-speech")).not.toBeInTheDocument();
+    expect(container.querySelector(".message-actions")).not.toBeInTheDocument();
     expect((await axe.run(container)).violations).toHaveLength(0);
     act(() => useAppStore.setState({ authState: "offline", demoMode: false }));
     expect(screen.getByRole("button", { name: "Pedir que continúe" })).toBeDisabled();
