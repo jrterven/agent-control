@@ -552,10 +552,11 @@ function Message({ message, agentName, speech, liveExplanation, automationInstru
   return (
     <article className="message message--assistant" id={message.controlTurnOrigin ? taskResultAnchor(message.id) : undefined} tabIndex={message.controlTurnOrigin ? -1 : undefined} aria-label={t("chat.assistantResponse", { agent: agentName })}>
       <div className="assistant-content">
-        {message.createdAt || message.controlTurnOrigin || message.streaming ? <header>
+        {message.createdAt || message.controlTurnOrigin || message.streaming || canCopy ? <header>
           {message.createdAt ? <time>{message.createdAt}</time> : null}
           {message.controlTurnOrigin ? <Badge>{t(message.controlTurnOrigin.taskId ? "backgroundTasks.resultFor" : "backgroundTasks.resultLabel", { id: message.controlTurnOrigin.taskId?.slice(0, 8) })}</Badge> : null}
           {message.streaming ? <Badge tone="info">{t("chat.streaming")}</Badge> : null}
+          {canCopy ? <CopyResponseButton body={markdownBody} markdown={message.content} /> : null}
         </header> : null}
         <div className="markdown-body" ref={markdownBody}>
           {hasText ? (
@@ -579,11 +580,10 @@ function Message({ message, agentName, speech, liveExplanation, automationInstru
           </div>
         ) : null}
         {message.responseIncomplete ? <Button disabled={!canContinue} onClick={() => void continueIncompleteResponse(message.id)}>{t("runtimeMessages.continueResponse")}</Button> : null}
-        {canCopy || showSpeechActions ? <div className="message-actions">
-          {canCopy ? <CopyResponseButton body={markdownBody} markdown={message.content} /> : null}
-          {showSpeechActions && speech.available ? <IconButton className="message-speech__button" label={t("speech.readResponse")} selected={speech.activeMessageId === message.id} icon={<SpeakerHigh weight="fill" />} onClick={() => void speech.speak(message)} /> : null}
-          {showSpeechActions && liveExplanation?.available ? <IconButton className="message-speech__button" label={t("liveVoice.explainResponse")} selected={liveExplanation.activeMessageId === message.id} disabled={liveExplanation.disabled} icon={<Waveform weight="bold" />} onClick={() => liveExplanation.explain(message)} /> : null}
-          {showSpeechActions && speech.available && speech.activeMessageId === message.id ? <SpeechPlayer speech={speech} /> : null}
+        {showSpeechActions ? <div className="message-actions">
+          {speech.available ? <IconButton className="message-speech__button" label={t("speech.readResponse")} selected={speech.activeMessageId === message.id} icon={<SpeakerHigh weight="fill" />} onClick={() => void speech.speak(message)} /> : null}
+          {liveExplanation?.available ? <IconButton className="message-speech__button" label={t("liveVoice.explainResponse")} selected={liveExplanation.activeMessageId === message.id} disabled={liveExplanation.disabled} icon={<Waveform weight="bold" />} onClick={() => liveExplanation.explain(message)} /> : null}
+          {speech.available && speech.activeMessageId === message.id ? <SpeechPlayer speech={speech} /> : null}
         </div> : null}
       </div>
     </article>

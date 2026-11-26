@@ -1,5 +1,5 @@
-import { Check, Copy } from "@phosphor-icons/react";
-import { Button } from "@hermes-control/ui";
+import { Check, Copy, WarningCircle } from "@phosphor-icons/react";
+import { IconButton } from "@hermes-control/ui";
 import { useEffect, useState, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -19,6 +19,7 @@ export function CopyResponseButton({ body, markdown }: { body: RefObject<HTMLDiv
   const { t } = useTranslation();
   const [status, setStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
   const feedback = status === "copied" || status === "error" ? status : undefined;
+  const Icon = status === "copied" ? Check : status === "error" ? WarningCircle : Copy;
 
   useEffect(() => {
     if (status !== "copied") return;
@@ -47,17 +48,16 @@ export function CopyResponseButton({ body, markdown }: { body: RefObject<HTMLDiv
   }
 
   return <>
-    <Button
+    <IconButton
       type="button"
-      variant="ghost"
-      size="sm"
       className="message-copy-button"
-      aria-label={t("chat.copyResponse.label")}
+      label={t("chat.copyResponse.label")}
+      title={undefined}
       aria-disabled={status === "copying"}
-      leadingIcon={status === "copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+      icon={<Icon size={18} aria-hidden="true" />}
       onClick={() => void copyResponse()}
-    >{t("chat.copyResponse.copy")}</Button>
-    <span role="status" className={feedback ? `message-copy-feedback message-copy-feedback--${feedback}` : "sr-only"}>
+    />
+    <span role="status" className="sr-only">
       {feedback ? t(`chat.copyResponse.${feedback}`) : ""}
     </span>
   </>;

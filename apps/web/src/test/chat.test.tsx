@@ -128,8 +128,12 @@ describe("mobile-first chat", () => {
     ] });
     render(<ChatView />);
     const button = screen.getByRole("button", { name: "Copiar respuesta" });
+    expect(button.textContent).toBe("");
+    expect(button).not.toHaveAttribute("title");
+    const header = button.closest("header");
+    expect(header?.nextElementSibling).toHaveClass("markdown-body");
     await user.click(button);
-    expect(await screen.findByText("Copiado")).toBeVisible();
+    expect(await screen.findByText("Copiado")).toHaveClass("sr-only");
     expect(write).toHaveBeenCalledTimes(1);
 
     const [{ formats }] = write.mock.calls[0][0];
@@ -161,10 +165,10 @@ describe("mobile-first chat", () => {
     const button = screen.getByRole("button", { name: "Copiar respuesta" });
     writeText.mockRejectedValueOnce(new Error("Clipboard denied"));
     await user.click(button);
-    expect(await screen.findByText("No se pudo copiar la respuesta.")).toBeVisible();
+    expect(await screen.findByText("No se pudo copiar la respuesta.")).toHaveClass("sr-only");
 
     await user.click(button);
-    expect(await screen.findByText("Copiado")).toBeVisible();
+    expect(await screen.findByText("Copiado")).toHaveClass("sr-only");
     expect(writeText).toHaveBeenLastCalledWith(content);
   });
 

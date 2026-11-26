@@ -399,6 +399,8 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .assistant-content > header { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-bottom: 6px; }
 .assistant-content > header time { color: var(--muted); font-size: 12px; }
 .assistant-content > header .hc-badge { margin-left: auto; }
+.assistant-content > header .message-copy-button { margin-inline-start: auto; color: var(--muted-strong); }
+.assistant-content > header .hc-badge + .message-copy-button { margin-inline-start: 0; }
 .markdown-body { color: var(--text-soft); font-size: 15px; line-height: 1.7; }
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }
@@ -491,9 +493,6 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .voice-note__label svg { flex: 0 0 auto; color: var(--accent); }
 .voice-note audio { display: block; width: 100%; height: 40px; color-scheme: dark; }
 .message-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.message-copy-button.hc-button--ghost { color: var(--muted-strong); }
-.message-copy-feedback { color: var(--muted-strong); font-size: 13px; }
-.message-copy-feedback--error { color: var(--danger-text); }
 .message-speech__button { width: 38px !important; min-width: 38px !important; height: 38px !important; color: var(--accent) !important; border-color: var(--border-accent) !important; background: var(--accent-soft) !important; }
 .speech-player { min-height: 46px; max-width: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; border: 1px solid var(--border); border-radius: 13px; padding: 4px 7px; background: var(--surface-1); }
 .speech-player .hc-icon-button { width: 38px; min-width: 38px; height: 38px; }
