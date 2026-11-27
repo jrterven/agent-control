@@ -399,9 +399,20 @@ kbd { border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5
 .assistant-content > header { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-bottom: 6px; }
 .assistant-content > header time { color: var(--muted); font-size: 12px; }
 .assistant-content > header .hc-badge { margin-left: auto; }
-.message-copy-header { position: sticky; inset-block-start: 0; z-index: 1; background: var(--bg); }
 .message-copy-button { margin-inline-start: auto; color: var(--muted-strong); }
-.assistant-content > header .hc-badge + .message-copy-button { margin-inline-start: 0; }
+.message--copyable { display: grid; grid-template-columns: minmax(0, 1fr); }
+.message--copyable > .assistant-content,
+.message--copyable > .message-copy-button { grid-area: 1 / 1; }
+.message--copyable .assistant-content > header { min-block-size: var(--hc-tap); padding-inline-end: calc(var(--hc-tap) + 9px); }
+.message--copyable > .message-copy-button {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  align-self: start;
+  border-color: var(--border);
+  background: var(--surface-1);
+}
+.message--copyable > .message-copy-button:hover { background: var(--surface-2); }
 .markdown-body { color: var(--text-soft); font-size: 15px; line-height: 1.7; }
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }

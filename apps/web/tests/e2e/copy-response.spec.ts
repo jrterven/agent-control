@@ -10,13 +10,13 @@ async function scrollIntoReply(reply: Locator, offset: number) {
   }, offset);
 }
 
-test("mantiene visible el icono superior mientras se recorre una respuesta larga", async ({ page }) => {
+test("fija solo el icono de copiar mientras se recorre una respuesta larga", async ({ page }) => {
   const paragraphs = Array.from({ length: 60 }, (_, i) => `Párrafo ${i + 1} del informe de prueba.`).join("\n\n");
   await page.route("**/api/v1/sessions/session-e2e/messages", (route) => route.fulfill({ json: {
     sessionStatus: "ready",
     items: [
-      { id: "first-answer", role: "assistant", content: `## Informe largo\n\n${paragraphs}` },
-      { id: "next-answer", role: "assistant", content: `## Siguiente respuesta\n\n${paragraphs}` },
+      { id: "first-answer", role: "assistant", timestamp: "2026-11-24T18:00:00Z", content: `## Informe largo\n\n${paragraphs}` },
+      { id: "next-answer", role: "assistant", timestamp: "2026-11-24T18:01:00Z", content: `## Siguiente respuesta\n\n${paragraphs}` },
     ],
   } }));
   await page.goto("/chats");
@@ -26,11 +26,14 @@ test("mantiene visible el icono superior mientras se recorre una respuesta larga
   await expect(buttons).toHaveCount(2);
   const top = buttons.first();
   const bottom = buttons.last();
+  const timestamp = reply.locator("header time");
 
   await scrollIntoReply(reply, -12);
   await expect(top).toBeInViewport({ ratio: 0.95 });
+  await expect(timestamp).toBeInViewport();
   await scrollIntoReply(reply, 500);
   await expect(top).toBeInViewport({ ratio: 0.95 });
+  await expect(reply.locator("header")).not.toBeInViewport();
   await expect(bottom).not.toBeInViewport();
   await expect.poll(() => top.evaluate((button) => {
     const viewport = button.closest(".message-scroll")!;

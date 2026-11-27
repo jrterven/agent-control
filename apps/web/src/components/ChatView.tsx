@@ -9,7 +9,7 @@ import { useTranslation } from "react-i18next";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { CopyResponseButton, useResponseCopy } from "./CopyResponseButton";
 import { BackgroundTasks, taskResultAnchor } from "./BackgroundTasks";
-import { Badge, Button, IconButton } from "@hermes-control/ui";
+import { Badge, Button, cx, IconButton } from "@hermes-control/ui";
 import { continueIncompleteResponse, createChatForCurrentContext, respondToApproval, respondToClarification, stopPrompt, submitPrompt, useSessionDraft } from "../hooks";
 import { api } from "../lib/api";
 import { conversationTimeline } from "../lib/chatTimeline";
@@ -552,13 +552,13 @@ function Message({ message, agentName, speech, liveExplanation, automationInstru
   const showSpeechActions = hasCompletedText && (speech.available || liveExplanation?.available);
   const copyStatus = responseCopy.status;
   return (
-    <article className="message message--assistant" id={message.controlTurnOrigin ? taskResultAnchor(message.id) : undefined} tabIndex={message.controlTurnOrigin ? -1 : undefined} aria-label={t("chat.assistantResponse", { agent: agentName })}>
+    <article className={cx("message message--assistant", canCopy && "message--copyable")} id={message.controlTurnOrigin ? taskResultAnchor(message.id) : undefined} tabIndex={message.controlTurnOrigin ? -1 : undefined} aria-label={t("chat.assistantResponse", { agent: agentName })}>
+      {canCopy ? <CopyResponseButton {...responseCopy} /> : null}
       <div className="assistant-content">
-        {message.createdAt || message.controlTurnOrigin || message.streaming || canCopy ? <header className={canCopy ? "message-copy-header" : undefined}>
+        {message.createdAt || message.controlTurnOrigin || message.streaming || canCopy ? <header>
           {message.createdAt ? <time>{message.createdAt}</time> : null}
           {message.controlTurnOrigin ? <Badge>{t(message.controlTurnOrigin.taskId ? "backgroundTasks.resultFor" : "backgroundTasks.resultLabel", { id: message.controlTurnOrigin.taskId?.slice(0, 8) })}</Badge> : null}
           {message.streaming ? <Badge tone="info">{t("chat.streaming")}</Badge> : null}
-          {canCopy ? <CopyResponseButton {...responseCopy} /> : null}
         </header> : null}
         <div className="markdown-body" ref={markdownBody}>
           {hasText ? (

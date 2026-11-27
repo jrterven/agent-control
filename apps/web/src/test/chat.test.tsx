@@ -132,7 +132,7 @@ describe("mobile-first chat", () => {
     expect(bottom.textContent).toBe("");
     expect(top).not.toHaveAttribute("title");
     expect(bottom).not.toHaveAttribute("title");
-    expect(top.closest("header")?.nextElementSibling).toHaveClass("markdown-body");
+    expect(top.parentElement).toBe(bottom.closest("article"));
     expect(bottom.closest(".message-actions")?.previousElementSibling).toHaveClass("markdown-body");
     await user.click(top);
     expect(await screen.findByText("Copiado")).toHaveClass("sr-only");
